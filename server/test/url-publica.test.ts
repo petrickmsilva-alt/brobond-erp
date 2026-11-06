@@ -143,6 +143,19 @@ describe('origemDaRequisicao — só cabeçalho bem-formado', () => {
     }
   });
 
+  test('host interno com ponto final (FQDN raiz) NÃO passa como público', async () => {
+    const { hostInterno, origemPublica } = await import('../src/urlPublica');
+    // "localhost." e "10.0.0.5." resolvem para o MESMO endereço interno; o ponto
+    // final não pode ser um atalho para furar o filtro de rede privada.
+    for (const host of ['localhost.', 'erp.internal.', 'brobond-erp.local.', '10.0.0.5.', '169.254.169.254.']) {
+      assert.equal(hostInterno(host), true, `hostInterno(${JSON.stringify(host)})`);
+    }
+    assert.equal(origemPublica('http://10.0.0.5.'), false);
+    assert.equal(origemPublica('http://localhost.'), false);
+    // Um domínio público legítimo com ponto final continua público.
+    assert.equal(hostInterno('erp.brobond.com.br.'), false);
+  });
+
   test('proto desconhecido nunca é aceito às cegas (assume https)', () => {
     assert.equal(origemDaRequisicao(mockReq({ 'x-forwarded-proto': 'gopher', host: 'erp.brobond.com.br' })), 'https://erp.brobond.com.br');
     assert.equal(origemDaRequisicao(mockReq({ 'x-forwarded-proto': 'http', host: 'erp.brobond.com.br' })), 'http://erp.brobond.com.br');

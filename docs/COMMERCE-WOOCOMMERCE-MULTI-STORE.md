@@ -141,6 +141,12 @@ enfileira, por loja, a sincronização de **estoque** e a importação increment
 **pedidos** — sem tocar a rede. O worker do outbox drena os eventos no processo
 `pedidos` (tipo `sincronizacao`).
 
+O cron roda a cada ciclo com a MESMA chave idempotente
+(`woo-estoque:<loja>:lote`). Um evento já `PROCESSADO` é **re-armado** para
+`PENDENTE` (mesma linha, `claim_versao` preservado pelo CAS): sem isso a
+sincronização periódica aconteceria UMA vez e nunca mais. Eventos `PENDENTE` /
+`PROCESSANDO` **não** são re-armados — já têm trabalho em voo.
+
 Uma loja indisponível **não** interrompe a outra: cada varredura itera as lojas
 e acumula desfechos; a falha de uma é registrada no estado **daquela** loja.
 
@@ -193,3 +199,18 @@ afirmar que as lojas estão sincronizadas sem credenciais e evidências reais.
 - Webhooks do WooCommerce: não habilitados nesta entrega (a importação é
   incremental por polling). Se forem habilitados, validar assinatura antes de
   processar.
+
+## 13. Endurecimento (auditoria de produção)
+
+Defeitos reais corrigidos, cada um com teste de regressão (`WS-7` em
+`server/test/woocommerce-multistore.test.ts` e item 10 do gate PostgreSQL):
+
+| Defeito | Correção |
+|---|---|
+| URL de loja inválida (ex.: rede interna) fazia `configStore` LANÇAR — derrubava o painel e a leitura da outra loja | `configStore` degrada para `null` com `motivo` acionável; `exigirConfigStore` continua falhando fechado |
+| Host com ponto final (`http://10.0.0.5.`, `localhost.`) furava o filtro de SSRF | `hostInterno` normaliza o ponto final do FQDN raiz antes de comparar |
+| Sincronização de estoque em dry-run terminava em ERRO (o lote sintético não é confirmação da loja) | o dry-run não confere o lote; reporta quantos itens SERIAM enviados e **não** avança a água-marca |
+| Dry-run gravava vínculos com `external_product_id` vazio (memória envenenada) | publicação em dry-run não grava vínculo; `registrarVinculo` recusa ID externo vazio |
+| Paginação `order=desc` na importação incremental pulava pedidos quando a janela excedia o limite | `order=asc`: o truncamento deixa de fora só os mais novos, que a próxima execução pega |
+| Cron recorrente sincronizava UMA vez e nunca mais (chave idempotente já `PROCESSADO`) | evento terminal é re-armado para `PENDENTE` na mesma linha; `PENDENTE`/`PROCESSANDO` não são tocados |
+| Lote de estoque podia exceder o máximo de 100 itens por chamada da API do WooCommerce | envio fatiado em blocos de 100 (variações e produtos) |

@@ -139,6 +139,19 @@ export function validarUrlLoja(bruto: unknown, store: StoreKey): string {
 }
 
 /**
+ * Resolve a URL da loja SEM lançar: devolve o motivo quando ela é inválida.
+ * `configStore` precisa falhar fechado (null) em vez de estourar — uma URL
+ * errada em UMA loja não pode derrubar o painel nem a leitura da outra.
+ */
+function resolverUrlLoja(store: StoreKey): { url: string | null; motivo: string | null } {
+  try {
+    return { url: validarUrlLoja(process.env[`${prefixoDe(store)}_URL`], store), motivo: null };
+  } catch (e) {
+    return { url: null, motivo: e instanceof HttpError ? e.message : 'URL ausente ou inválida.' };
+  }
+}
+
+/**
  * Configuração de uma loja. `null` quando ela está desabilitada ou incompleta
  * (nunca lança: a ausência de UMA loja não pode derrubar a outra nem o boot).
  */
@@ -146,17 +159,32 @@ export function configStore(store: StoreKey): ConfigStore | null {
   if (!boolEnv(`${prefixoDe(store)}_ENABLED`, false)) return null;
   const ck = String(process.env[`${prefixoDe(store)}_CK`] ?? '').trim();
   const cs = String(process.env[`${prefixoDe(store)}_CS`] ?? '').trim();
-  const urlBruta = process.env[`${prefixoDe(store)}_URL`];
-  if (!ck || !cs || !normalizarOrigem(urlBruta as string)) return null;
+  if (!ck || !cs) return null;
+  const { url } = resolverUrlLoja(store);
+  if (!url) return null;
   return {
     store_key: store,
-    url: validarUrlLoja(urlBruta, store),
+    url,
     ck,
     cs,
     empresaId: empresaDaStore(store),
     fontePreco: FONTE_PRECO[store],
     canal: CANAL_PEDIDO[store],
   };
+}
+
+/** Por que a loja não está operacional (para o erro acionável e para o painel). */
+export function motivoStore(store: StoreKey): string {
+  const prefixo = prefixoDe(store);
+  if (!boolEnv(`${prefixo}_ENABLED`, false)) return `Loja desabilitada. Defina ${prefixo}_ENABLED=true.`;
+  const ck = String(process.env[`${prefixo}_CK`] ?? '').trim();
+  const cs = String(process.env[`${prefixo}_CS`] ?? '').trim();
+  if (!ck || !cs) return `Credenciais (CK/CS) ausentes. Defina ${prefixo}_CK e ${prefixo}_CS.`;
+  const urlBruta = normalizarOrigem(process.env[`${prefixo}_URL`] as string);
+  if (!urlBruta) return `URL ausente ou inválida. Defina ${prefixo}_URL (HTTPS).`;
+  const { motivo } = resolverUrlLoja(store);
+  if (motivo) return motivo;
+  return 'Configuração incompleta.';
 }
 
 /** Mesma config, mas falhando fechado com mensagem acionável. */
@@ -166,10 +194,7 @@ export function exigirConfigStore(store: StoreKey): ConfigStore {
   if (!boolEnv(`${prefixoDe(store)}_ENABLED`, false)) {
     throw new HttpError(409, `A loja ${store} não está habilitada. Defina ${prefixoDe(store)}_ENABLED=true (Render › Environment).`);
   }
-  throw new HttpError(
-    409,
-    `A loja ${store} está habilitada mas incompleta. Defina ${prefixoDe(store)}_URL, ${prefixoDe(store)}_CK e ${prefixoDe(store)}_CS.`
-  );
+  throw new HttpError(409, `A loja ${store} está habilitada mas incompleta. ${motivoStore(store)}.`);
 }
 
 /** Lojas habilitadas E completas. */
@@ -188,7 +213,7 @@ export function statusStores(): StatusStore[] {
     const habilitada = boolEnv(`${prefixoDe(store)}_ENABLED`, false);
     const cfg = configStore(store);
     const urlBruta = normalizarOrigem(process.env[`${prefixoDe(store)}_URL`] as string);
-    const motivo = cfg ? null : !habilitada ? 'Loja desabilitada' : !urlBruta ? 'URL ausente ou inválida' : 'Credenciais (CK/CS) ausentes';
+    const motivo = cfg ? null : motivoStore(store);
     return { store_key: store, habilitada, configurada: Boolean(cfg), url: cfg?.url ?? (urlBruta || null), motivo };
   });
 }

@@ -57,7 +57,11 @@ export function hostInterno(hostname: string): boolean {
     .trim()
     .toLowerCase()
     .replace(/^\[/, '')
-    .replace(/\]$/, '');
+    .replace(/\]$/, '')
+    // O ponto final ("localhost.") é o FQDN raiz: resolve para o MESMO host, mas
+    // furava as comparações abaixo. Sem normalizar, "http://10.0.0.5." passava
+    // pela checagem de rede privada e virava destino válido de requisição.
+    .replace(/\.+$/, '');
   if (!h) return true;
   if (h === 'localhost' || h === '::1' || h === '0.0.0.0') return true;
   if (SUFIXOS_INTERNOS.some((s) => h.endsWith(s))) return true;

@@ -688,3 +688,148 @@ describe('WS-6 — Painel, reconciliação e segurança', () => {
     }
   });
 });
+
+// ============================================================================
+// WS-7 — ENDURECIMENTO (regressões reais encontradas na auditoria).
+//
+// Cada teste aqui trava um defeito que só aparece em produção:
+//   • uma URL de loja errada derrubava o painel inteiro (configStore lançava);
+//   • o ponto final no host ("10.0.0.5.") furava a checagem de SSRF;
+//   • a sincronização de estoque em dry-run terminava em erro;
+//   • o dry-run gravava vínculos com ID externo vazio;
+//   • a paginação decrescente pulava pedidos na importação incremental;
+//   • o cron recorrente sincronizava UMA vez e nunca mais.
+// ============================================================================
+describe('WS-7 — Endurecimento: config falha fechado, SSRF, dry-run, paginação e cron', () => {
+  test('configStore não lança: URL interna em UMA loja não derruba a outra nem o painel', () => {
+    process.env.WOOCOMMERCE_RETAIL_ENABLED = 'true';
+    process.env.WOOCOMMERCE_RETAIL_URL = 'http://10.0.0.5';
+    process.env.WOOCOMMERCE_RETAIL_CK = 'ck_x';
+    process.env.WOOCOMMERCE_RETAIL_CS = 'cs_x';
+    process.env.WOOCOMMERCE_WHOLESALE_ENABLED = 'true';
+    process.env.WOOCOMMERCE_WHOLESALE_URL = WHOLESALE_URL;
+    process.env.WOOCOMMERCE_WHOLESALE_CK = 'ck_y';
+    process.env.WOOCOMMERCE_WHOLESALE_CS = 'cs_y';
+
+    // Não lança: a leitura degrada para "não configurada".
+    assert.equal(configStore('RETAIL'), null);
+    assert.equal(configStore('WHOLESALE')?.store_key, 'WHOLESALE', 'a loja sã continua válida');
+
+    const status = statusStores();
+    const retail = status.find((s) => s.store_key === 'RETAIL')!;
+    const wholesale = status.find((s) => s.store_key === 'WHOLESALE')!;
+    assert.equal(retail.configurada, false);
+    assert.match(String(retail.motivo), /rede interna/i, 'o motivo acionável é exposto no painel');
+    assert.equal(wholesale.configurada, true, 'a outra loja não é afetada');
+
+    // Ainda assim, exigir a loja ruim falha fechado com a mensagem real.
+    assert.throws(() => exigirConfigStore('RETAIL'), /rede interna/i);
+  });
+
+  test('SSRF: host com ponto final (FQDN raiz) continua sendo interno', async () => {
+    const { hostInterno } = await import('../src/urlPublica');
+    for (const host of ['localhost.', 'brobond-erp.local.', 'erp.internal.', '10.0.0.5.', '169.254.169.254.', '192.168.0.1.']) {
+      assert.equal(hostInterno(host), true, `"${host}" precisa ser recusado como interno`);
+    }
+    assert.throws(() => validarUrlLoja('http://10.0.0.5.', 'RETAIL'), /rede interna/, 'URL com ponto final não fura o filtro');
+    assert.throws(() => validarUrlLoja('http://localhost.', 'RETAIL'), /rede interna/);
+  });
+
+  test('dry-run: a sincronização de estoque conclui sem tocar a rede (não falha)', async () => {
+    const empresaId = novaEmpresa();
+    configurarLojas(empresaId);
+    const produto = await novoProduto(empresaId, { sku: 'MS-DRY-ESTOQUE', preco_venda: 30 });
+    const tamanho = await novoTamanho('DR');
+    await inserirSaldo(empresaId, Number(produto.id), Number(tamanho.id), 4);
+    await registrarVinculo(empresaId, 'RETAIL', Number(produto.id), { external_product_id: '321', sku: 'MS-DRY-ESTOQUE' });
+    process.env.WOOCOMMERCE_SYNC_DRY_RUN = 'true';
+    let chamadas = 0;
+    const { restaurar } = espionar(() => {
+      chamadas += 1;
+      throw new Error('a rede não pode ser chamada em dry-run');
+    });
+    try {
+      const r = await sincronizarEstoqueDaLoja(exigirConfigStore('RETAIL'), empresaId);
+      assert.equal(r.ok, true, 'dry-run não transforma homologação em erro');
+      assert.equal(r.dry_run, true);
+      assert.equal(r.atualizados, 1, 'reporta quantos itens SERIAM enviados (valor da homologação)');
+      assert.equal(chamadas, 0, 'nenhuma chamada de escrita à rede');
+    } finally {
+      restaurar();
+    }
+  });
+
+  test('dry-run: publicar NÃO grava vínculo com ID externo vazio', async () => {
+    const empresaId = novaEmpresa();
+    configurarLojas(empresaId);
+    await garantirLocal(empresaId);
+    const produto = await novoProduto(empresaId, { sku: 'MS-DRY-PUB', preco_venda: 45 });
+    process.env.WOOCOMMERCE_SYNC_DRY_RUN = 'true';
+    const { restaurar } = espionar((url) => (String(url).includes('/products?sku=') ? [] : {}));
+    try {
+      const r = await publicarProdutoNaLoja(exigirConfigStore('RETAIL'), empresaId, Number(produto.id));
+      assert.equal(r.dry_run, true);
+      assert.equal(await listarVinculos(empresaId, 'RETAIL').then((v) => v.length), 0, 'nenhum vínculo fantasma');
+    } finally {
+      restaurar();
+    }
+  });
+
+  test('registrarVinculo recusa ID externo vazio (nunca grava memória falsa)', async () => {
+    const empresaId = novaEmpresa();
+    configurarLojas(empresaId);
+    const produto = await novoProduto(empresaId, { sku: 'MS-VINCULO-VAZIO' });
+    await assert.rejects(
+      () => registrarVinculo(empresaId, 'RETAIL', Number(produto.id), { external_product_id: '' }),
+      /sem ID externo/i
+    );
+    assert.equal((await listarVinculos(empresaId, 'RETAIL')).length, 0);
+  });
+
+  test('paginação da importação incremental é CRESCENTE (não pula os mais novos)', async () => {
+    const empresaId = novaEmpresa();
+    configurarLojas(empresaId);
+    const urls: string[] = [];
+    const { restaurar } = espionar((url) => {
+      urls.push(String(url));
+      return [];
+    });
+    try {
+      await importarPedidosDaLoja(exigirConfigStore('RETAIL'), empresaId, { dias: 7, limite: 250 });
+    } finally {
+      restaurar();
+    }
+    assert.ok(urls.length >= 1);
+    for (const u of urls) assert.match(u, /order=asc/, 'ordem crescente: a água-marca não salta pedidos');
+  });
+
+  test('cron recorrente RE-ARMA o evento terminal (sincroniza de novo, sem duplicar)', async () => {
+    const empresaId = novaEmpresa();
+    configurarLojas(empresaId);
+    const { enfileirarEstoqueDaLoja } = await import('../src/commerce/woocommerce/outboxStore');
+    const s = getStore();
+
+    const primeiro = await enfileirarEstoqueDaLoja(empresaId, 'RETAIL');
+    assert.equal(String(primeiro.estado), 'PENDENTE');
+    // O worker processa o evento.
+    await s.update(RESOURCES.commerce_outbox, Number(primeiro.id), { estado: 'PROCESSADO' });
+
+    const segundo = await enfileirarEstoqueDaLoja(empresaId, 'RETAIL');
+    assert.equal(String(segundo.estado), 'PENDENTE', 'o cron volta a enfileirar o que já terminou');
+    assert.equal(Number(segundo.id), Number(primeiro.id), 'reusa a MESMA linha (sem duplicar)');
+
+    const linhas = await s.list(RESOURCES.commerce_outbox, { page: 1, pageSize: 100, filter: { empresa_id: empresaId } });
+    assert.equal(linhas.rows.length, 1, 'uma linha por loja, nunca duas');
+  });
+
+  test('cron recorrente NÃO atropela um evento em voo (PENDENTE/PROCESSANDO)', async () => {
+    const empresaId = novaEmpresa();
+    configurarLojas(empresaId);
+    const { enfileirarPedidosDaLoja } = await import('../src/commerce/woocommerce/outboxStore');
+    const s = getStore();
+    const primeiro = await enfileirarPedidosDaLoja(empresaId, 'WHOLESALE');
+    await s.update(RESOURCES.commerce_outbox, Number(primeiro.id), { estado: 'PROCESSANDO' });
+    const segundo = await enfileirarPedidosDaLoja(empresaId, 'WHOLESALE');
+    assert.equal(String(segundo.estado), 'PROCESSANDO', 'um worker em voo não é re-armado');
+  });
+});

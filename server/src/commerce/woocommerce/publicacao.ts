@@ -137,8 +137,11 @@ export async function publicarProdutoNaLoja(
     } else {
       const criado = await wooStoreFetch<WooProduto>(cfg, '/products', { method: 'POST', body: corpoPai });
       dryRunResposta = ehDryRun(criado);
+      // Dry-run: nada foi criado na loja — não há ID externo para memorizar.
+      // Gravar um vínculo vazio aqui envenenaria a memória da integração.
+      if (dryRunResposta) return { external_product_id: '', external_variation_ids: [], dry_run: true };
       externalId = String(criado?.id ?? '');
-      if (!dryRunResposta && (!externalId || externalId === 'undefined')) {
+      if (!externalId || externalId === 'undefined') {
         throw new PublicacaoFalha(`A loja ${cfg.store_key} não devolveu o id do produto criado.`);
       }
     }
@@ -171,8 +174,9 @@ export async function publicarProdutoNaLoja(
   } else {
     const criado = await wooStoreFetch<WooProduto>(cfg, '/products', { method: 'POST', body: corpo });
     dryRunResposta = ehDryRun(criado);
+    if (dryRunResposta) return { external_product_id: '', external_variation_ids: [], dry_run: true };
     externalId = String(criado?.id ?? '');
-    if (!dryRunResposta && (!externalId || externalId === 'undefined')) {
+    if (!externalId || externalId === 'undefined') {
       throw new PublicacaoFalha(`A loja ${cfg.store_key} não devolveu o id do produto criado.`);
     }
   }
@@ -228,8 +232,10 @@ async function publicarVariacao(
     await wooStoreFetch(cfg, `/products/${externalProductId}/variations/${externalVariationId}`, { method: 'PUT', body: corpo });
   } else {
     const criada = await wooStoreFetch<WooVariacao>(cfg, `/products/${externalProductId}/variations`, { method: 'POST', body: corpo });
+    // Dry-run: a variação não foi criada — não há ID externo para memorizar.
+    if (ehDryRun(criada)) return null;
     externalVariationId = String(criada?.id ?? '');
-    if (!ehDryRun(criada) && (!externalVariationId || externalVariationId === 'undefined')) {
+    if (!externalVariationId || externalVariationId === 'undefined') {
       throw new PublicacaoFalha(`A loja ${cfg.store_key} não devolveu o id da variação ${skuVariacao || `#${variacaoId}`}.`);
     }
   }

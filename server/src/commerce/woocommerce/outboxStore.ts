@@ -31,6 +31,27 @@ export function chaveStore(acao: string, store: StoreKey, sufixo: string): strin
 }
 
 /**
+ * Re-arma um evento RECORRENTE que já terminou.
+ *
+ * O cron roda a cada ciclo com a MESMA chave idempotente
+ * (`woo-estoque:<loja>:lote`). `enfileirarOutbox` devolve a linha existente sem
+ * tocar num evento já `PROCESSADO` — sem re-armar, a sincronização periódica
+ * aconteceria UMA única vez e nunca mais. Só o estado TERMINAL é re-armado:
+ * `PENDENTE`/`PROCESSANDO` já têm trabalho em voo e não podem ser duplicados
+ * (o CAS por `claim_versao` garante que não atropelamos um worker).
+ */
+async function rearmarRecorrente(evento: Row): Promise<Row> {
+  if (String(evento.estado) !== 'PROCESSADO') return evento;
+  const rearmado = await getStore().tryUpdateIf(
+    R_OUTBOX(),
+    Number(evento.id),
+    { estado: 'PROCESSADO', claim_versao: Number(evento.claim_versao || 0), empresa_id: Number(evento.empresa_id) },
+    { estado: 'PENDENTE', tentativas: 0, ultimo_erro: null, proxima_tentativa_em: new Date().toISOString() }
+  );
+  return rearmado ?? evento;
+}
+
+/**
  * Enfileira a sincronização de estoque de UMA loja. O payload carrega
  * `store_key` — o worker resolve a config daquela loja, e não a global.
  */
@@ -42,7 +63,7 @@ export async function enfileirarEstoqueDaLoja(empresaId: number, store: StoreKey
     { acao: 'woo-estoque', store_key: store }
   );
   await marcarStoreKey(evento, store);
-  return evento;
+  return rearmarRecorrente(evento);
 }
 
 /** Enfileira a importação de pedidos de UMA loja. */
@@ -54,7 +75,7 @@ export async function enfileirarPedidosDaLoja(empresaId: number, store: StoreKey
     { acao: 'woo-pedidos', store_key: store }
   );
   await marcarStoreKey(evento, store);
-  return evento;
+  return rearmarRecorrente(evento);
 }
 
 /**

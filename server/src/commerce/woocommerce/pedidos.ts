@@ -115,6 +115,13 @@ function rotuloLinha(linha: LinhaWoo): string {
  * Busca pedidos da loja em páginas de 100 (paginação real), respeitando a
  * janela incremental. Devolve o instante do pedido mais recente para avançar a
  * água-marca.
+ *
+ * `order=asc` é obrigatório: a água-marca (`after`) avança para o pedido mais
+ * recente da janela. Com `order=desc`, quando a janela tem mais pedidos do que
+ * `limite`, a paginação é truncada ANTES dos pedidos mais novos — a água-marca
+ * ficaria presa no mais novo que coube e a próxima rodada pediria `after` dele,
+ * pulando para sempre os que sobraram. Em ordem crescente o truncamento deixa
+ * de fora apenas os mais novos, que a próxima execução pega.
  */
 async function buscarPedidos(
   cfg: ConfigStore,
@@ -129,7 +136,7 @@ async function buscarPedidos(
   for (let pagina = 1; pagina <= maxPaginas; pagina++) {
     const lote = await wooStoreFetch<PedidoWoo[]>(
       cfg,
-      `/orders?status=${encodeURIComponent(status)}&after=${encodeURIComponent(depoisIso)}&per_page=${porPagina}&page=${pagina}&orderby=date&order=desc`
+      `/orders?status=${encodeURIComponent(status)}&after=${encodeURIComponent(depoisIso)}&per_page=${porPagina}&page=${pagina}&orderby=date&order=asc`
     );
     if (ehDryRun(lote)) return { pedidos: [], maisRecente: null, dry_run: true };
     if (!Array.isArray(lote) || !lote.length) break;

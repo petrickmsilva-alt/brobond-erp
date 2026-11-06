@@ -16,6 +16,7 @@
 import type { Row, Tx } from '../../store';
 import { getStore } from '../../services';
 import { getResource } from '../../resources';
+import { HttpError } from '../../errors';
 import type { StoreKey } from './registry';
 
 // Recursos declarados em `resources.ts` (fonte única do CRUD/inventário).
@@ -85,6 +86,13 @@ export async function registrarVinculo(
   tx?: Tx
 ): Promise<Row> {
   const s = getStore();
+  const externalProductId = String(dados.external_product_id ?? '').trim();
+  // Um vínculo sem ID externo real é pior que nenhum: a sincronização de
+  // estoque passaria a PUTar em `/products/` (caminho vazio) e a memória da
+  // integração diria que o anúncio existe. Recusa em vez de gravar.
+  if (!externalProductId) {
+    throw new HttpError(409, 'Vínculo sem ID externo — a loja não confirmou o anúncio.');
+  }
   const variacao = dados.external_variation_id == null || String(dados.external_variation_id) === '' ? null : String(dados.external_variation_id);
   const existente = variacao
     ? await vinculoDeVariacao(empresaId, store, produtoId, tx)
@@ -93,7 +101,7 @@ export async function registrarVinculo(
     empresa_id: empresaId,
     store_key: store,
     produto_id: produtoId,
-    external_product_id: String(dados.external_product_id),
+    external_product_id: externalProductId,
     external_variation_id: variacao,
     sku: dados.sku ? String(dados.sku) : null,
     status: dados.status ?? 'LINKED',

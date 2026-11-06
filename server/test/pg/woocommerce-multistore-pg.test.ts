@@ -326,3 +326,29 @@ test('08. publicações são únicas por (empresa, produto, canal, LOJA)', { ski
     await limpar(t);
   }
 });
+
+// ---------------------------------------------------------------------------
+// 10. O cron RECORRENTE re-arma o evento terminal — em PostgreSQL real, com o
+//     CAS por `claim_versao` que só o banco garante.
+// ---------------------------------------------------------------------------
+test('10. cron recorrente re-arma o evento PROCESSADO sem duplicar a linha', { skip }, async () => {
+  const { enfileirarEstoqueDaLoja } = await import('../../src/commerce/woocommerce/outboxStore');
+  const { query } = await import('../../src/db');
+  const t = await novoTenant();
+  try {
+    const primeiro = await enfileirarEstoqueDaLoja(t.empresaId, 'RETAIL');
+    assert.equal(String(primeiro.estado), 'PENDENTE');
+    // O worker conclui o evento (claim_versao avança como no fluxo real).
+    await query(`UPDATE commerce_outbox SET estado='PROCESSADO', claim_versao=claim_versao+1 WHERE id=$1`, [Number(primeiro.id)]);
+
+    const segundo = await enfileirarEstoqueDaLoja(t.empresaId, 'RETAIL');
+    assert.equal(Number(segundo.id), Number(primeiro.id), 'reusa a mesma linha');
+    assert.equal(String(segundo.estado), 'PENDENTE', 'o cron volta a sincronizar o que já terminou');
+
+    const linhas = await query(`SELECT estado FROM commerce_outbox WHERE empresa_id=$1 AND store_key='RETAIL'`, [t.empresaId]);
+    assert.equal(linhas.rows.length, 1, 'nunca duas linhas para o mesmo lote recorrente');
+    assert.equal(linhas.rows[0].estado, 'PENDENTE');
+  } finally {
+    await limpar(t);
+  }
+});

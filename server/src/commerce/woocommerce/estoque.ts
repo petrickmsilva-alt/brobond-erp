@@ -21,6 +21,7 @@ import { getResource } from '../../resources';
 import { disponibilidadesPorTamanho } from '../catalogo';
 import { escopoDeSistema } from '../../empresa';
 import type { ConfigStore, StoreKey } from './registry';
+import { dryRun } from './registry';
 import { wooStoreFetch, ehDryRun } from './cliente';
 import { listarVinculos } from './vinculos';
 import { registrarSincronizacao } from './estado';
@@ -74,6 +75,12 @@ export async function sincronizarEstoqueDaLoja(
     return { store_key: cfg.store_key, ok: true, atualizados: 0, sem_vinculo: 0, dry_run: false };
   }
 
+  // Modo de homologação: NADA é escrito na loja. O cliente devolve a resposta
+  // sintética do dry-run (não a confirmação da loja), então conferir o lote aqui
+  // recusaria uma sincronização que, por definição, não tocou a rede. A fila é
+  // montada abaixo mesmo assim para reportar quantos itens SERIAM enviados.
+  const modoHomologacao = dryRun();
+
   const idsProdutos = [...new Set(vinculos.map((v) => Number(v.produto_id)))];
   const produtos = new Map<number, Row>();
   for (const id of idsProdutos) {
@@ -105,17 +112,22 @@ export async function sincronizarEstoqueDaLoja(
   }
 
   let atualizados = 0;
-  let dryRunResposta = false;
+  let dryRunResposta = modoHomologacao;
   const simples: ItemEstoque[] = [];
   for (const item of fila.values()) {
     if (item.variacoes.length) {
-      const resposta = await wooStoreFetch<{ update?: unknown[] }>(cfg, `/products/${item.externalProductId}/variations/batch`, {
-        method: 'POST',
-        body: { update: item.variacoes },
-      });
-      dryRunResposta = dryRunResposta || ehDryRun(resposta);
-      conferirLote(resposta, item.variacoes);
-      atualizados += item.variacoes.length;
+      // A API de lote do WooCommerce aceita no máximo 100 itens por chamada.
+      for (let i = 0; i < item.variacoes.length; i += 100) {
+        const lote = item.variacoes.slice(i, i + 100);
+        const resposta = await wooStoreFetch<{ update?: unknown[] }>(cfg, `/products/${item.externalProductId}/variations/batch`, {
+          method: 'POST',
+          body: { update: lote },
+        });
+        dryRunResposta = dryRunResposta || ehDryRun(resposta);
+        // Dry-run: a resposta é sintética, não há confirmação real a conferir.
+        if (!dryRunResposta) conferirLote(resposta, lote);
+        atualizados += lote.length;
+      }
     } else if (item.produto) {
       simples.push(item.produto);
     }
@@ -124,11 +136,17 @@ export async function sincronizarEstoqueDaLoja(
     const lote = simples.slice(i, i + 100);
     const resposta = await wooStoreFetch<{ update?: unknown[] }>(cfg, '/products/batch', { method: 'POST', body: { update: lote } });
     dryRunResposta = dryRunResposta || ehDryRun(resposta);
-    conferirLote(resposta, lote);
+    if (!dryRunResposta) conferirLote(resposta, lote);
     atualizados += lote.length;
   }
 
-  await registrarSincronizacao(empresaId, cfg.store_key, { ultima_sincronizacao_estoque_em: new Date().toISOString(), erro: null });
+  // Homologação: a água-marca NÃO avança (nada foi sincronizado de verdade) —
+  // só o erro anterior é limpo. O painel não pode dizer "sincronizado agora".
+  await registrarSincronizacao(
+    empresaId,
+    cfg.store_key,
+    modoHomologacao ? { erro: null } : { ultima_sincronizacao_estoque_em: new Date().toISOString(), erro: null }
+  );
   await s
     .audit({
       usuario_id: null,
