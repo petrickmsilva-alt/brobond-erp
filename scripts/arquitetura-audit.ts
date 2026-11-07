@@ -33,6 +33,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { RESOURCES, type Resource } from '../server/src/resources';
 import { MODULES, MODULE_GROUPS } from '../client/src/modules';
+import { extrairColunasCreateTable } from './arquitetura-sql';
 
 const raiz = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const ler = (...p: string[]) => readFileSync(path.join(raiz, ...p), 'utf8');
@@ -81,7 +82,7 @@ for (const arquivo of arquivosSql) {
     const nome = m[1].toLowerCase();
     const corpo = m[2];
     const t = tabelas.get(nome) ?? { nome, colunas: new Set(), origem: [], indices: new Set(), constraints: new Set() };
-    for (const col of corpo.matchAll(/^\s{2}([a-z_][a-z0-9_]*)\s+/gim)) t.colunas.add(col[1].toLowerCase());
+    for (const col of extrairColunasCreateTable(corpo)) t.colunas.add(col);
     t.origem.push(arquivo);
     tabelas.set(nome, t);
     arquivosComTabela.add(arquivo);
