@@ -191,7 +191,7 @@ export type CobrancaInput = {
 
 export type CobrancaProviderResult = {
   provider_ref: string;
-  status: 'pendente' | 'autorizada' | 'paga' | 'falhou';
+  status: 'pendente' | 'autorizada' | 'paga' | 'falhou' | 'cancelada' | 'expirada';
   /** BR Code EMV do PIX (texto `000201…`). NUNCA a imagem. */
   qr_code?: string | null;
   /** Imagem do QR Code em base64 devolvida pelo provider (nunca gerada aqui). */
@@ -562,7 +562,7 @@ export async function criarCobrancaGateway(
   const idempotencyKey = params.idempotencyKey.slice(0, 120);
 
   // Configuration errors happen before reserving an external effect.
-  const ctx = await contextoDoProvider(escopo.empresaId, providerId);
+  await contextoDoProvider(escopo.empresaId, providerId);
   const input: CobrancaInput = {
     valor, metodo,
     descricao: params.descricao ? String(params.descricao).slice(0, 200) : lancamento ? String(lancamento.descricao) : venda ? `Venda #${venda.id}` : 'Cobrança',
@@ -620,9 +620,25 @@ export async function criarCobrancaGateway(
   if (!reserva.fresh) return { cobranca: reserva.row, resultado: null, idempotente: true };
 
   try {
+    // ADR-001: a criação NÃO é implementada no gateway legado. Esta ponte
+    // encaminha a operação ao adaptador canônico do Payment Engine (mesmo
+    // provider, mesma chave de idempotência) — não existe segunda criação.
     // Nenhuma transação é mantida durante a rede. O estado PROCESSING impede
     // fechamento/reenvio mesmo se o processo cair depois do efeito externo.
-    const resultado = await provider.criaCobranca(ctx, input);
+    const { criarCobrancaAvulsaEngine } = await import('../../modules/payments/application/standalone-charge');
+    const resultado = await criarCobrancaAvulsaEngine(escopo.empresaId, {
+      provider: providerId,
+      metodo,
+      valor,
+      descricao: input.descricao,
+      expiraEm: input.expira_em,
+      parcelas,
+      payerEmail: input.payer_email,
+      payerDocumento: input.payer_documento,
+      payerNome: input.payer_nome,
+      token: input.token,
+      idempotencyKey,
+    });
     if (!resultado.provider_ref || !['pendente', 'autorizada', 'paga', 'cancelada', 'falhou', 'expirada'].includes(String(resultado.status)))
       throw new HttpError(409, 'Provider não retornou referência e estado verificáveis.');
     const row = await comTravaContabil(escopo.empresaId, async (tx) => {
@@ -643,6 +659,23 @@ export async function criarCobrancaGateway(
     });
     return { cobranca: row, resultado, idempotente: false };
   } catch (erro) {
+    // Distinguir falha DEFINITIVA (recusa/contrato) de INCERTEZA (timeout/rede/
+    // crash). Uma recusa não ambígua encerra a reserva como falhou; incerteza
+    // NÃO prova ausência de criação e jamais reenvia às cegas.
+    const { PaymentError } = await import('../../modules/payments/domain/payment');
+    const definitivo =
+      (erro instanceof HttpError && erro.status === 409) || (erro instanceof PaymentError && !erro.ambiguous);
+    if (definitivo) {
+      await comTravaContabil(escopo.empresaId, async (tx) => {
+        const row = await s.tryUpdateIf(R_GATEWAY_COBRANCAS, Number(reserva.row.id),
+          { empresa_id: escopo.empresaId, criacao_operacao_estado: 'PROCESSING', criacao_operacao_hash: requestHash },
+          { status: 'falhou', criacao_operacao_estado: 'FAILED', atualizado_em: new Date().toISOString() }, tx);
+        if (row) await s.audit({ empresa_id: escopo.empresaId, usuario_id: params.actor.id, usuario: params.actor.name, acao: 'ajuste', recurso: 'gateway_cobrancas',
+          registro_id: Number(row.id), descricao: 'Criação de cobrança recusada pelo provider', dados: { provider: providerId, estado: 'FAILED' } }, tx);
+      }).catch(() => {});
+      if (erro instanceof HttpError) throw erro;
+      throw new HttpError(409, 'Provider recusou a criação da cobrança; consulte a cobrança antes de tentar novamente.');
+    }
     // Timeout, falha de rede ou crash não provam que o provider deixou de
     // criar a cobrança. O replay jamais emite outra chamada às cegas.
     await comTravaContabil(escopo.empresaId, async (tx) => {
@@ -652,7 +685,6 @@ export async function criarCobrancaGateway(
       if (row) await s.audit({ empresa_id: escopo.empresaId, usuario_id: params.actor.id, usuario: params.actor.name, acao: 'ajuste', recurso: 'gateway_cobrancas',
         registro_id: Number(row.id), descricao: 'Criação de cobrança sem confirmação', dados: { provider: providerId, estado: 'UNCERTAIN' } }, tx);
     }).catch(() => {}); // PROCESSING persistente continua bloqueando caso a própria gravação falhe.
-    if (erro instanceof HttpError && erro.status === 409) throw erro;
     throw new HttpError(409, 'Criação sem confirmação do provider; concilie antes de tentar novamente.');
   }
 
@@ -1064,33 +1096,38 @@ publicGatewayRouter.post('/api/gateway/webhooks/:provider', rawBody, async (req:
 
     if (providerId !== 'mock' && !segredo) return res.status(401).json({error:'Assinatura inválida ou provider não configurado.'});
 
-    // Verifique a assinatura ANTES de responder "duplicado". Caso contrário,
-    // um terceiro obtém ACK de evento de outro tenant sem autenticar.
     // IDEMPOTÊNCIA: rejeições ('ignorado') não envenenam o retry assinado.
+    // A decisão de ingestão é CANÔNICA (modules/payments): o mesmo pipeline vale
+    // para todos os provedores — inclusive PagBank/Stripe, roteados ao Engine.
+    const { classificarEntrega } = await import('../../modules/payments/application/webhook-ingest');
     const anteriores = await s.list(R_GATEWAY_WEBHOOK_EVENTS, { page: 1, pageSize: 2, filter: { provider: providerId, evento_id: parsed.evento_id } });
-    const anterior = anteriores.rows[0] ?? null;
-    const rejeicaoLegadaSemEmpresa = anterior?.empresa_id == null && anterior?.status === 'ignorado';
-    const conflitoDeCobranca = !!anterior && ((!rejeicaoLegadaSemEmpresa && Number(anterior.empresa_id || 0) !== Number(empresaId || 0))
-      || extrairRefDoPayload(provider, lerPayloadWebhook(anterior.payload)) !== parsed.provider_ref);
-    if (conflitoDeCobranca) {
+    const anterioresView = anteriores.rows.map((r) => ({
+      id: Number(r.id),
+      empresa_id: r.empresa_id == null ? null : Number(r.empresa_id),
+      status: String(r.status),
+      assinatura_ok: r.assinatura_ok === true,
+      referencia: extrairRefDoPayload(provider, lerPayloadWebhook(r.payload)),
+    }));
+    const decisao = classificarEntrega({
+      anteriores: anterioresView,
+      empresaId,
+      referencia: parsed.provider_ref,
+      temSegredo: !!segredo,
+      assinaturaOk,
+    });
+    if (decisao.acao === 'conflito') {
       // P2-10: sem assinatura válida, o 409 revelaria a existência de evento_id
       // de outra cobrança. Resposta uniforme 401, sem tocar no registro alheio.
       if (!segredo || !assinaturaOk) return res.status(401).json({ error: 'Assinatura inválida.' });
       return res.status(409).json({ error: 'Evento já registrado para outra cobrança.' });
     }
-    // Um evento que entrou em erro quando a empresa ainda não exigia assinatura
-    // não pode ser pago pelo cron após o admin ativar o segredo. Somente uma
-    // nova entrega com assinatura válida pode promovê-lo a recebido.
-    const aceito = anteriores.rows.find((r) => String(r.status) !== 'ignorado'
-      && !(segredo && r.status === 'erro' && r.assinatura_ok !== true));
-    const jaRejeitado = aceito ? null : anterior;
+    const jaRejeitado: { id: number } | null = decisao.acao === 'persistir' || decisao.acao === 'rejeitar' ? decisao.reutilizar : null;
 
-    if (segredo && !assinaturaOk) {
-      // Nunca atualizar nem dar ACK de duplicata de um evento já aceito
-      // quando a entrega atual não foi autenticada.
-      if (aceito) return res.status(401).json({ error: 'Assinatura inválida.' });
-      // Registro forense + rejeição: assinatura inválida não processa nada.
-      // Repetição de rejeição só atualiza o carimbo — não empilha linhas.
+    if (decisao.acao === 'rejeitar') {
+      // Assinatura inválida não processa nada.
+      if (!decisao.persistir) return res.status(401).json({ error: 'Assinatura inválida.' });
+      // Registro forense + rejeição. Repetição de rejeição só atualiza o
+      // carimbo — não empilha linhas (índice único (provider, evento_id)).
       const evento = jaRejeitado
         ? await s.update(R_GATEWAY_WEBHOOK_EVENTS, Number(jaRejeitado.id), { recebido_em: new Date().toISOString(), payload: payloadSeguroInbox(providerId, corpo) })
         : await s.insert(R_GATEWAY_WEBHOOK_EVENTS, {
@@ -1108,7 +1145,7 @@ publicGatewayRouter.post('/api/gateway/webhooks/:provider', rawBody, async (req:
       await s.audit({ usuario_id: null, usuario: 'webhook', acao: 'seguranca', recurso: 'gateway_webhook_events', registro_id: registroId, descricao: `Webhook ${providerId} rejeitado: assinatura inválida (evento ${parsed.evento_id})`, dados: { provider: providerId, evento_id: parsed.evento_id }, empresa_id: empresaExplicitaAudit(empresaId, null) });
       return res.status(401).json({ error: 'Assinatura inválida.' });
     }
-    if (aceito) return res.json({ ok: true, duplicado: true, evento_id: parsed.evento_id });
+    if (decisao.acao === 'duplicado') return res.json({ ok: true, duplicado: true, evento_id: parsed.evento_id });
 
     // Persistência ANTES do processamento: mesmo que o processamento falhe,
     // o evento está gravado e entra no retry — sem duplicar (índice único).

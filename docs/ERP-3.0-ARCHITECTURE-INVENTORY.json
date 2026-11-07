@@ -1,5 +1,5 @@
 {
-  "gerado_em": "2026-11-07T10:58:01.165Z",
+  "gerado_em": "2026-11-07T12:56:02.916Z",
   "fonte_de_verdade_do_schema": "db/schema.sql + db/migrations/*.sql (PostgreSQL); Prisma = bounded context do commerce",
   "migrations": {
     "sql": 102,
@@ -201,17 +201,17 @@
   },
   "testes": {
     "server": {
-      "arquivos": 281,
-      "casos": 2324
+      "arquivos": 284,
+      "casos": 2350
     },
     "client": {
       "arquivos": 133,
       "casos": 1140
     },
-    "total": 3464
+    "total": 3490
   },
   "integracoes": {
-    "arquivos_modules": 78,
+    "arquivos_modules": 80,
     "arquivos_server_modules": 1
   },
   "achados": [

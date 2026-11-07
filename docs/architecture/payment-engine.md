@@ -148,13 +148,25 @@ processo Node para a exclusão.
 
 ## 8. Webhook engine e jobs
 
-O endpoint compatível `/api/gateway/webhooks/:provider` recebe bytes crus ANTES do
-parser JSON/autenticação de usuário. Resolve a empresa pela transação candidata,
-valida a assinatura antes da deduplicação e guarda inbox/hash/correlação. Só são
-retidos identificadores necessários ao parse: nenhum corpo arbitrário com cartão,
-segredos ou dados do comprador. MP usa manifesto oficial, Stripe HMAC com tolerância
-de timestamp, PagBank SHA256(token + '-' + corpo cru). O worker consulta estado,
-valor e moeda oficiais; o browser/redirect nunca é autoridade.
+O endpoint compatível `/api/gateway/webhooks/:provider` é o ÚNICO ponto de entrada
+por provedor (unificação P1-07) e roteia internamente ao engine
+(`processEngineWebhook`). Ele recebe bytes crus ANTES do parser JSON/autenticação
+de usuário. A regra de ingestão/deduplicação é única
+(`modules/payments/application/webhook-ingest.ts`, `classificarEntrega`) e vale
+para todos os provedores: assinatura verificada sobre os bytes crus ANTES da
+deduplicação; evento autenticado persistido antes do processamento; deduplicação
+por (provedor, evento_id) com isolamento por empresa; rejeição anterior
+reaproveitada em vez de empilhar linha; reentrega já aceita respondida como
+duplicata sem segundo efeito. Resolve a empresa pela transação candidata e guarda
+inbox/hash/correlação. Só são retidos identificadores necessários ao parse: nenhum
+corpo arbitrário com cartão, segredos ou dados do comprador. MP usa manifesto
+oficial, Stripe HMAC com tolerância de timestamp, PagBank SHA256(token + '-' +
+corpo cru). A identidade de evento do PagBank usa, quando presente, o
+`notification_id` oficial (`charges[].payment_method.pix.notification_id`) e, no
+fallback, a Order + o conjunto normalizado de cobranças/estados; o hash do corpo
+é evidência complementar (`payload_hash`), nunca chave de deduplicação (P3-02). O
+worker consulta estado, valor e moeda oficiais; o browser/redirect nunca é
+autoridade.
 
 ```text
 Webhook → verificação → inbox existente → deduplicação → normalização
@@ -241,7 +253,14 @@ por existir uma tela.
 `/webhooks`; mutações `/:id/refund|capture|cancel|manual-confirm`. Atualizações
 pedem `Idempotency-Key`. Configuração de provider usa PUT `/providers/:code`.
 As APIs antigas são preservadas; cancel/refund de cobrança já vinculada a intent
-são encaminhados ao Engine, impedindo bypass da trava e dupla operação.
+são encaminhados ao Engine, impedindo bypass da trava e dupla operação. A criação
+de cobrança avulsa (`POST /api/financeiro/gateway/cobrancas`) NÃO é implementada
+no gateway legado: o gateway reserva a cobrança (idempotência, `PROCESSING`/
+`UNCERTAIN`/`FAILED`) e delega a criação ao adaptador canônico do Engine
+(`modules/payments/application/standalone-charge.ts`), reutilizando a mesma chave
+de idempotência, a configuração cifrada e o vínculo com `gateway_cobrancas`/
+`lancamentos_financeiros`/`vendas`/empresa. Não existe segunda implementação de
+criação de cobrança (Missão A, ADR-001).
 
 `POST /api/loja/payment-methods` e preview calculam disponibilidade a partir do
 carrinho real. `POST /api/commerce/checkout/payment-intent` é alias do checkout

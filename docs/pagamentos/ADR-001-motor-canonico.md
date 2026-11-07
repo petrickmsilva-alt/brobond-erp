@@ -1,6 +1,8 @@
 # ADR-001 — Caminho canônico de pagamentos
 
-Status: **aceito pelo Diretor em 2026-11-03 (decisão (e))**. Escopo confirmado: (1) o Payment Engine (`modules/payments/`) é o caminho canônico de pagamentos; (2) o gateway legado (`server/src/gateway.ts`) passa a ser adaptador de compatibilidade, sem novas funcionalidades; (3) a cifra consolidada descrita em `docs/seguranca/plano-migracao-segredos.md` e na Fase 2 é o padrão. Pendente, fora desta decisão: migração da cobrança avulsa Mercado Pago do legado para o engine (não iniciada); reentrega do PagBank (P3-02); homologação sandbox (não executada).
+Status: **aceito pelo Diretor em 2026-11-03 (decisão (e))**. Escopo confirmado: (1) o Payment Engine (`modules/payments/`) é o caminho canônico de pagamentos; (2) o gateway legado (`server/src/gateway.ts`) passa a ser adaptador de compatibilidade, sem novas funcionalidades; (3) a cifra consolidada descrita em `docs/seguranca/plano-migracao-segredos.md` e na Fase 2 é o padrão.
+
+**Atualização 2026-11-07 (Agente 05):** a cobrança avulsa Mercado Pago foi migrada para o engine (Missão A); as duas portas de webhook foram unificadas em um único pipeline de ingestão (Missão B, P1-07); a identidade de evento do PagBank passou a usar o identificador oficial (`notification_id`) com evidência de hash (Missão C, P3-02). Detalhes em "Consequências verificadas" e "O que NÃO está resolvido". A homologação sandbox externa continua não executada.
 
 ## Contexto
 
@@ -34,7 +36,7 @@ Os provedores PagBank e Stripe **não** criam cobrança pela trilha legada (reto
 
 ## O que NÃO está resolvido
 
-- **Duas portas de entrada de webhook** (`/api/gateway/webhooks/:provider` e o engine) — risco P1-07. Deduplicação e estado são aplicados por caminhos diferentes; falta um único ponto de entrada.
-- **PagBank:** o identificador de evento é o hash do corpo (P3-02). Reentrega com bytes diferentes não é deduplicada. Precisa de confirmação do contrato de reentrega do PagBank (**não verificado**).
-- **Migração da cobrança avulsa do Mercado Pago** para o engine: não iniciada. Exige decisão de cronograma do Diretor e homologação.
-- Nenhuma destas afirmações foi verificada com os provedores reais (ver `docs/pagamentos/homologacao-sandbox.md`).
+- **Cobrança avulsa Mercado Pago** — RESOLVIDA (Missão A, 2026-11-07). O gateway legado (`criarCobrancaGateway`) não cria mais cobrança por conta própria: ele reserva a cobrança (idempotência, `PROCESSING`/`UNCERTAIN`/`FAILED`) e encaminha a criação ao adaptador canônico do engine (`modules/payments/application/standalone-charge.ts`). Não existe segunda implementação de criação. Compatibilidade do contrato público (`POST /api/financeiro/gateway/cobrancas`) preservada. Testes: `server/test/payments-avulsa-engine.test.ts`.
+- **Duas portas de entrada de webhook (P1-07)** — RESOLVIDA (Missão B, 2026-11-07). Há um único ponto de entrada por provedor (`POST /api/gateway/webhooks/:provider`) e uma única regra de ingestão/deduplicação (`modules/payments/application/webhook-ingest.ts`), aplicada a todos os provedores e roteada internamente ao engine (`processEngineWebhook`). Assinatura verificada sobre os bytes crus antes da deduplicação; evento autenticado persistido antes do processamento; deduplicação por (provedor, evento_id) com isolamento por empresa. Testes: `server/test/payments-webhook-pipeline.test.ts`.
+- **PagBank reentrega (P3-02)** — RESOLVIDA (Missão C, 2026-11-07). O contrato oficial do PagBank (`developer.pagbank.com.br/reference/webhooks`) inclui, para PIX, um identificador oficial de notificação (`charges[].payment_method.pix.notification_id`, formato `NTF_...`). A identidade de evento agora usa esse id quando presente e, no fallback, a Order + o conjunto normalizado de cobranças/estados; o hash do corpo continua como evidência complementar (`payload_hash`), nunca como chave. Testes: `server/test/pagbank-webhook-reentrega.test.ts`.
+- **Homologação sandbox externa** — PENDENTE. Nenhuma afirmação foi verificada com provedores reais (ver `docs/pagamentos/homologacao-sandbox.md`). Sem credenciais autorizadas, os casos externos permanecem como pendência de homologação.
