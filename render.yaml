@@ -123,6 +123,10 @@ services:
         sync: false
       - key: MERCADOPAGO_WEBHOOK_SECRET
         sync: false
+      # E-mail técnico usado no User-Agent da cotação Melhor Envio; sem valor,
+      # a cotação fica indisponível. Não ativa a geração de remessas.
+      - key: LOGISTICS_CONTACT_EMAIL
+        sync: false
       # ── WooCommerce MULTI-STORE (RETAIL / WHOLESALE) ──
       # Catálogo ÚNICO, duas lojas independentes. Sem estas variáveis o modo
       # multi-loja fica DESLIGADO e o fluxo single-store (WOOCOMMERCE_URL/CK/CS)

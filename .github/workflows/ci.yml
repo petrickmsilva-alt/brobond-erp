@@ -13,7 +13,15 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          # Node 24: o runner de `node --test` do v22.x ainda lê o tamanho do
+          # quadro do protocolo como int32 COM SINAL. Quando o stdout de um
+          # arquivo de teste traz texto NÃO-ASCII (acentos PT-BR e emoji do
+          # logger) que segue um quadro de relatório, esses bytes são lidos como
+          # tamanho e o `v8.deserialize` do runner pai aborta com "Unable to
+          # deserialize cloned data due to invalid or unsupported version",
+          # descartando o arquivo inteiro. Corrigido no Node 24 (nodejs/node
+          # #64706) e NÃO retroportado para o v22.x (nodejs/node #65934).
+          node-version: 24
       - name: Instalar dependências
         run: npm run install:all && npm install
       - name: Typecheck (API)
@@ -96,7 +104,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          # Mesma justificativa do job `verificar`: Node 24 traz a correção do
+          # runner de `node --test` (#64706) ausente no v22.x (#65934).
+          node-version: 24
       - name: Instalar dependências (raiz)
         run: npm install
       - name: Configurar credencial efêmera para testes PostgreSQL

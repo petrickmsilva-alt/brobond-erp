@@ -628,3 +628,85 @@ test('logística: envio da EMPRESA A é invisível para a EMPRESA B', async () =
 });
 
 void ADMIN;
+
+test('logística: eventos atrasados não regridem estados finais ou trânsito', () => {
+  for (const status of ['entregue', 'devolvido', 'extraviado', 'cancelado']) {
+    assert.equal(inferirStatus('em trânsito', status), status);
+    assert.equal(inferirStatus('postado', status), status);
+  }
+  assert.equal(inferirStatus('postado', 'em_transito'), 'em_transito');
+});
+
+test('logística: resposta Melhor Envio usa preço e prazo customizados sem inventar dimensões', async () => {
+  await chamar(log.salvarConfigHandler, reqDe({ provider: 'melhor_envio', ambiente: 'homologacao', me_token: 'token-de-teste', me_sandbox: true }));
+  const emailAnterior = process.env.LOGISTICS_CONTACT_EMAIL;
+  process.env.LOGISTICS_CONTACT_EMAIL = 'tecnico@example.test';
+  const fetchOriginal = globalThis.fetch;
+  let chamadasApi = 0;
+  globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
+    chamadasApi++;
+    assert.equal(String(url), 'https://sandbox.melhorenvio.com.br/api/v2/me/shipment/calculate');
+    assert.equal(init?.redirect, 'error');
+    assert.ok(init?.signal);
+    const payload = JSON.parse(String(init?.body));
+    assert.equal(payload.products[0].insurance_value, 20);
+    assert.equal(payload.products[0].quantity, 2);
+    return { status: 200, text: async () => JSON.stringify([
+      { id: 1, name: 'Serviço', price: '99.90', custom_price: '12.50', delivery_time: 10, custom_delivery_time: 3, company: { name: 'Operador' } },
+      { id: 2, name: 'Inválido', custom_price: '12.50' },
+    ]) } as Response;
+  }) as typeof fetch;
+  try {
+    const provider = shippingProvider('melhor_envio')!;
+    const ctx = { empresaId: 1, venda_id: 1, origem: { cep: CEP_ORIGEM }, destino: { cep: CEP_DESTINO }, volumes: [{ peso_g: 300, altura_cm: 10, largura_cm: 15, comprimento_cm: 20, quantidade: 2, valor_unitario: 20 }] };
+    const result = await provider.cotar(ctx);
+    assert.equal(result.ok, true);
+    if (result.ok) {
+      assert.equal(result.data.length, 1);
+      assert.equal(result.data[0].valor, 12.50);
+      assert.equal(result.data[0].prazo_dias, 3);
+    }
+    const invalida = await provider.cotar({ ...ctx, volumes: [{ ...ctx.volumes[0], altura_cm: 0 }] });
+    assert.equal(invalida.ok, false);
+    assert.equal(chamadasApi, 1);
+    const envio = await provider.gerarEnvio({ ...ctx, servico: '1' });
+    assert.equal(envio.ok, false);
+    assert.equal(chamadasApi, 1, 'compra não homologada nunca chama o operador');
+  } finally {
+    globalThis.fetch = fetchOriginal;
+    if (emailAnterior === undefined) delete process.env.LOGISTICS_CONTACT_EMAIL; else process.env.LOGISTICS_CONTACT_EMAIL = emailAnterior;
+    await chamar(log.salvarConfigHandler, reqDe({ provider: 'manual', me_token: null }));
+  }
+});
+
+test('frete legado: CEP inválido é rejeitado e nunca retorna preços fictícios', async () => {
+  const { calcularFrete } = await import('../src/frete');
+  await esperarErro(() => calcularFrete(reqDe({ cep_destino: '123' }), resFake().res), 400);
+  const { res, saida } = resFake();
+  await calcularFrete(reqDe({ cep_destino: '30130-110' }), res);
+  assert.equal(saida.status, 503);
+  assert.equal(saida.json.codigo, 'PROVIDER_UNAVAILABLE');
+  assert.deepEqual(saida.json.opcoes, []);
+});
+
+test('logística: consulta com eventos fora de ordem mantém entrega e histórico', async () => {
+  registrarShippingProvider({
+    slug: 'fora_ordem', nome: 'Teste', disponivel: () => true,
+    cotar: async () => ({ ok: false, motivo: 'nao_configurado', mensagem: 'teste' }),
+    gerarEnvio: async () => ({ ok: false, motivo: 'nao_configurado', mensagem: 'teste' }),
+    cancelar: async () => ({ ok: false, motivo: 'nao_configurado', mensagem: 'teste' }),
+    rastrear: async () => ({ ok: true, data: [
+      { codigo: 'ENT', status: 'entregue', mensagem: 'Entregue', em: '2026-11-07T12:00:00Z' },
+      { codigo: 'TRA', status: 'em trânsito', mensagem: 'Em trânsito', em: '2026-11-06T12:00:00Z' },
+    ] }),
+  });
+  const { venda } = await vendaComCliente();
+  const s = getStore();
+  const envio = await s.insert(RESOURCES.envios, { empresa_id: 1, venda_id: Number(venda.id), provider: 'fora_ordem', status: 'postado', codigo_rastreamento: 'TESTE_FORA_ORDEM', custo: 10, idempotency_key: `fora-ordem:${venda.id}` });
+  const primeira = await chamar(log.rastrearEnvio, reqDe({}, { params: { id: envio.id } }));
+  assert.equal(primeira.eventos_novos, 2);
+  assert.equal((await s.get(RESOURCES.envios, Number(envio.id)))?.status, 'entregue');
+  const segunda = await chamar(log.rastrearEnvio, reqDe({}, { params: { id: envio.id } }));
+  assert.equal(segunda.eventos_novos, 0);
+  assert.equal((await s.get(RESOURCES.envios, Number(envio.id)))?.status, 'entregue');
+});

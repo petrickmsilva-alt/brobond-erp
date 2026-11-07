@@ -174,7 +174,7 @@ Lidos por família de prefixo em `modules/payments/application/configuration.ts:
 | `NFE_EMITENTE_CNPJ`, `NFE_EMITENTE_IE`, `NFE_EMITENTE_RAZAO` | Fiscal | `server/src/nfe.ts:106-108` | Condicional | Emissão não monta o emitente | ausente |
 | `FISCAL_TIMEOUT_MS` | Fiscal | `server/src/fiscalProvider.ts:188` | Não | Padrão | ausente |
 | `CEP_PROVIDERS`, `CEP_TIMEOUT_MS` | CEP | `server/src/cep.ts:95,39` | Não | `brasilapi,viacep`; padrão | ausente |
-| `CEP_ORIGEM` | Frete | `server/src/frete.ts:37` | Condicional | Origem não definida | ausente |
+| `LOGISTICS_CONTACT_EMAIL` | Cotação Melhor Envio | `server/src/logistica.ts` | Condicional, e-mail técnico exigido pela API | Sem valor válido, cotação fica indisponível | ausente |
 
 ### WooCommerce MULTI-STORE (RETAIL / WHOLESALE) — migration 0100
 

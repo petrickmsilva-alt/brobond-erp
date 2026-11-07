@@ -66,6 +66,9 @@ export type VolumeFrete = {
   largura_cm?: number;
   comprimento_cm?: number;
   quantidade?: number;
+  valor_unitario?: number;
+  peso_estimado?: boolean;
+  dados_estimados?: boolean;
 };
 
 export type CotacaoFrete = {
@@ -266,16 +269,19 @@ export const PROVEDOR_NULO: ShippingProvider = {
 // ----------------------------------------------------------------------------
 
 const ME_BASE_PROD = 'https://api.melhorenvio.com.br';
+const ME_QUOTE_BASE_PROD = 'https://www.melhorenvio.com.br';
 const ME_BASE_SANDBOX = 'https://sandbox.melhorenvio.com.br';
 
 async function meFetch(url: string, token: string, init: RequestInit = {}): Promise<{ status: number; body: unknown }> {
   const resp = await fetch(url, {
     ...init,
+    redirect: 'error',
+    signal: AbortSignal.timeout(10000),
     headers: {
       Accept: 'application/json',
       'Content-Type': 'application/json',
       Authorization: `Bearer ${token}`,
-      'User-Agent': 'BroBond-ERP/1.0',
+      'User-Agent': `BroBond-ERP/1.0 (${process.env.LOGISTICS_CONTACT_EMAIL || 'contato não configurado'})`,
       ...(init.headers || {}),
     },
   });
@@ -300,85 +306,48 @@ export function criarMelhorEnvio(): ShippingProvider {
     async cotar(ctx) {
       const c = await cfg(ctx.empresaId);
       if (!c.me_token) return { ok: false, motivo: 'nao_configurado', mensagem: 'Token do Melhor Envio não configurado.' };
-      const base = c.me_sandbox || c.ambiente === 'homologacao' ? ME_BASE_SANDBOX : ME_BASE_PROD;
+      if (!/^[^\s@()]+@[^\s@()]+\.[^\s@()]+$/.test(process.env.LOGISTICS_CONTACT_EMAIL || '')) return { ok: false, motivo: 'nao_configurado', mensagem: 'E-mail técnico do Melhor Envio não configurado.' };
+      const base = c.me_sandbox || c.ambiente === 'homologacao' ? ME_BASE_SANDBOX : ME_QUOTE_BASE_PROD;
       try {
-        const volumes = ctx.volumes.length ? ctx.volumes : [{ peso_g: 300 }];
-        const pesoKg = Math.max(0.05, volumes.reduce((acc, v) => acc + (v.peso_g || 0) * (v.quantidade || 1), 0) / 1000);
-        const v0 = volumes[0];
+        if (!/^\d{8}$/.test(ctx.origem.cep) || !/^\d{8}$/.test(ctx.destino.cep) || !ctx.volumes.length || ctx.volumes.some((v) =>
+          v.peso_estimado === true || v.dados_estimados === true || ![v.peso_g, v.largura_cm, v.altura_cm, v.comprimento_cm].every((n) => typeof n === 'number' && Number.isFinite(n) && n > 0)
+          || !Number.isInteger(v.quantidade) || Number(v.quantidade) <= 0
+          || typeof v.valor_unitario !== 'number' || !Number.isFinite(v.valor_unitario) || v.valor_unitario < 0
+        )) return { ok: false, motivo: 'recusado', mensagem: 'Informe CEPs, dimensões, peso, quantidade e valor unitário válidos para cotar.' };
         const payload = {
           from: { postal_code: ctx.origem.cep },
           to: { postal_code: ctx.destino.cep },
-          products: ctx.volumes.map((v) => ({ id: 'brobond', width: v.largura_cm || 15, height: v.altura_cm || 10, length: v.comprimento_cm || 20, weight: (v.peso_g || 300) / 1000, insurance_value: round2(ctx.valor_declarado || 0), quantity: v.quantidade || 1 })),
-          options: { invoice: false, insurance_value: round2(ctx.valor_declarado || 0) },
+          products: ctx.volumes.map((v, i) => ({ id: String(i + 1), width: v.largura_cm, height: v.altura_cm, length: v.comprimento_cm, weight: v.peso_g / 1000, insurance_value: round2(v.valor_unitario!), quantity: v.quantidade })),
         };
-        const resp = await meFetch(`${base}/shipment/quote`, c.me_token!, { method: 'POST', body: JSON.stringify(payload) });
-        if (resp.status < 200 || resp.status >= 300) {
-          return { ok: false, motivo: 'falha', mensagem: `Melhor Envio respondeu ${resp.status} à cotação.` };
+        const resp = await meFetch(`${base}/api/v2/me/shipment/calculate`, c.me_token!, { method: 'POST', body: JSON.stringify(payload) });
+        if (resp.status < 200 || resp.status >= 300 || !Array.isArray(resp.body)) {
+          return { ok: false, motivo: 'falha', mensagem: `Melhor Envio não forneceu resposta válida (HTTP ${resp.status}).` };
         }
-        const lista = Array.isArray(resp.body) ? (resp.body as Record<string, unknown>[]) : [];
-        const opcoes: CotacaoFrete[] = lista
-          .filter((o) => o && (o as Record<string, unknown>).error === undefined)
-          .map((o: Record<string, unknown>) => {
-            const comp = (o.company ?? {}) as Record<string, unknown>;
-            const price = String(o.price ?? '0').replace(/\./g, '').replace(',', '.');
-            const delivery = (o.delivery_time ?? {}) as Record<string, unknown>;
-            return {
-              servico: String(o.id ?? o.name ?? 'me'),
-              nome: String(o.name ?? 'Melhor Envio'),
-              codigo: String(o.id ?? ''),
-              valor: round2(Number(price) || 0),
-              prazo_dias: Math.max(1, Number((delivery as Record<string, unknown>).min) || Number((delivery as Record<string, unknown>).average) || 7),
-              empresa: String(comp.name ?? ''),
-              aviso: o.error ? String(o.error) : undefined,
-            };
-          })
-          .filter((o) => o.valor > 0);
+        const opcoes: CotacaoFrete[] = [];
+        for (const raw of resp.body) {
+          if (!raw || typeof raw !== 'object') continue;
+          const o = raw as Record<string, unknown>;
+          if (o.error || !o.id || typeof o.name !== 'string') continue;
+          const rawPrice = o.custom_price;
+          const valor = typeof rawPrice === 'number' ? rawPrice : typeof rawPrice === 'string' && /^\d+(?:\.\d{1,2})?$/.test(rawPrice) ? Number(rawPrice) : NaN;
+          const prazo = o.custom_delivery_time;
+          if (!Number.isFinite(valor) || valor < 0 || typeof prazo !== 'number' || !Number.isInteger(prazo) || prazo < 0) continue;
+          const comp = o.company && typeof o.company === 'object' ? o.company as Record<string, unknown> : {};
+          opcoes.push({ servico: String(o.id), nome: o.name, codigo: String(o.id), valor: round2(valor), prazo_dias: prazo, empresa: typeof comp.name === 'string' ? comp.name : '' });
+        }
         // Um 200 com lista vazia NÃO é frete grátis: é "nenhuma opção".
         if (!opcoes.length) {
-          return { ok: false, motivo: 'recusado', mensagem: `O Melhor Envio não devolveu nenhuma opção para ${ctx.origem.cep} → ${ctx.destino.cep} (${pesoKg.toFixed(2)} kg).` };
+          return { ok: false, motivo: 'recusado', mensagem: 'O Melhor Envio não devolveu nenhuma opção válida para este trecho.' };
         }
         return { ok: true, data: opcoes };
       } catch {
         return { ok: false, motivo: 'falha', mensagem: 'Falha de rede ao consultar o Melhor Envio.' };
       }
     },
-    async gerarEnvio(ctx) {
-      const c = await cfg(ctx.empresaId);
-      if (!c.me_token) return { ok: false, motivo: 'nao_configurado', mensagem: 'Token do Melhor Envio não configurado.' };
-      if (!ctx.servico) return { ok: false, motivo: 'recusado', mensagem: 'Escolha o serviço (cote as opções primeiro).' };
-      const base = c.me_sandbox || c.ambiente === 'homologacao' ? ME_BASE_SANDBOX : ME_BASE_PROD;
-      try {
-        const carrinho = await meFetch(`${base}/shipment/cart`, c.me_token!, { method: 'POST', body: JSON.stringify({ id: ctx.servico }) });
-        if (carrinho.status < 200 || carrinho.status >= 300) {
-          return { ok: false, motivo: 'falha', mensagem: `Não foi possível incluir o serviço no carrinho (${carrinho.status}).` };
-        }
-        const checkout = await meFetch(`${base}/shipment/checkout`, c.me_token!, { method: 'POST', body: JSON.stringify({ orders: [] }) });
-        if (checkout.status < 200 || checkout.status >= 300) {
-          return { ok: false, motivo: 'falha', mensagem: `Checkout recusado pelo Melhor Envio (${checkout.status}).` };
-        }
-        const ordens = (checkout.body ?? []) as Record<string, unknown>[];
-        const ordem = Array.isArray(ordens) ? ordens[0] : null;
-        const ref = ordem ? String(ordem.id ?? '') : '';
-        const codigo = ordem ? String(ordem.code ?? '') : '';
-        // Sem código E sem referência, não há envio — o ERP não inventa.
-        if (!ref && !codigo) {
-          return { ok: false, motivo: 'recusado', mensagem: 'O Melhor Envio respondeu sem id nem código de rastreamento. Nenhum envio foi registrado.' };
-        }
-        const custo = ordem ? round2(Number(String((ordem as Record<string, unknown>).total ?? '0').replace(/\./g, '').replace(',', '.'))) : 0;
-        return {
-          ok: true,
-          data: {
-            provider_ref: ref || null,
-            codigo_rastreamento: codigo || null,
-            etiqueta_url: base ? `${base}/shipment/print/${ref}` : null,
-            custo,
-            servico: ctx.servico,
-            mensagem: 'Remessa criada no Melhor Envio.',
-          },
-        };
-      } catch {
-        return { ok: false, motivo: 'falha', mensagem: 'Falha de rede ao gerar o envio.' };
-      }
+    async gerarEnvio(_ctx) {
+      // O fluxo legado não garante idempotência na transportadora nem confirma
+      // o contrato de checkout/etiqueta. Falha fechada: pode haver cobrança.
+      return { ok: false, motivo: 'nao_configurado', mensagem: 'Geração de remessa Melhor Envio indisponível até implementação idempotente e homologação.' };
     },
     async rastrear(empresaId, codigo) {
       const c = await cfg(empresaId);
@@ -454,6 +423,7 @@ export function criarCorreios(): ShippingProvider {
           cepOrigem: ctx.origem.cep,
         });
         const resp = await fetch(`${CORREIOS_BASE}/preco-prazo?${params}`, {
+          redirect: 'error', signal: AbortSignal.timeout(10000),
           headers: { Accept: 'application/json', Authorization: `Basic ${Buffer.from(`${c.correios_usuario || ''}:${c.correios_senha}`).toString('base64')}`, 'User-Agent': 'BroBond-ERP/1.0' },
         });
         if (resp.status < 200 || resp.status >= 300) {
@@ -503,6 +473,7 @@ export function criarCorreios(): ShippingProvider {
       if (!c.correios_senha) return { ok: false, motivo: 'nao_configurado', mensagem: 'Credenciais dos Correios não configuradas.' };
       try {
         const resp = await fetch(`${CORREIOS_BASE}/srorastro/v1/objetos/${encodeURIComponent(codigo)}?resultado=T&lingua=101`, {
+          redirect: 'error', signal: AbortSignal.timeout(10000),
           headers: { Accept: 'application/json', Authorization: `Basic ${Buffer.from(`${c.correios_usuario || ''}:${c.correios_senha}`).toString('base64')}` },
         });
         if (resp.status < 200 || resp.status >= 300) {
@@ -639,7 +610,8 @@ async function volumesDaVenda(vendaId: number, escopo: EscopoEmpresa, tx?: Tx): 
   for (const item of itens.rows) {
     const p = porId.get(Number(item.produto_id));
     const qtd = Math.max(1, Math.trunc(num(item.quantidade)));
-    const pesoUnit = num(p?.peso_bruto_g ?? p?.peso_g ?? 300);
+    const pesoCadastrado = p?.peso_bruto_g ?? p?.peso_g;
+    const pesoUnit = num(pesoCadastrado ?? 300);
     pesoTotal += pesoUnit * qtd;
     valor = round2(valor + num(item.subtotal));
     volumes.push({
@@ -649,9 +621,12 @@ async function volumesDaVenda(vendaId: number, escopo: EscopoEmpresa, tx?: Tx): 
       largura_cm: p && num(p.largura_mm) ? round2(num(p.largura_mm) / 10) : undefined,
       comprimento_cm: p && num(p.profundidade_mm) ? round2(num(p.profundidade_mm) / 10) : undefined,
       quantidade: qtd,
+      valor_unitario: round2(num(item.subtotal) / qtd),
+      peso_estimado: pesoCadastrado == null,
+      dados_estimados: !Number.isInteger(Number(item.quantidade)) || Number(item.quantidade) <= 0 || item.subtotal == null || !Number.isFinite(Number(item.subtotal)) || Number(item.subtotal) < 0,
     });
   }
-  if (!volumes.length) volumes.push({ peso_g: 300, quantidade: 1 });
+  if (!volumes.length) volumes.push({ peso_g: 300, quantidade: 1, peso_estimado: true });
   return { volumes, valor, pesoTotal };
 }
 
@@ -975,7 +950,7 @@ export async function eventosEnvio(req: Request, res: Response) {
  */
 export async function rastrearEnvio(req: Request, res: Response) {
   const actor = currentUser(req);
-  checkAccess(R_ENVIO(), actor, 'read');
+  checkAccess(R_ENVIO(), actor, 'update');
   const escopo = escopoDoAtor(actor as unknown as AuthUser);
   const id = parseId(req.params.id);
   const s = getStore();
@@ -993,21 +968,27 @@ export async function rastrearEnvio(req: Request, res: Response) {
   const novos = resposta.data;
   const gravados: EventoRastreio[] = [];
   await s.transaction(async (tx) => {
+    const atual = assertRegistroDaEmpresa(R_ENVIO(), await s.get(R_ENVIO(), id, tx), escopo);
+    if (String(atual.codigo_rastreamento || '') !== codigo || String(atual.provider) !== String(envio.provider)) {
+      throw new HttpError(409, 'O envio mudou durante a consulta. Recarregue.');
+    }
+    let statusAtual = String(atual.status);
     const jaVistos = await s.list(R_EVENTO(), { page: 1, pageSize: 500, filter: { empresa_id: empresaId, envio_id: id } }, tx);
     const vistos = new Set(jaVistos.rows.map((e) => `${e.codigo || ''}|${String(e.mensagem || '')}`));
     for (const ev of novos) {
       const chave = `${ev.codigo || ''}|${ev.mensagem || ''}`;
       if (vistos.has(chave)) continue;
       vistos.add(chave);
-      const statusAtual = String(envio.status);
       const proximo = inferirStatus(ev.status, statusAtual);
       await registrarEventoEnvio(id, statusAtual, proximo, { codigo: ev.codigo, mensagem: ev.mensagem, local: ev.local ?? null, payload: { em: ev.em } }, { id: actor.id || null, name: actor.name }, empresaId, tx);
       if (proximo !== statusAtual) {
-        await s.update(R_ENVIO(), id, { status: proximo }, tx);
+        const atualizado = await s.tryUpdateIf(R_ENVIO(), id, { empresa_id: empresaId, status: statusAtual }, { status: proximo }, tx);
+        if (!atualizado) throw new HttpError(409, 'O envio mudou durante a consulta. Recarregue.');
+        statusAtual = proximo;
       }
       gravados.push(ev);
     }
-  });
+  }, { isolation: 'serializable' });
   res.json({ ok: true, envio_id: id, codigo_rastreamento: codigo, provedor: provedor.slug, eventos: novos, eventos_novos: gravados.length });
 }
 
@@ -1017,14 +998,13 @@ export async function rastrearEnvio(req: Request, res: Response) {
  */
 export function inferirStatus(statusProvedor: string, atual: string): string {
   const s = String(statusProvedor || '').toLowerCase();
+  // Estados terminais exigem intervenção humana para qualquer correção.
+  if (['entregue', 'devolvido', 'extraviado', 'cancelado'].includes(atual)) return atual;
   if (/entreg|deliver|received by|finalizad/.test(s)) return 'entregue';
   if (/devolv|returned|refus/.test(s)) return 'devolvido';
   if (/extrav|lost|avaria/.test(s)) return 'extraviado';
-  // Aceita com e sem o prefixo "Objeto": os Correios mandam "Objeto em
-  // trânsito", a maioria das transportadoras manda só "Em trânsito" — e os dois
-  // significam a mesma coisa. O `\â` anterior era um escape inútil.
   if (/em tr\u00e2nsito|tr\u00e2nsito|transit|a caminho|saiu|dispatch|encaminh/.test(s)) return 'em_transito';
-  if (/postad|post/.test(s)) return 'postado';
+  if (/postad|post/.test(s)) return atual === 'em_transito' ? atual : 'postado';
   return atual;
 }
 
