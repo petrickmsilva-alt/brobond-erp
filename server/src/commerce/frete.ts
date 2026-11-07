@@ -9,9 +9,7 @@
 //   • 'retirada' → retirada na loja, valor 0 (regra real de negócio);
 //   • 'manual'   → valor/prazo tabelados pela empresa (frete CIF por tabela).
 //
-// O cálculo de prazo/valor do ERP (ViaCEP/PAC/SEDEX — server/src/frete.ts)
-// continua sendo o motor de COTAÇÃO de transportadora; ele entra aqui quando a
-// empresa configurar esse provedor — nunca é chamado "para encher tela".
+// O endpoint legado de frete não fornece cotações de transportadoras.
 // ============================================================================
 import { HttpError } from '../errors';
 import { round2 } from './regras';
