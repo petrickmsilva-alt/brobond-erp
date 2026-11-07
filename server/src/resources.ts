@@ -201,6 +201,15 @@ export type Resource = {
    * Ver server/src/empresa.ts.
    */
   empresa?: boolean;
+  /**
+   * A06-14 — RECORTE DE CARTEIRA. Nome da coluna que guarda o representante
+   * dono da linha. Quando o ator é um REPRESENTANTE (vínculo
+   * `representantes.usuario_id`, resolvido no servidor em `empresa.ts`), a
+   * listagem/leitura fica restrita às linhas cujo `escopo` é a própria carteira.
+   * Perfis de gestão (admin/gerente) e o operador de backoffice sem vínculo não
+   * são recortados. Nunca é inferido do corpo/query do cliente.
+   */
+  escopo?: string;
   /** Recorte da busca textual da listagem (padrão: todo campo com `search: true`). */
   searchFields?: ResourceSearchField[];
   /**
@@ -2288,6 +2297,8 @@ export const RESOURCES: Record<string, Resource> = {
   clientes: {
     key: 'clientes',
     empresa: true,
+    // A06-14: o representante vê apenas os clientes da própria carteira.
+    escopo: 'representante_id',
     table: 'clientes',
     label: 'Clientes',
     singular: 'Cliente',
@@ -3184,6 +3195,8 @@ export const RESOURCES: Record<string, Resource> = {
   vendas: {
     key: 'vendas',
     empresa: true,
+    // A06-14: um representante só enxerga os próprios pedidos.
+    escopo: 'representante_id',
     table: 'vendas',
     label: 'Vendas',
     singular: 'Pedido de venda',
@@ -3364,6 +3377,9 @@ export const RESOURCES: Record<string, Resource> = {
       // reescreve a venda. É isso que torna a venda auditável no tempo.
       { name: 'lista_preco_id', label: 'Lista de preço', type: 'ref', ref: 'listas_preco', list: false, readonly: true },
       { name: 'preco_tabela', label: 'Preço de tabela', type: 'money', list: false, readonly: true },
+      // EVIDÊNCIA de importação Woo: o preço recebido da loja. NUNCA é o preço da
+      // venda (a autoridade é o ERP); fica preservado para conferência (A06-01).
+      { name: 'preco_externo_recebido', label: 'Preço externo recebido', type: 'money', list: false, readonly: true },
     ],
   },
 
@@ -4708,6 +4724,8 @@ export const RESOURCES: Record<string, Resource> = {
   propostas: {
     key: 'propostas',
     empresa: true,
+    // A06-14: o representante só lê as próprias propostas.
+    escopo: 'representante_id',
     table: 'propostas',
     label: 'Propostas Comerciais',
     singular: 'Proposta',
@@ -5698,6 +5716,8 @@ export const RESOURCES: Record<string, Resource> = {
   representante_cliente: {
     key: 'representante_cliente',
     empresa: true,
+    // A06-14: o representante só lê os vínculos da própria carteira.
+    escopo: 'representante_id',
     table: 'representante_cliente',
     label: 'Carteira de clientes',
     singular: 'Vínculo de carteira',
@@ -5741,6 +5761,8 @@ export const RESOURCES: Record<string, Resource> = {
   metas: {
     key: 'metas',
     empresa: true,
+    // A06-14: o representante só lê as metas da própria carteira.
+    escopo: 'representante_id',
     table: 'metas',
     label: 'Metas',
     singular: 'Meta',
@@ -6001,6 +6023,8 @@ export const RESOURCES: Record<string, Resource> = {
   venda_atribuicao: {
     key: 'venda_atribuicao',
     empresa: true,
+    // A06-14: o representante só lê as atribuições em que participa.
+    escopo: 'representante_id',
     table: 'venda_atribuicao',
     label: 'Atribuição comercial',
     singular: 'Atribuição',
@@ -6161,9 +6185,20 @@ export const RESOURCES: Record<string, Resource> = {
       { name: 'preco_promo', label: 'Preço promocional (R$)', type: 'money', min: 0, list: true, hint: 'Vazio = sem promoção de canal. Vigente só quando menor que o preço normal.' },
       { name: 'vigencia_inicio', label: 'Início da vigência', type: 'date', list: false },
       { name: 'vigencia_fim', label: 'Fim da vigência', type: 'date', list: false },
+      {
+        name: 'store_key',
+        label: 'Loja (WooCommerce)',
+        type: 'select',
+        list: false,
+        hint: 'Escopo do override na WooCommerce: RETAIL (varejo) ou WHOLESALE (atacado). Vazio = sem loja (comportamento legado).',
+        options: [
+          { value: 'RETAIL', label: 'Varejo (RETAIL)', tone: 'blue' },
+          { value: 'WHOLESALE', label: 'Atacado (WHOLESALE)', tone: 'amber' },
+        ],
+      },
       ...auditFields,
     ],
-    filterFields: ['produto_id', 'canal'],
+    filterFields: ['produto_id', 'canal', 'store_key'],
     orderBy: { field: 'id', dir: 'desc' },
   },
 

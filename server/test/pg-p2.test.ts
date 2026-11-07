@@ -105,13 +105,16 @@ test('P2 pg: comissão não se efetiva duas vezes pelo mesmo lançamento', { ski
   const venda = await s.insert(RESOURCES.vendas, { empresa_id: 1, status: 'faturada', data: new Date().toISOString().slice(0, 10), total: 100, fin_parcelas: 1, representante_id: rep.id, comissao_pct: 10, comissao_valor: 10 });
   const lanc = await s.insert(RESOURCES.lancamentos_financeiros, { empresa_id: 1, data: new Date().toISOString().slice(0, 10), tipo: 'receita', descricao: `PG comissão ${sufixo}`, valor: 100, status: 'pendente', referencia_tipo: 'venda', referencia_id: venda.id });
 
+  // A06-06: a efetivação é POR representante — o retorno é a lista de eventos
+  // criados (vazia quando o saldo do livro já bloqueia).
   const primeira = await s.transaction(async (tx) => com.registrarComissaoPorRecebimento(venda!, Number(lanc.id), 100, 'baixa', { id: null, name: 'PG' }, tx));
-  assert.ok(primeira && Number(primeira.valor) === 10);
+  assert.equal(primeira.length, 1, 'uma efetivação');
+  assert.equal(Number(primeira[0]!.valor), 10);
 
   // Segunda tentativa pela MESMA via: o saldo do livro (realizada − estornada
   // ≤ apuração) recusa — a apuração já foi integralmente efetivada.
   const segunda = await s.transaction(async (tx) => com.registrarComissaoPorRecebimento(venda!, Number(lanc.id), 100, 'baixa', { id: null, name: 'PG' }, tx));
-  assert.equal(segunda, null, 'saldo do livro bloqueia nova efetivação');
+  assert.equal(segunda.length, 0, 'saldo do livro bloqueia nova efetivação');
   const eventos = await s.list(com.R_COMISSOES_EVENTOS, { page: 1, pageSize: 20, filter: { venda_id: venda.id } });
   const realizadas = eventos.rows.filter((e) => e.tipo === 'realizada');
   assert.equal(realizadas.length, 1, 'uma única efetivação por lançamento');

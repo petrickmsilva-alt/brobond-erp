@@ -32,6 +32,9 @@ import { RESOURCES } from './resources';
 import { currentUser } from './auth';
 import { recalcularTotal } from './itens';
 import { normalizarOrigem } from './urlPublica';
+import { precoOficialDoErp, decidirPrecoItem } from './commerce/woocommerce/precoAutoridade';
+import { registrarDivergenciasPreco, registrarMinimoAtacadoRejeitado } from './commerce/woocommerce/reconciliacao';
+import { validarMinimoAtacado, minimoAtacado } from './commerce/woocommerce/precos';
 import type { Row } from './store';
 
 export type ConfigLoja = { url: string; ck: string; cs: string };
@@ -397,8 +400,10 @@ export async function importarPedidosLoja(req: Request, res: Response) {
       continue;
     }
 
-    const itensResolvidos: { produto: Row; tamanhoId: number; quantidade: number; preco: number }[] = [];
+    const itensResolvidos: { produto: Row; tamanhoId: number; quantidade: number; preco: number; precoRemoto: number | null }[] = [];
     const itensPendentes: string[] = [];
+    const divergenciasPreco: { produto_id: number; sku: string; preco_erp: number; preco_remoto: number; motivo: string }[] = [];
+    const rejeitadosMinimo: { produto_id: number; sku: string; quantidade: number; minimo: number }[] = [];
     for (const linha of pedido.line_items || []) {
       const sku = String(linha.sku || '')
         .trim()
@@ -417,15 +422,42 @@ export async function importarPedidosLoja(req: Request, res: Response) {
       }
       await validarTamanhoNaGrade(Number(produto.id), tamanhoId, undefined, escopo);
       const quantidade = Math.max(1, Math.trunc(Number(linha.quantity) || 1));
+      // ENFORCEMENT da quantidade mínima de atacado (A06-11) no caminho legado.
+      const storeLegado = canal === 'site_atacado' ? 'WHOLESALE' : 'RETAIL';
+      const bloqueioMinimo = validarMinimoAtacado(storeLegado, produto, quantidade, null);
+      if (bloqueioMinimo) {
+        rejeitadosMinimo.push({ produto_id: Number(produto.id), sku: String(produto.sku || ''), quantidade, minimo: minimoAtacado(produto) });
+        itensPendentes.push(`${rotuloLinha(linha)} (${bloqueioMinimo})`);
+        continue;
+      }
+      // A AUTORIDADE do preço é o ERP (mesma política do Multi-Store, A06-01).
+      // O valor recebido da loja é evidência: nunca substitui silenciosamente o
+      // preço oficial do catálogo.
       const precoInformado = Number(linha.price);
       const totalLinha = Number(String(linha.total ?? '').replace(',', '.'));
-      const preco =
+      const precoRemoto =
         Number.isFinite(precoInformado) && precoInformado > 0
           ? precoInformado
           : Number.isFinite(totalLinha) && totalLinha > 0
             ? Math.round((totalLinha / quantidade) * 100) / 100
-            : Number(canal === 'site_atacado' ? produto.preco_atacado || produto.preco_venda || 0 : produto.preco_venda || 0);
-      itensResolvidos.push({ produto, tamanhoId, quantidade, preco });
+            : null;
+      const fonte = canal === 'site_atacado' ? 'preco_atacado' : 'preco_venda';
+      const { preco: precoErp } = await precoOficialDoErp(escopo.empresaId, produto, canal === 'site_atacado' ? 'WHOLESALE' : 'RETAIL');
+      const desfecho = decidirPrecoItem({ precoErp, fonte, precoRemoto });
+      if (desfecho.preco <= 0) {
+        itensPendentes.push(`${rotuloLinha(linha)} (produto sem ${fonte} válido no ERP)`);
+        continue;
+      }
+      if (desfecho.divergente && desfecho.preco_remoto != null) {
+        divergenciasPreco.push({
+          produto_id: Number(produto.id),
+          sku: String(produto.sku || ''),
+          preco_erp: desfecho.preco_erp,
+          preco_remoto: desfecho.preco_remoto,
+          motivo: desfecho.motivo ?? 'Preço remoto divergente do ERP.',
+        });
+      }
+      itensResolvidos.push({ produto, tamanhoId, quantidade, preco: desfecho.preco, precoRemoto: desfecho.preco_remoto });
     }
 
     if (!itensResolvidos.length) {
@@ -475,6 +507,11 @@ export async function importarPedidosLoja(req: Request, res: Response) {
               `Pedido importado da loja (${cfg.url}) — nº ${numero || referencia}`,
               pedido.customer_note ? `Observação do cliente: ${String(pedido.customer_note).trim()}` : null,
               itensPendentes.length ? `Itens NÃO importados (conferir cadastro de SKU): ${itensPendentes.join('; ')}` : null,
+              divergenciasPreco.length
+                ? `Preço remoto divergente do ERP (prevaleceu o ERP): ${divergenciasPreco
+                    .map((d) => `${d.sku || d.produto_id} remoto ${d.preco_remoto.toFixed(2)} × ERP ${d.preco_erp.toFixed(2)}`)
+                    .join('; ')}`
+                : null,
             ]
               .filter(Boolean)
               .join('\n'),
@@ -491,6 +528,9 @@ export async function importarPedidosLoja(req: Request, res: Response) {
               tamanho_id: item.tamanhoId,
               quantidade: item.quantidade,
               preco_unitario: item.preco,
+              // EVIDÊNCIA: preço recebido da loja preservado; a autoridade do
+              // preço gravado é o ERP (A06-01).
+              preco_externo_recebido: item.precoRemoto,
               desconto_pct: 0,
               subtotal: Math.round(item.quantidade * item.preco * 100) / 100,
             },
@@ -501,6 +541,16 @@ export async function importarPedidosLoja(req: Request, res: Response) {
         return { vendaId: Number(venda.id), total };
       });
       importados.push({ pedido: numero || referencia, venda_id: criado.vendaId, total: criado.total });
+      if (divergenciasPreco.length) {
+        const storeKey = canal === 'site_atacado' ? 'WHOLESALE' : 'RETAIL';
+        await registrarDivergenciasPreco(escopo.empresaId, storeKey, divergenciasPreco, referencia).catch(() => undefined);
+      }
+      if (rejeitadosMinimo.length) {
+        // A06-11: pedido de atacado abaixo do mínimo — a venda é gravada com os
+        // itens elegíveis, mas a REJEIÇÃO fica registrada para conferência.
+        const storeKey = canal === 'site_atacado' ? 'WHOLESALE' : 'RETAIL';
+        await registrarMinimoAtacadoRejeitado(escopo.empresaId, storeKey, rejeitadosMinimo, referencia).catch(() => undefined);
+      }
       if (itensPendentes.length) {
         pendentes.push({ pedido: numero || referencia, motivo: 'itens sem SKU no ERP ficaram de fora', itens: itensPendentes });
       }
@@ -576,24 +626,13 @@ export async function enviarEstoqueLojaInterno(escopo: EscopoEmpresa, actor: { i
   if (!empresaVinculadaWoo() || empresaVinculadaWoo() !== escopo.empresaId) throw new HttpError(409, 'A integração WooCommerce não está vinculada a esta empresa.');
   const s = getStore();
 
-  const [produtosR, tamanhosR, estoquesR] = await Promise.all([
+  const [produtosR, tamanhosR] = await Promise.all([
     s.list(RESOURCES.produtos, { page: 1, pageSize: 20000, filter: { empresa_id: escopo.empresaId } }),
     s.list(RESOURCES.tamanhos, { page: 1, pageSize: 20000, sort: 'ordem', dir: 'asc' }),
-    s.list(RESOURCES.estoques, { page: 1, pageSize: 20000, filter: { empresa_id: escopo.empresaId } }),
   ]);
-  garantirLeituraCompleta('produtos, tamanhos e saldos', produtosR, tamanhosR, estoquesR);
-  await Promise.all([
-    validarReferenciasDeSaida(RESOURCES.produtos, produtosR.rows, escopo),
-    validarReferenciasDeSaida(RESOURCES.estoques, estoquesR.rows, escopo),
-  ]);
-  const tamanhoPorId = new Map<number, string>(
-    tamanhosR.rows.map((t) => [
-      Number(t.id),
-      String(t.codigo || '')
-        .trim()
-        .toUpperCase(),
-    ])
-  );
+  garantirLeituraCompleta('produtos e tamanhos', produtosR, tamanhosR);
+  await validarReferenciasDeSaida(RESOURCES.produtos, produtosR.rows, escopo);
+  // Import dinâmico evita ciclo de módulos (commerce/catalogo ↔ loja).
 
   const skusAtivos = new Set<string>();
   for (const p of produtosR.rows) {
@@ -603,25 +642,40 @@ export async function enviarEstoqueLojaInterno(escopo: EscopoEmpresa, actor: { i
     if (sku) skusAtivos.add(sku);
   }
 
-  // saldo por produto e por produto+tamanho
+  // ESTOQUE VENDÁVEL, não físico: a fonte é o MESMO motor canônico de
+  // disponibilidade do faturamento (físico − reservas − empenhos − bloqueios,
+  // pelo melhor local de saída). O caminho legado NÃO recalcula estoque por
+  // conta própria — publicar o físico cru disponibilizaria peça já
+  // comprometida (A06-02) e a variação era consultada no filho em vez do
+  // pai+tamanho (A06-04).
   const saldoProduto = new Map<number, number>();
   const saldoProdutoTamanho = new Map<number, Map<string, number>>();
-  const celulasSaldo = new Set<string>();
-  for (const e of estoquesR.rows) {
-    const chaveCelula = `${Number(e.produto_id)}:${e.tamanho_id === null || e.tamanho_id === undefined ? 'null' : Number(e.tamanho_id)}:${String(e.local || '')}`;
-    if (celulasSaldo.has(chaveCelula)) throw new HttpError(409, 'Há saldos duplicados para o mesmo produto/tamanho/local. A sincronização foi bloqueada.');
-    celulasSaldo.add(chaveCelula);
-    const pid = Number(e.produto_id);
-    const qtd = Number(e.quantidade || 0);
-    saldoProduto.set(pid, (saldoProduto.get(pid) || 0) + qtd);
-    const codigo = tamanhoPorId.get(Number(e.tamanho_id));
-    if (!codigo) continue;
-    const porTam = saldoProdutoTamanho.get(pid) || new Map<string, number>();
-    porTam.set(codigo, (porTam.get(codigo) || 0) + qtd);
-    saldoProdutoTamanho.set(pid, porTam);
+  const fisicoProduto = new Map<number, number>();
+  const { disponibilidadesPorTamanho } = await import('./commerce/catalogo');
+  for (const p of produtosR.rows) {
+    if (p.ativo === false || p.exibir_site === false) continue;
+    const pid = Number(p.id);
+    const paiId = p.produto_pai_id ? Number(p.produto_pai_id) : null;
+    const tamanhoVariacao = p.variacao_tamanho_id ? Number(p.variacao_tamanho_id) : null;
+    // Variação: o saldo pertence ao PAI + tamanho (nunca à linha de `estoques`
+    // da variação, que não é vendável) — mesma regra do PDV/faturamento.
+    const linhas = await disponibilidadesPorTamanho(escopo, paiId && tamanhoVariacao ? paiId : pid);
+    let totalDisponivel = 0;
+    let totalFisico = 0;
+    const porTam = new Map<string, number>();
+    for (const l of linhas) {
+      if (paiId && tamanhoVariacao && Number(l.tamanho_id) !== tamanhoVariacao) continue;
+      const disponivel = Math.max(0, Math.trunc(Number(l.disponivel || 0)));
+      totalDisponivel += disponivel;
+      totalFisico += Math.max(0, Math.trunc(Number(l.fisico || 0)));
+      if (!paiId && l.codigo) porTam.set(String(l.codigo).trim().toUpperCase(), disponivel);
+    }
+    saldoProduto.set(pid, totalDisponivel);
+    fisicoProduto.set(pid, totalFisico);
+    if (!paiId && porTam.size) saldoProdutoTamanho.set(pid, porTam);
   }
 
-  // Índice do ERP: SKU (e SKU-TAMANHO) → saldo
+  // Índice do ERP: SKU (e SKU-TAMANHO) → disponível vendável
   const indice = new Map<string, number>();
   for (const p of produtosR.rows) {
     if (p.ativo === false || p.exibir_site === false) continue;
@@ -631,6 +685,16 @@ export async function enviarEstoqueLojaInterno(escopo: EscopoEmpresa, actor: { i
       for (const [codigo, qtd] of porTam) for (const chave of chavesSku(String(p.sku || ''), codigo)) indice.set(chave, qtd);
     }
     for (const chave of chavesSku(String(p.sku || ''), '')) if (!indice.has(chave)) indice.set(chave, saldoProduto.get(pid) || 0);
+  }
+  // Divergências de sincronização: produto com físico mas sem disponível
+  // vendável (100% comprometido) — publicado como 0, nunca como físico.
+  const divergencias: { sku: string; fisico: number; disponivel: number }[] = [];
+  for (const p of produtosR.rows) {
+    if (p.ativo === false || p.exibir_site === false) continue;
+    const pid = Number(p.id);
+    const fisico = fisicoProduto.get(pid) || 0;
+    const disponivel = saldoProduto.get(pid) || 0;
+    if (fisico > 0 && disponivel <= 0) divergencias.push({ sku: String(p.sku || pid), fisico, disponivel });
   }
 
   const atualizados: { sku: string; saldo: number; onde: string }[] = [];
@@ -699,7 +763,7 @@ export async function enviarEstoqueLojaInterno(escopo: EscopoEmpresa, actor: { i
       recurso: 'marketplace',
       registro_id: null,
       descricao: `Estoque enviado para a loja (${cfg.url}): ${atualizados.length} SKU(s) atualizado(s), ${naoEncontrados.size} sem correspondência`,
-      dados: { origem: 'woocommerce', atualizados: atualizados.length, nao_encontrados: [...naoEncontrados] },
+      dados: { origem: 'woocommerce', atualizados: atualizados.length, nao_encontrados: [...naoEncontrados], divergencias },
       // Escopo explícito do chamador: a rota usa o do ator; o outbox usa o da
       // empresa da fila — nunca a empresa "padrão" implícita.
       empresa_id: escopo.empresaId,
@@ -711,5 +775,6 @@ export async function enviarEstoqueLojaInterno(escopo: EscopoEmpresa, actor: { i
     atualizados,
     total_atualizados: atualizados.length,
     nao_encontrados: [...naoEncontrados],
+    divergencias,
   };
 }

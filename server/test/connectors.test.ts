@@ -500,6 +500,23 @@ describe('Conectores — ingestão idempotente de vendas', () => {
           },
         ];
       }
+      // A06-08: com o cabeçalho igual a ingestão reconfere os itens casados. Se
+      // o vínculo não mudou, NADA é reescrito (o `unchanged` continua real).
+      if (sql.includes('FROM sale_items')) {
+        return [
+          {
+            product_id: 101,
+            size_id: 4,
+            variacao_externa: 'Camisa Azul',
+            quantity: 3,
+            unit_price_cents: 3300,
+            discount_cents: 0,
+            subtotal_cents: 9900,
+          },
+        ];
+      }
+      if (sql.includes('FROM produtos')) return [{ id: 101, sku: 'CAM-AZ', nome: 'Camisa Azul' }];
+      if (sql.includes('FROM tamanhos')) return [{ id: 4, codigo: 'M' }];
       throw new Error(`consulta inesperada: ${sql}`);
     });
     const sales = createSalesService(() => db);
@@ -517,7 +534,123 @@ describe('Conectores — ingestão idempotente de vendas', () => {
 
     assert.equal(result.outcome, 'unchanged');
     assert.equal(result.itemCount, 0);
-    assert.equal(db.log.length, 1); // só o SELECT de conferência
+    // Nenhuma ESCRITA de itens: o rematch só reescreve quando o vínculo muda.
+    assert.ok(!db.log.some((q) => /^\s*(DELETE FROM sale_items|INSERT INTO sale_items)/.test(q.sql)), 'nada é reescrito');
+  });
+
+  test('A06-08: cabeçalho igual mas item que não casava AGORA casa — rematch reescreve os itens', async () => {
+    let produtos: any[] = []; // SKU ainda não cadastrado na primeira entrega
+    const db = fakeDb((sql) => {
+      if (sql.includes('FROM sales')) {
+        return [
+          {
+            id: 's1',
+            reference: 'empresa:1:usuario:7:nuvemshop:NS-9',
+            quantity: 1,
+            amount_cents: 3300,
+            currency: 'BRL',
+            status: 'PAID',
+            occurred_at: new Date('2026-01-10T12:00:00Z'),
+            channel: 'NUVEMSHOP',
+            external_order_id: 'NS-9',
+            usuario_id: 7,
+            empresa_id: 1,
+            created_at: new Date(),
+            updated_at: new Date(),
+          },
+        ];
+      }
+      // Item gravado SEM vínculo (produto não existia quando foi ingerido).
+      if (sql.includes('FROM sale_items')) {
+        return [
+          {
+            product_id: null,
+            size_id: null,
+            variacao_externa: 'Camisa Azul',
+            quantity: 1,
+            unit_price_cents: 3300,
+            discount_cents: 0,
+            subtotal_cents: 3300,
+          },
+        ];
+      }
+      if (sql.includes('FROM produtos')) return produtos;
+      if (sql.includes('FROM tamanhos')) return [];
+      return [];
+    });
+    const sales = createSalesService(() => db);
+    const entrega = {
+      channel: 'NUVEMSHOP' as any,
+      externalOrderId: 'NS-9',
+      amountCents: 3300,
+      currency: 'BRL',
+      status: 'PAID' as any,
+      quantity: 1,
+      occurredAt: new Date('2026-01-10T12:00:00Z'),
+      items: [{ sku: 'CAM-AZ', title: 'Camisa Azul', quantity: 1, unitPriceCents: 3300 }],
+    };
+
+    // O SKU é cadastrado no ERP depois da primeira ingestão.
+    produtos = [{ id: 101, sku: 'CAM-AZ', nome: 'Camisa Azul' }];
+    const result = await sales.upsertIngestedSale(1, 7, entrega);
+
+    assert.equal(result.outcome, 'updated', 'rematch disparado mesmo com cabeçalho inalterado');
+    assert.equal(result.itemCount, 1);
+    assert.ok(db.log.some((q) => /^\s*DELETE FROM sale_items/.test(q.sql)), 'itens são reescritos com o vínculo novo');
+    const insert = db.log.find((q) => /^\s*INSERT INTO sale_items/.test(q.sql));
+    assert.ok(insert, 'item regravado');
+    assert.equal(insert!.params[2], 101, 'produto vinculado no rematch');
+  });
+
+  test('A06-08: cabeçalho igual e item sem associação permanece — nada muda (sem falso rematch)', async () => {
+    const db = fakeDb((sql) => {
+      if (sql.includes('FROM sales')) {
+        return [
+          {
+            id: 's1',
+            reference: 'empresa:1:usuario:7:nuvemshop:NS-10',
+            quantity: 1,
+            amount_cents: 3300,
+            currency: 'BRL',
+            status: 'PAID',
+            occurred_at: new Date('2026-01-10T12:00:00Z'),
+            channel: 'NUVEMSHOP',
+            external_order_id: 'NS-10',
+            usuario_id: 7,
+            empresa_id: 1,
+            created_at: new Date(),
+            updated_at: new Date(),
+          },
+        ];
+      }
+      if (sql.includes('FROM sale_items')) {
+        return [
+          {
+            product_id: null,
+            size_id: null,
+            variacao_externa: 'Item Sem SKU',
+            quantity: 1,
+            unit_price_cents: 3300,
+            discount_cents: 0,
+            subtotal_cents: 3300,
+          },
+        ];
+      }
+      return [];
+    });
+    const sales = createSalesService(() => db);
+    const result = await sales.upsertIngestedSale(1, 7, {
+      channel: 'NUVEMSHOP' as any,
+      externalOrderId: 'NS-10',
+      amountCents: 3300,
+      currency: 'BRL',
+      status: 'PAID' as any,
+      quantity: 1,
+      occurredAt: new Date('2026-01-10T12:00:00Z'),
+      items: [{ sku: 'SEM-CADASTRO', title: 'Item Sem SKU', quantity: 1, unitPriceCents: 3300 }],
+    });
+    assert.equal(result.outcome, 'unchanged');
+    assert.ok(!db.log.some((q) => /^\s*(DELETE FROM sale_items|INSERT INTO sale_items)/.test(q.sql)), 'sem vínculo novo nada é reescrito');
   });
 
   test('o upsert sempre aterrissa na chave única de idempotência', async () => {

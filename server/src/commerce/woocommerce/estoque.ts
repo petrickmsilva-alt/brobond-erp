@@ -18,7 +18,7 @@ import { HttpError } from '../../errors';
 import { getStore } from '../../services';
 import type { Row, Tx } from '../../store';
 import { getResource } from '../../resources';
-import { disponibilidadesPorTamanho } from '../catalogo';
+import { disponivelDoProdutoVendavel } from '../catalogo';
 import { escopoDeSistema } from '../../empresa';
 import type { ConfigStore, StoreKey } from './registry';
 import { dryRun } from './registry';
@@ -44,14 +44,14 @@ type FilaProduto = { externalProductId: string; produto: ItemEstoque | null; var
 
 /**
  * Calcula o disponível vendável por produto do ERP, uma vez por operação.
- * Variações (filhos) também entram: cada uma tem o próprio saldo.
+ * Variações (filhos) também entram: cada uma resolve o saldo do PAI + tamanho
+ * pelo vínculo canônico (A06-04).
  */
 async function disponiveis(empresaId: number, produtos: Row[], tx?: Tx): Promise<Map<number, number>> {
   const mapa = new Map<number, number>();
   const escopo = escopoDeSistema(empresaId);
   for (const p of produtos) {
-    const linhas = await disponibilidadesPorTamanho(escopo, Number(p.id), tx);
-    mapa.set(Number(p.id), linhas.reduce((soma, l) => soma + Math.max(0, Number(l.disponivel || 0)), 0));
+    mapa.set(Number(p.id), await disponivelDoProdutoVendavel(escopo, p, tx));
   }
   return mapa;
 }

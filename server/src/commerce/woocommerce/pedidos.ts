@@ -33,6 +33,9 @@ import { escopoDeSistema, type EscopoEmpresa } from '../../empresa';
 import type { ConfigStore, StoreKey } from './registry';
 import { wooStoreFetch, ehDryRun } from './cliente';
 import { estadoDaStore, avancarAguaMarcaPedidos, registrarSincronizacao } from './estado';
+import { precoOficialDoErp, decidirPrecoItem } from './precoAutoridade';
+import { validarMinimoAtacado, minimoAtacado } from './precos';
+import { registrarDivergenciasPreco, registrarConflitoIdentidade, registrarMinimoAtacadoRejeitado } from './reconciliacao';
 
 const R_VENDAS = () => getResource('vendas')!;
 const R_ITENS = () => getResource('itens_venda')!;
@@ -87,6 +90,11 @@ export type ContextoImportacao = {
   tamanhoPorCodigo: Map<string, Row>;
   primeiroTamanhoComSaldo: (produtoId: number) => number | null;
   tamanhoFallback: number;
+  /**
+   * Exceção AUDITADA ao mínimo de atacado (A06-11), por produto. Ausente = sem
+   * exceção: a regra é aplicada integralmente. Nunca vem do payload externo.
+   */
+  excecaoAtacado?: (produtoId: number) => { autorizada: boolean; motivo?: string } | null;
 };
 
 /** Referência lógica imutável do pedido da loja. */
@@ -96,19 +104,64 @@ export function referenciaPedido(store: StoreKey, pedidoId: number | string): st
 
 /**
  * Referência LEGADA do fluxo single-store (`WOO-<id>`). Um pedido já importado
- * antes da migração multi-loja tem essa forma; adotá-la evita criar uma
- * SEGUNDA venda para o mesmo pedido (o histórico é preservado como está).
+ * antes da migração multi-loja tem essa forma. Ela só é adotada quando há PROVA
+ * de que o registro legado é da MESMA origem (loja/canal) — nunca pelo número
+ * (A06-03): IDs externos Woo são independentes por instalação.
  */
 function referenciaLegada(pedidoId: number | string): string {
   return `WOO-${String(pedidoId).trim()}`;
 }
 
-/** Venda já existente para o pedido (referência nova OU legada). */
-async function vendaExistente(empresaId: number, referencia: string, legada: string): Promise<Row | null> {
+type IdentidadePedido = {
+  /** Venda já existente que corresponde a ESTE pedido (nova ou legada da mesma origem). */
+  existente: Row | null;
+  /** Conflito de identidade detectado (registrado, nunca resolvido automaticamente). */
+  conflito: string | null;
+};
+
+/**
+ * Resolve a identidade do pedido importado.
+ *
+ * 1. Referência NOVA (`WOO-<store>-<id>`): identidade forte — sempre adotada.
+ * 2. Referência LEGADA (`WOO-<id>`): adotada SOMENTE se o registro legado
+ *    pertencer à mesma loja. Sem canal gravado (ambíguo) ou com canal de OUTRA
+ *    loja, NÃO é adotado — suprimir o pedido seria perda silenciosa.
+ */
+async function vendaExistente(empresaId: number, cfg: ConfigStore, referencia: string, legada: string): Promise<IdentidadePedido> {
   const s = getStore();
   const porNova = await s.findOneWhere(R_VENDAS(), { empresa_id: empresaId, pedido_cliente: referencia });
-  if (porNova) return porNova;
-  return s.findOneWhere(R_VENDAS(), { empresa_id: empresaId, pedido_cliente: legada });
+  if (porNova) return { existente: porNova, conflito: null };
+  const porLegada = await s.findOneWhere(R_VENDAS(), { empresa_id: empresaId, pedido_cliente: legada });
+  if (!porLegada) return { existente: null, conflito: null };
+
+  const esperadoExterno = `WOOCOMMERCE_${cfg.store_key}`;
+  const canalLegado = String(porLegada.pedido_externo_canal ?? '').trim().toUpperCase();
+  const canalVenda = String(porLegada.canal_venda ?? '').trim();
+  // Canal POR LOJA explícito: prova forte de origem.
+  if (canalLegado === esperadoExterno) return { existente: porLegada, conflito: null };
+  if (canalLegado.startsWith('WOOCOMMERCE_')) {
+    return {
+      existente: null,
+      conflito: `Referência legada ${legada} pertence a ${canalLegado}; o pedido atual é de ${esperadoExterno}. Venda distinta — não suprimida.`,
+    };
+  }
+  // Canal legado genérico (`WOOCOMMERCE`, do fluxo single-store) ou ausente:
+  // a origem só é comprovada se o canal da VENDA (site_varejo/site_atacado)
+  // corresponder a ESTA loja.
+  if (canalVenda) {
+    return canalVenda === cfg.canal
+      ? { existente: porLegada, conflito: null }
+      : {
+          existente: null,
+          conflito: `Referência legada ${legada} tem canal ${canalVenda}; o pedido atual é ${cfg.canal} (loja ${cfg.store_key}). Venda distinta — não suprimida.`,
+        };
+  }
+  // Sem canal nenhum: origem AMBÍGUA. Não associar automaticamente (evita
+  // perder um pedido legítimo); o conflito fica registrado para conferência.
+  return {
+    existente: null,
+    conflito: `Referência legada ${legada} sem canal de origem comprovado — identidade ambígua, pedido importado como nova venda da loja ${cfg.store_key}.`,
+  };
 }
 
 /** Tamanho vindo da variação (meta_data do item: pa_tamanho, Tamanho, tamanho…). */
@@ -221,13 +274,201 @@ export async function carregarContextoImportacao(empresaId: number): Promise<Con
   };
 }
 
+type ItemResolvido = { produto: Row; tamanhoId: number; quantidade: number; preco: number; precoRemoto: number | null };
+type DivergenciaPreco = { produto_id: number; sku: string; preco_erp: number; preco_remoto: number; motivo: string };
+type ItemRejeitadoMinimo = { produto_id: number; sku: string; quantidade: number; minimo: number };
+type ItensDoPedido = {
+  resolvidos: ItemResolvido[];
+  pendentes: string[];
+  divergenciasPreco: DivergenciaPreco[];
+  rejeitadosMinimo: ItemRejeitadoMinimo[];
+};
+
+/**
+ * Resolve as linhas de um pedido externo contra o catálogo do ERP: SKU, tamanho,
+ * mínimo de atacado e preço (autoridade do ERP). Compartilhado pela criação e
+ * pela reconciliação de itens (A06-13), para não haver duas regras.
+ */
+async function resolverItensDoPedido(cfg: ConfigStore, ctx: ContextoImportacao, pedido: PedidoWoo): Promise<ItensDoPedido> {
+  const empresaId = ctx.empresaId;
+  const resolvidos: ItemResolvido[] = [];
+  const pendentes: string[] = [];
+  const divergenciasPreco: DivergenciaPreco[] = [];
+  const rejeitadosMinimo: ItemRejeitadoMinimo[] = [];
+  for (const linha of pedido.line_items || []) {
+    const sku = String(linha.sku || '').trim().toUpperCase();
+    const produto = sku ? ctx.produtoPorSku.get(sku) : undefined;
+    if (!produto) {
+      pendentes.push(`${rotuloLinha(linha)}${sku ? ` (SKU ${sku})` : ' (sem SKU)'}`);
+      continue;
+    }
+    const pedidoTamanho = extrairTamanho(linha);
+    const tamanho = pedidoTamanho ? ctx.tamanhoPorCodigo.get(pedidoTamanho) : undefined;
+    const tamanhoId = tamanho ? Number(tamanho.id) : (ctx.primeiroTamanhoComSaldo(Number(produto.id)) ?? ctx.tamanhoFallback);
+    if (!tamanhoId) {
+      pendentes.push(`${rotuloLinha(linha)} (sem tamanho no ERP)`);
+      continue;
+    }
+    await validarTamanhoNaGrade(Number(produto.id), tamanhoId, undefined, ctx.escopo);
+    const quantidade = Math.max(1, Math.trunc(Number(linha.quantity) || 1));
+    // ENFORCEMENT da quantidade mínima de atacado no BACKEND (A06-11): a
+    // WHOLESALE não confia só no metadado publicado — item abaixo do mínimo é
+    // recusado (registrado) e não entra na venda, salvo exceção auditada.
+    const bloqueioMinimo = validarMinimoAtacado(cfg.store_key, produto, quantidade, ctx.excecaoAtacado?.(Number(produto.id)));
+    if (bloqueioMinimo) {
+      rejeitadosMinimo.push({ produto_id: Number(produto.id), sku: String(produto.sku || ''), quantidade, minimo: minimoAtacado(produto) });
+      pendentes.push(`${rotuloLinha(linha)} (${bloqueioMinimo})`);
+      continue;
+    }
+    // A AUTORIDADE do preço é o ERP. O valor recebido da loja é evidência: nunca
+    // substitui silenciosamente o preço oficial (A06-01).
+    const precoInformado = Number(linha.price);
+    const totalLinha = Number(String(linha.total ?? '').replace(',', '.'));
+    const precoRemoto =
+      Number.isFinite(precoInformado) && precoInformado > 0
+        ? precoInformado
+        : Number.isFinite(totalLinha) && totalLinha > 0
+          ? Math.round((totalLinha / quantidade) * 100) / 100
+          : null;
+    const { preco: precoErp, fonte } = await precoOficialDoErp(empresaId, produto, cfg.store_key);
+    const desfecho = decidirPrecoItem({ precoErp, fonte, precoRemoto });
+    if (desfecho.preco <= 0) {
+      pendentes.push(`${rotuloLinha(linha)} (produto sem ${fonte} válido no ERP)`);
+      continue;
+    }
+    if (desfecho.divergente && desfecho.preco_remoto != null) {
+      divergenciasPreco.push({
+        produto_id: Number(produto.id),
+        sku: String(produto.sku || ''),
+        preco_erp: desfecho.preco_erp,
+        preco_remoto: desfecho.preco_remoto,
+        motivo: desfecho.motivo ?? 'Preço remoto divergente do ERP.',
+      });
+    }
+    resolvidos.push({ produto, tamanhoId, quantidade, preco: desfecho.preco, precoRemoto: desfecho.preco_remoto });
+  }
+  return { resolvidos, pendentes, divergenciasPreco, rejeitadosMinimo };
+}
+
+/** Monta as observações da venda (com pendências e divergências registradas). */
+function observacoesDoPedido(
+  cfg: ConfigStore,
+  numero: string,
+  referencia: string,
+  pedido: PedidoWoo,
+  itensPendentes: string[],
+  divergenciasPreco: DivergenciaPreco[]
+): string {
+  return [
+    `Pedido importado da loja ${cfg.store_key} (${cfg.url}) — nº ${numero || referencia}`,
+    pedido.customer_note ? `Observação do cliente: ${String(pedido.customer_note).trim()}` : null,
+    itensPendentes.length ? `Itens NÃO importados (conferir cadastro de SKU): ${itensPendentes.join('; ')}` : null,
+    divergenciasPreco.length
+      ? `Preço remoto divergente do ERP (prevaleceu o ERP): ${divergenciasPreco
+          .map((d) => `${d.sku || d.produto_id} remoto ${d.preco_remoto.toFixed(2)} × ERP ${d.preco_erp.toFixed(2)}`)
+          .join('; ')}`
+      : null,
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
+/**
+ * A06-13 — RECONCILIAÇÃO ADITIVA de itens de um pedido já importado.
+ *
+ * Uma primeira importação PARCIAL (item sem SKU cadastrado) cria a venda com os
+ * itens resolvidos e o restante em `pendentes`. Reimportar depois de cadastrar o
+ * SKU precisa RECOMPOR o pedido — antes, o reimport retornava `ignorado` e a
+ * venda ficava incompleta para sempre.
+ *
+ * Política (não destrutiva): só ADICIONA itens que resolvem agora e ainda não
+ * estão na venda. NUNCA remove nem altera item existente (um lote parcial não
+ * pode cancelar o que não veio), NUNCA mexe em item de venda já faturada
+ * (histórico financeiro congelado). Divergências remanescentes ficam registradas.
+ * Devolve o número de itens adicionados.
+ */
+async function reconciliarItensDeVendaExistente(
+  cfg: ConfigStore,
+  ctx: ContextoImportacao,
+  pedido: PedidoWoo,
+  venda: Row,
+  numero: string,
+  referencia: string
+): Promise<{ adicionados: number; pendentes: string[] }> {
+  const empresaId = ctx.empresaId;
+  const status = String(venda.status || '');
+  // Só reconcilia enquanto a venda é uma COTAÇÃO em aberto: depois de
+  // faturada/entregue/cancelada o histórico (financeiro, estoque, comissão) está
+  // fechado e não se altera por uma reimportação.
+  if (status !== 'cotacao') return { adicionados: 0, pendentes: [] };
+  const vendaId = Number(venda.id);
+  const itens = await resolverItensDoPedido(cfg, ctx, pedido);
+  if (!itens.resolvidos.length) return { adicionados: 0, pendentes: itens.pendentes };
+
+  const s = getStore();
+  const existentes = await s.list(R_ITENS(), { page: 1, pageSize: 5000, filter: { venda_id: vendaId } });
+  const jaGravados = new Set(existentes.rows.map((i) => `${Number(i.produto_id)}:${Number(i.tamanho_id)}`));
+
+  // Itens NOVOS: resolvem agora e ainda não estão na venda (o que faltava).
+  const faltantes = itens.resolvidos.filter((r) => !jaGravados.has(`${Number(r.produto.id)}:${r.tamanhoId}`));
+  if (!faltantes.length) return { adicionados: 0, pendentes: itens.pendentes };
+
+  await s.transaction(async (tx) => {
+    for (const item of faltantes) {
+      await s.insert(
+        R_ITENS(),
+        {
+          empresa_id: empresaId,
+          venda_id: vendaId,
+          produto_id: Number(item.produto.id),
+          tamanho_id: item.tamanhoId,
+          quantidade: item.quantidade,
+          preco_unitario: item.preco,
+          preco_externo_recebido: item.precoRemoto,
+          desconto_pct: 0,
+          subtotal: Math.round(item.quantidade * item.preco * 100) / 100,
+        },
+        tx
+      );
+    }
+    await recalcularTotal('venda', vendaId, tx);
+  });
+
+  // Recompõe a observação: o que ainda falta entra; o que foi resolvido sai.
+  await s
+    .update(R_VENDAS(), vendaId, {
+      observacoes: observacoesDoPedido(cfg, numero, referencia, pedido, itens.pendentes, itens.divergenciasPreco),
+    })
+    .catch(() => undefined);
+  if (itens.divergenciasPreco.length) {
+    await registrarDivergenciasPreco(empresaId, cfg.store_key, itens.divergenciasPreco, `WOO-${cfg.store_key}-${pedido.id ?? numero}`).catch(() => undefined);
+  }
+  if (itens.rejeitadosMinimo.length) {
+    await registrarMinimoAtacadoRejeitado(empresaId, cfg.store_key, itens.rejeitadosMinimo, `WOO-${cfg.store_key}-${pedido.id ?? numero}`).catch(() => undefined);
+  }
+  await s
+    .audit({
+      usuario_id: null,
+      usuario: 'WooCommerce multi-store',
+      acao: 'editar',
+      recurso: 'marketplace',
+      registro_id: vendaId,
+      descricao: `Reconciliação de itens do pedido ${numero || referencia} (${cfg.store_key}): ${faltantes.length} item(ns) adicionado(s)`,
+      dados: { origem: 'woocommerce', store_key: cfg.store_key, adicionados: faltantes.length, pendentes: itens.pendentes },
+      empresa_id: empresaId,
+    })
+    .catch(() => undefined);
+  return { adicionados: faltantes.length, pendentes: itens.pendentes };
+}
+
 /**
  * Importa UM pedido da loja. Extraído do lote para que o WEBHOOK reusa
  * exatamente a mesma lógica — o webhook não reimplementa a importação, ele
  * confirma o pedido na API oficial e chama isto.
  *
- * Idempotente: pedido já importado (referência nova ou legada) volta
- * `ignorado`; corrida com o índice único parcial também vira `ignorado`.
+ * Idempotente: pedido já importado (referência nova ou legada) é RECONCILIADO
+ * (itens que faltavam são adicionados — A06-13) e volta `ignorado` quando nada
+ * muda; corrida com o índice único parcial também vira `ignorado`.
  */
 export async function importarUmPedido(cfg: ConfigStore, ctx: ContextoImportacao, pedido: PedidoWoo): Promise<DesfechoPedido> {
   const s = getStore();
@@ -236,43 +477,46 @@ export async function importarUmPedido(cfg: ConfigStore, ctx: ContextoImportacao
   const numero = String(pedido.number ?? pedido.id ?? '').trim();
   const referencia = referenciaPedido(cfg.store_key, pedido.id ?? numero);
   const legada = referenciaLegada(pedido.id ?? numero);
-  const jaExiste = await vendaExistente(empresaId, referencia, legada);
-  if (jaExiste) {
+  const identidade = await vendaExistente(empresaId, cfg, referencia, legada);
+  if (identidade.existente) {
     // Pedido já importado. Reimportar não duplica e NÃO altera pagamento,
     // status ou valores — mudanças de status externas são apenas reportadas.
+    // MAS a venda EM ABERTO criada por ESTA loja é RECONCILIADA: itens que não
+    // resolviam antes e resolvem agora são adicionados (A06-13), sem tocar no
+    // que já existe. Vendas LEGADAS (canal genérico/ambíguo) NÃO são tocadas —
+    // reconciliar origem incerta seria pior que não reconciliar.
+    const canalDaVenda = String(identidade.existente.pedido_externo_canal ?? '').trim().toUpperCase();
+    if (canalDaVenda === `WOOCOMMERCE_${cfg.store_key}`) {
+      const { adicionados } = await reconciliarItensDeVendaExistente(cfg, ctx, pedido, identidade.existente, numero, referencia);
+      if (adicionados > 0) {
+        return { tipo: 'importado', pedido: numero || referencia, venda_id: Number(identidade.existente.id), total: Number(identidade.existente.total || 0), pendentes: [] };
+      }
+    }
     return { tipo: 'ignorado', pedido: numero || referencia };
   }
-
-  const itensResolvidos: { produto: Row; tamanhoId: number; quantidade: number; preco: number }[] = [];
-  const itensPendentes: string[] = [];
-  for (const linha of pedido.line_items || []) {
-    const sku = String(linha.sku || '').trim().toUpperCase();
-    const produto = sku ? ctx.produtoPorSku.get(sku) : undefined;
-    if (!produto) {
-      itensPendentes.push(`${rotuloLinha(linha)}${sku ? ` (SKU ${sku})` : ' (sem SKU)'}`);
-      continue;
-    }
-    const pedidoTamanho = extrairTamanho(linha);
-    const tamanho = pedidoTamanho ? ctx.tamanhoPorCodigo.get(pedidoTamanho) : undefined;
-    const tamanhoId = tamanho ? Number(tamanho.id) : (ctx.primeiroTamanhoComSaldo(Number(produto.id)) ?? ctx.tamanhoFallback);
-    if (!tamanhoId) {
-      itensPendentes.push(`${rotuloLinha(linha)} (sem tamanho no ERP)`);
-      continue;
-    }
-    await validarTamanhoNaGrade(Number(produto.id), tamanhoId, undefined, ctx.escopo);
-    const quantidade = Math.max(1, Math.trunc(Number(linha.quantity) || 1));
-    const precoInformado = Number(linha.price);
-    const totalLinha = Number(String(linha.total ?? '').replace(',', '.'));
-    const preco =
-      Number.isFinite(precoInformado) && precoInformado > 0
-        ? precoInformado
-        : Number.isFinite(totalLinha) && totalLinha > 0
-          ? Math.round((totalLinha / quantidade) * 100) / 100
-          : Number(canal === 'site_atacado' ? produto.preco_atacado || produto.preco_venda || 0 : produto.preco_venda || 0);
-    itensResolvidos.push({ produto, tamanhoId, quantidade, preco });
+  if (identidade.conflito) {
+    // Conflito de identidade registrado: nunca resolvido automaticamente
+    // (A06-03). A importação segue como venda NOVA da loja correta.
+    await registrarConflitoIdentidade(empresaId, cfg.store_key, numero || referencia, identidade.conflito).catch(() => undefined);
   }
 
+  const resolvido = await resolverItensDoPedido(cfg, ctx, pedido);
+  const itensResolvidos = resolvido.resolvidos;
+  const itensPendentes = resolvido.pendentes;
+  const divergenciasPreco = resolvido.divergenciasPreco;
+  const rejeitadosMinimo = resolvido.rejeitadosMinimo;
+
   if (!itensResolvidos.length) {
+    // Nenhum item elegível (SKU ausente, preço inválido ou mínimo de atacado):
+    // nada é gravado, MAS a ocorrência precisa ficar auditável — a rejeição de
+    // mínimo e a divergência de preço não podem desaparecer por o pedido ter
+    // ficado pendente (A06-01/A06-11).
+    if (rejeitadosMinimo.length) {
+      await registrarMinimoAtacadoRejeitado(empresaId, cfg.store_key, rejeitadosMinimo, `WOO-${cfg.store_key}-${pedido.id ?? numero}`).catch(() => undefined);
+    }
+    if (divergenciasPreco.length) {
+      await registrarDivergenciasPreco(empresaId, cfg.store_key, divergenciasPreco, `WOO-${cfg.store_key}-${pedido.id ?? numero}`).catch(() => undefined);
+    }
     return { tipo: 'pendente', pedido: numero || referencia, motivo: 'nenhum item com SKU cadastrado no ERP', itens: itensPendentes };
   }
 
@@ -313,13 +557,7 @@ export async function importarUmPedido(cfg: ConfigStore, ctx: ContextoImportacao
           desconto: Math.max(0, Number(pedido.discount_total || 0)),
           condicao_pagamento: pedido.payment_method_title ? String(pedido.payment_method_title) : null,
           fin_status: 'a_receber',
-          observacoes: [
-            `Pedido importado da loja ${cfg.store_key} (${cfg.url}) — nº ${numero || referencia}`,
-            pedido.customer_note ? `Observação do cliente: ${String(pedido.customer_note).trim()}` : null,
-            itensPendentes.length ? `Itens NÃO importados (conferir cadastro de SKU): ${itensPendentes.join('; ')}` : null,
-          ]
-            .filter(Boolean)
-            .join('\n'),
+          observacoes: observacoesDoPedido(cfg, numero, referencia, pedido, itensPendentes, divergenciasPreco),
         },
         tx
       );
@@ -333,6 +571,9 @@ export async function importarUmPedido(cfg: ConfigStore, ctx: ContextoImportacao
             tamanho_id: item.tamanhoId,
             quantidade: item.quantidade,
             preco_unitario: item.preco,
+            // EVIDÊNCIA: o preço recebido da loja fica preservado; a autoridade
+            // do preço gravado é o ERP (A06-01).
+            preco_externo_recebido: item.precoRemoto,
             desconto_pct: 0,
             subtotal: Math.round(item.quantidade * item.preco * 100) / 100,
           },
@@ -342,6 +583,10 @@ export async function importarUmPedido(cfg: ConfigStore, ctx: ContextoImportacao
       const total = await recalcularTotal('venda', Number(venda.id), tx);
       return { vendaId: Number(venda.id), total };
     });
+    await registrarDivergenciasPreco(empresaId, cfg.store_key, divergenciasPreco, `WOO-${cfg.store_key}-${pedido.id ?? numero}`);
+    if (rejeitadosMinimo.length) {
+      await registrarMinimoAtacadoRejeitado(empresaId, cfg.store_key, rejeitadosMinimo, `WOO-${cfg.store_key}-${pedido.id ?? numero}`);
+    }
     return { tipo: 'importado', pedido: numero || referencia, venda_id: criado.vendaId, total: criado.total, pendentes: itensPendentes };
   } catch (e) {
     // Corrida: duas importações simultâneas gravaram a MESMA referência e o

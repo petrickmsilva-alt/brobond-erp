@@ -15,7 +15,7 @@ import { validarPoliticaSenha } from './services';
 import { hashPassword, verifyPassword, verifyPasswordDetailed, hashAtualizado } from './password';
 import { abrirSessao, revogarTodas, revogarUma, listSessoesAtivas as listarAtivas } from './sessoes';
 import { decifrarSegredoMfa, prepararDesafio, signMfaTicket, lerMfaTicket, cifrarSegredoMfa } from './mfa';
-import { EMPRESA_PADRAO, empresasDoUsuario } from './empresasAcesso';
+import { EMPRESA_PADRAO, empresasDoUsuario, carteiraDoUsuario } from './empresasAcesso';
 import { segredoJwt } from './chavesCifra';
 
 export { hashPassword, verifyPassword };
@@ -90,6 +90,12 @@ export type AuthUser = {
   empresa_sessao?: number | null;
   /** Pedido explícito de leitura consolidada nesta requisição. */
   consolidar?: boolean;
+  /**
+   * A06-14 — id do representante vinculado a este usuário (`representantes.usuario_id`),
+   * resolvido no servidor. Quando presente (e o perfil não é de gestão), o escopo
+   * do ator é restrito à própria carteira. `null` = sem restrição.
+   */
+  carteira?: number | null;
 };
 
 export function normalizeEmail(email: unknown): string {
@@ -848,6 +854,9 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
   payload.empresa_sessao = empClaim > 0 && payload.empresas.includes(empClaim) ? empClaim : null;
   const pedidoConsolidado = String(req.query?.consolidado ?? req.headers['x-empresa-consolidado'] ?? '');
   payload.consolidar = ['1', 'true', 'sim'].includes(pedidoConsolidado.toLowerCase());
+  // A06-14: o vínculo cadastral representante ↔ usuário vira ESCOPO DE CARTEIRA.
+  // Resolvido do banco (nunca do cliente) e só para perfis não-gestão.
+  payload.carteira = await carteiraDoUsuario(payload);
 
   (req as any).user = payload;
   (req as any).sid = payload.sid;

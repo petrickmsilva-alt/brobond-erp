@@ -15,9 +15,10 @@
 // ============================================================================
 import { getStore } from '../../services';
 import { getResource } from '../../resources';
+import { HttpError } from '../../errors';
 import { disponibilidadesPorTamanho } from '../catalogo';
 import { escopoDeSistema } from '../../empresa';
-import { STORE_KEYS, statusStores, configStore, type StoreKey, type StatusStore } from './registry';
+import { STORE_KEYS, statusStores, configStore, lojasDaEmpresa, type StoreKey, type StatusStore } from './registry';
 import { testarConexao } from './cliente';
 import { estadoDaStore, type EstadoSincronizacao } from './estado';
 import { listarVinculos, contarPorStatus } from './vinculos';
@@ -77,6 +78,9 @@ async function produtosPendentes(empresaId: number, store: StoreKey): Promise<Pa
 /** Painel de UMA loja. `testar` faz o teste autenticado (leitura) da conexão. */
 export async function painelDaLoja(empresaId: number, store: StoreKey, opcoes: { testar?: boolean } = {}): Promise<PainelLoja> {
   const cfg = configStore(store);
+  // A06-09: a loja precisa pertencer à empresa consultada. Loja configurada
+  // para outro tenant não é revelada nem testada (defesa em profundidade).
+  if (cfg && cfg.empresaId !== empresaId) throw new HttpError(404, 'Loja não encontrada para esta empresa.');
   const status = statusStores().find((s) => s.store_key === store)!;
   const vinculos = cfg ? await listarVinculos(empresaId, store, { pageSize: 20000 }) : [];
   const estado = await estadoDaStore(empresaId, store);
@@ -94,10 +98,12 @@ export async function painelDaLoja(empresaId: number, store: StoreKey, opcoes: {
   };
 }
 
-/** Painel de todas as lojas (uma entrada por loja, independente). */
+/** Painel de todas as lojas DA EMPRESA (uma entrada por loja, independente). */
 export async function painelTodasLojas(empresaId: number, opcoes: { testar?: boolean } = {}): Promise<PainelLoja[]> {
   const out: PainelLoja[] = [];
-  for (const store of STORE_KEYS) out.push(await painelDaLoja(empresaId, store, opcoes));
+  // A06-09: só as lojas do tenant — uma loja de outra empresa não aparece no
+  // painel agregado nem tem a conexão autenticada testada por `?testar=1`.
+  for (const store of lojasDaEmpresa(empresaId)) out.push(await painelDaLoja(empresaId, store, opcoes));
   return out;
 }
 

@@ -39,6 +39,15 @@ export type EscopoEmpresa = {
   consolidado: boolean;
   /** Empresas que o ator pode acessar. */
   permitidas: number[];
+  /**
+   * A06-14 — CARTEIRA do ator. Quando o usuário é um REPRESENTANTE (vinculado a
+   * `representantes.usuario_id`), este é o id do representante dele e as
+   * listagens/leituras comerciais ficam restritas a essa carteira. `null` (ou
+   * ausente) = sem restrição de carteira — é o caso de admin/gerente e do
+   * operador de backoffice NÃO vinculado a representante. Nunca vem do cliente:
+   * é resolvido do vínculo cadastral no servidor.
+   */
+  carteira?: number | null;
 };
 
 export type AtorEmpresa = {
@@ -52,6 +61,8 @@ export type AtorEmpresa = {
   empresas?: number[];
   /** Pedido explícito de consolidação nesta requisição. */
   consolidar?: boolean;
+  /** A06-14 — id do representante do ator (resolvido do vínculo `usuario_id`). */
+  carteira?: number | null;
 };
 
 /** Escopo de serviço (jobs, cron, importadores) — sem usuário na frente. */
@@ -85,7 +96,21 @@ export function escopoDoAtor(actor: AtorEmpresa | null | undefined): EscopoEmpre
   const empresaId = selecionada > 0 && permitidas.includes(selecionada) ? selecionada : padrao;
 
   const consolidado = actor.consolidar === true && actor.pode_consolidar === true;
-  return { empresaId, consolidado, permitidas };
+  // A06-14: a carteira do ator só restringe quando o usuário é um REPRESENTANTE.
+  // Admin/gerente (e o operador de backoffice sem vínculo) veem a empresa inteira.
+  const carteira = consolidado || perfilSemCarteira(actor.perfil) ? null : idCarteiraValido(actor.carteira);
+  return { empresaId, consolidado, permitidas, carteira };
+}
+
+/** Perfis de GESTÃO que nunca são restritos pela própria carteira. */
+function perfilSemCarteira(perfil: string | undefined): boolean {
+  return perfil === 'admin' || perfil === 'gerente';
+}
+
+/** Normaliza o id de carteira: só inteiro positivo vira restrição; resto = null. */
+function idCarteiraValido(v: unknown): number | null {
+  const n = Number(v);
+  return Number.isInteger(n) && n > 0 ? n : null;
 }
 
 function normalizarPermitidas(actor: AtorEmpresa, padrao: number): number[] {
@@ -204,12 +229,52 @@ export function registroNoEscopo(r: Resource, row: Row | null | undefined, escop
   return dono === escopo.empresaId;
 }
 
+// ============================================================================
+// A06-14 — RECORTE DE CARTEIRA (representante)
+//
+// Quando o ator é um representante (escopo.carteira preenchido), as linhas
+// comerciais que declaram `escopo` (o nome da coluna do representante dono) só
+// são visíveis se pertencerem à própria carteira. O recorte é do SERVIDOR:
+// aplica-se igual à listagem e ao acesso direto por id, e nunca depende de um
+// filtro enviado pelo cliente. Para admin/gerente e para o operador de
+// backoffice sem vínculo, `escopo.carteira` é `null` e nada é recortado.
+// ============================================================================
+
+/** A carteira do ator restringe esta linha? `false` = sem restrição de carteira. */
+export function foraDaCarteira(r: Resource, row: Row | null | undefined, escopo: EscopoEmpresa | null | undefined): boolean {
+  if (!r.escopo || !escopo || escopo.consolidado) return false;
+  const carteira = Number(escopo.carteira);
+  if (!Number.isInteger(carteira) || carteira <= 0) return false;
+  if (!row) return true;
+  return Number(row[r.escopo]) !== carteira;
+}
+
+/**
+ * Aplica o recorte de carteira a um filtro de listagem. Como as tabelas do
+ * representante são recortadas pelo representante PRINCIPAL (`representante_id`),
+ * o vínculo múltiplo vive em `venda_atribuicao`; o filtro por `representante_id`
+ * é o recorte principal e a atribuição secundária é tratada no endpoint próprio.
+ */
+export function aplicarFiltroCarteira(
+  r: Resource,
+  filter: Record<string, unknown> | undefined,
+  escopo: EscopoEmpresa | null | undefined
+): Record<string, unknown> | undefined {
+  const base: Record<string, unknown> = { ...(filter || {}) };
+  if (!r.escopo || !escopo || escopo.consolidado) return Object.keys(base).length ? base : undefined;
+  const carteira = Number(escopo.carteira);
+  if (!Number.isInteger(carteira) || carteira <= 0) return Object.keys(base).length ? base : undefined;
+  // O recorte do servidor SEMPRE vence: descarta o que o cliente tentou injetar.
+  base[r.escopo] = carteira;
+  return base;
+}
+
 /**
  * Acesso direto por id. Responde 404 (e não 403) quando o registro é de outra
  * empresa: a existência de um id alheio não é informação a vazar.
  */
 export function assertRegistroDaEmpresa(r: Resource, row: Row | null | undefined, escopo: EscopoEmpresa | null | undefined): Row {
-  if (!row || !registroNoEscopo(r, row, escopo)) {
+  if (!row || !registroNoEscopo(r, row, escopo) || foraDaCarteira(r, row, escopo)) {
     throw new HttpError(404, `${r.singular} não encontrado(a).`);
   }
   return row;
@@ -269,6 +334,26 @@ export function carimbarEmpresa(r: Resource, data: Payload, escopo: EscopoEmpres
 export function protegerEmpresaNaEdicao(r: Resource, data: Payload): Payload {
   if (temEscopoEmpresa(r)) delete data.empresa_id;
   return data;
+}
+
+/** A06-14 — na edição, o dono da carteira não pode ser reatribuído por um representante. */
+export function protegerCarteiraNaEdicao(r: Resource, data: Payload, escopo: EscopoEmpresa | null | undefined): Payload {
+  const carteira = carteiraDeEscrita(r, escopo);
+  if (carteira !== null) data[r.escopo!] = carteira;
+  return data;
+}
+
+/** Id de carteira a impor numa escrita — `null` quando o ator não é representante. */
+export function idCarteiraDoEscopo(escopo: EscopoEmpresa | null | undefined): number | null {
+  if (!escopo || escopo.consolidado) return null;
+  const carteira = Number(escopo.carteira);
+  return Number.isInteger(carteira) && carteira > 0 ? carteira : null;
+}
+
+/** Id de carteira a impor numa escrita — `null` quando o recurso não é escopado. */
+function carteiraDeEscrita(r: Resource, escopo: EscopoEmpresa | null | undefined): number | null {
+  if (!r.escopo) return null;
+  return idCarteiraDoEscopo(escopo);
 }
 
 // ---------------------------------------------------------------------------

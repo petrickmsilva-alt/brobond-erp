@@ -18,7 +18,7 @@ import { currentUser } from '../../auth';
 import { checkAccess } from '../../services';
 import { escopoDoAtor } from '../../empresa';
 import { getResource } from '../../resources';
-import { STORE_KEYS, ehStoreKey, exigirStoreDaEmpresa, multiStoreHabilitado, statusStores, dryRun, type StoreKey } from './registry';
+import { STORE_KEYS, ehStoreKey, exigirStoreDaEmpresa, multiStoreHabilitado, statusStoresDaEmpresa, dryRun, type StoreKey } from './registry';
 import { painelTodasLojas, painelDaLoja, reconciliarLoja } from './painel';
 import { sincronizarEstoqueDaLoja } from './estoque';
 import { importarPedidosDaLoja } from './pedidos';
@@ -148,7 +148,8 @@ export async function statusLojas(_req: Request, res: Response) {
     multi_store_habilitado: multiStoreHabilitado(),
     dry_run: dryRun(),
     empresa_id: empresaId,
-    lojas: statusStores().map((s) => ({ ...s, webhook_habilitado: webhookHabilitado(s.store_key) })),
+    // A06-09: apenas as lojas da empresa autenticada.
+    lojas: statusStoresDaEmpresa(empresaId).map((s) => ({ ...s, webhook_habilitado: webhookHabilitado(s.store_key) })),
   });
 }
 

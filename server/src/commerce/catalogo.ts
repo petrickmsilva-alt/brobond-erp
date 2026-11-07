@@ -180,6 +180,31 @@ export async function disponivelTotalProduto(escopo: EscopoEmpresa, produtoId: n
   return disponivelDoProduto(ctx, produtoId);
 }
 
+/**
+ * Disponível vendável de um produto do ERP pelo VÍNCULO CANÔNICO de estoque.
+ *
+ * Variação (produto com `produto_pai_id` + `variacao_tamanho_id`): o saldo
+ * pertence ao PAI + tamanho — nunca à linha de `estoques` da variação, que não
+ * é vendável. Consultar a variação diretamente devolvia 0 mesmo com saldo no
+ * pai (A06-04).
+ *
+ * Produto simples/pai: soma dos tamanhos, cada um pelo melhor local vendável.
+ *
+ * Reutilizado pela publicação, pela sincronização de estoque Multi-Store e pelo
+ * caminho legado — a regra de estoque é UMA só.
+ */
+export async function disponivelDoProdutoVendavel(escopo: EscopoEmpresa, produto: Row, tx?: Tx): Promise<number> {
+  const paiId = produto.produto_pai_id ? Number(produto.produto_pai_id) : null;
+  const tamanhoVariacao = produto.variacao_tamanho_id ? Number(produto.variacao_tamanho_id) : null;
+  if (paiId && tamanhoVariacao) {
+    const linhas = await disponibilidadesPorTamanho(escopo, paiId, tx);
+    const linha = linhas.find((l) => l.tamanho_id != null && Number(l.tamanho_id) === tamanhoVariacao);
+    return Math.max(0, Math.trunc(Number(linha?.disponivel ?? 0)));
+  }
+  const linhas = await disponibilidadesPorTamanho(escopo, Number(produto.id), tx);
+  return linhas.reduce((soma, l) => soma + Math.max(0, Number(l.disponivel || 0)), 0);
+}
+
 // ----------------------------------------------------------------------------
 // Preço efetivo por canal (base produtos.preco_venda + linha vigente)
 // ----------------------------------------------------------------------------
@@ -983,7 +1008,17 @@ export async function salvarPrecoCanal(req: Request, res: Response) {
   if (precoPromo !== null && (!Number.isFinite(precoPromo) || precoPromo < 0)) {
     throw new HttpError(400, 'Preço promocional inválido.', { preco_promo: 'Inválido' });
   }
-  const existente = await s.findOneWhere(R_PRECOS(), { empresa_id: escopo.empresaId, produto_id: produtoId, canal });
+  // Escopo de LOJA (A06-12): o override WOOCOMMERCE pode ser de RETAIL, de
+  // WHOLESALE ou sem loja (linha legada). Só a MESMA loja consome o override.
+  const storeKeyBruto = body.store_key;
+  const storeKey = storeKeyBruto === null || storeKeyBruto === undefined || storeKeyBruto === '' ? null : String(storeKeyBruto);
+  if (storeKey !== null && storeKey !== 'RETAIL' && storeKey !== 'WHOLESALE') {
+    throw new HttpError(400, 'Loja inválida.', { store_key: "Use RETAIL, WHOLESALE ou deixe vazio (sem loja)." });
+  }
+  if (storeKey && canal !== 'WOOCOMMERCE') {
+    throw new HttpError(400, 'Loja só se aplica ao canal WOOCOMMERCE.', { store_key: 'Canal incompatível' });
+  }
+  const existente = await s.findOneWhere(R_PRECOS(), { empresa_id: escopo.empresaId, produto_id: produtoId, canal, store_key: storeKey });
   const dados = {
     preco: Math.round(preco * 100) / 100,
     preco_promo: precoPromo === null ? null : Math.round(precoPromo * 100) / 100,
@@ -992,7 +1027,7 @@ export async function salvarPrecoCanal(req: Request, res: Response) {
   };
   const linha = existente
     ? (await s.update(R_PRECOS(), Number(existente.id), dados))!
-    : await s.insert(R_PRECOS(), { empresa_id: escopo.empresaId, produto_id: produtoId, canal, ...dados });
+    : await s.insert(R_PRECOS(), { empresa_id: escopo.empresaId, produto_id: produtoId, canal, store_key: storeKey, ...dados });
   await reenfileirarPublicacoesAfetadas(escopo.empresaId, produtoId, actor.id ?? null);
   await s.audit({
     usuario_id: actor.id || null,
@@ -1000,9 +1035,9 @@ export async function salvarPrecoCanal(req: Request, res: Response) {
     acao: existente ? 'editar' : 'criar',
     recurso: 'commerce_precos',
     registro_id: Number(linha.id),
-    descricao: `Preço do canal ${canal} do produto ${String(produto.sku || produtoId)} = R$ ${dados.preco.toFixed(2)}`,
+    descricao: `Preço do canal ${canal}${storeKey ? ` (loja ${storeKey})` : ''} do produto ${String(produto.sku || produtoId)} = R$ ${dados.preco.toFixed(2)}`,
     empresa_id: empresaDoRegistroAudit(R_PRECOS(), linha, actor),
-    dados: { canal, ...dados },
+    dados: { canal, store_key: storeKey, ...dados },
   });
   res.json({ ok: true, preco: linha });
 }

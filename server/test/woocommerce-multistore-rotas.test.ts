@@ -120,6 +120,54 @@ describe('Multi-store — autorização das rotas', () => {
     }
   });
 
+  test('A06-09: statusLojas devolve só as lojas da empresa e nunca a credencial', async () => {
+    configurarLojas(1);
+    try {
+      const r = await chamar(R.statusLojas, usuario('gerente', 1));
+      assert.equal(statusDe(r), 200);
+      assert.equal(r.res.body.empresa_id, 1);
+      assert.equal(r.res.body.lojas.length, 2, 'apenas as lojas do tenant');
+      // A empresa 2 NÃO tem loja configurada: o status é vazio (não vaza a 1).
+      const outra = await chamar(R.statusLojas, usuario('gerente', 2));
+      assert.equal(statusDe(outra), 200);
+      assert.equal(outra.res.body.lojas.length, 0, 'nenhuma loja de outro tenant');
+      assert.ok(!JSON.stringify(r.res.body).includes('ck_retail_segredo'), 'CK não vaza');
+      assert.ok(!JSON.stringify(r.res.body).includes('cs_retail_segredo'), 'CS não vaza');
+    } finally {
+      limparLojas();
+    }
+  });
+
+  test('A06-09: painelLojas com ?testar=1 não testa a conexão de loja de outro tenant', async () => {
+    // As DUAS lojas pertencem à empresa 2; quem consulta é a empresa 1.
+    process.env.WOOCOMMERCE_MULTI_STORE_ENABLED = 'true';
+    process.env.WOOCOMMERCE_RETAIL_ENABLED = 'true';
+    process.env.WOOCOMMERCE_RETAIL_URL = 'https://brobond.com.br';
+    process.env.WOOCOMMERCE_RETAIL_CK = 'ck_retail_segredo';
+    process.env.WOOCOMMERCE_RETAIL_CS = 'cs_retail_segredo';
+    process.env.WOOCOMMERCE_RETAIL_EMPRESA_ID = '2';
+    process.env.WOOCOMMERCE_WHOLESALE_ENABLED = 'true';
+    process.env.WOOCOMMERCE_WHOLESALE_URL = 'https://atacado.brobond.com.br';
+    process.env.WOOCOMMERCE_WHOLESALE_CK = 'ck_wholesale_segredo';
+    process.env.WOOCOMMERCE_WHOLESALE_CS = 'cs_wholesale_segredo';
+    process.env.WOOCOMMERCE_WHOLESALE_EMPRESA_ID = '2';
+    const original = globalThis.fetch;
+    let chamadas = 0;
+    globalThis.fetch = (async () => {
+      chamadas += 1;
+      throw new Error('a rede não pode ser chamada');
+    }) as typeof fetch;
+    try {
+      const r = await chamar(R.painelLojas, usuario('admin', 1), { query: { testar: '1' } });
+      assert.equal(statusDe(r), 200);
+      assert.deepEqual((r.res.body.lojas as any[]).map((l) => l.store_key), [], 'nenhuma loja de outro tenant');
+      assert.equal(chamadas, 0, 'nenhuma chamada de rede: a conexão de loja alheia não é testada');
+    } finally {
+      globalThis.fetch = original;
+      limparLojas();
+    }
+  });
+
   test('loja incompleta responde 409 com motivo acionável (sem derrubar a outra)', async () => {
     process.env.WOOCOMMERCE_MULTI_STORE_ENABLED = 'true';
     process.env.WOOCOMMERCE_RETAIL_ENABLED = 'true';

@@ -30,8 +30,8 @@ import { HttpError } from './errors';
 import { getResource, type Resource } from './resources';
 import type { Row, Store, Tx } from './store';
 import { checkAccess, getStore } from './services';
-import { aplicarFiltroEmpresa, escopoDoAtor, type EscopoEmpresa } from './empresa';
-import { R_COMISSOES_EVENTOS } from './comissoes';
+import { aplicarFiltroEmpresa, aplicarFiltroCarteira, foraDaCarteira, idCarteiraDoEscopo, escopoDoAtor, type EscopoEmpresa } from './empresa';
+import { R_COMISSOES_EVENTOS, reconciliarEfetivacaoAposReapuracao } from './comissoes';
 
 /**
  * RECURSO INTERNO `comissoes_apuradas`.
@@ -136,7 +136,8 @@ async function lerDaEmpresa(
   const where: Row = { id };
   if (r.empresa) where.empresa_id = escopo.empresaId;
   const row = await s.findOneWhere(r, where, tx);
-  if (!row) throw new HttpError(404, `${r.singular} não encontrado(a).`);
+  // A06-14: o recorte de CARTEIRA vale também na leitura direta por id.
+  if (!row || foraDaCarteira(r, row, escopo)) throw new HttpError(404, `${r.singular} não encontrado(a).`);
   return row;
 }
 
@@ -151,7 +152,8 @@ async function listarTudo(
   const r = (typeof key === 'string' ? getResource(key) : key)!;
   const paginado = await s.list(
     r,
-    { page: 1, pageSize: 50_000, filter: aplicarFiltroEmpresa(r, filtro, escopo) },
+    // A06-14: o recorte de carteira entra como filtro obrigatório do servidor.
+    { page: 1, pageSize: 50_000, filter: aplicarFiltroCarteira(r, aplicarFiltroEmpresa(r, filtro, escopo), escopo) },
     tx
   );
   return paginado.rows;
@@ -984,6 +986,13 @@ export async function apurarComissaoDaVenda(
       empresa_id: escopo.empresaId,
     }, tx);
 
+    // A06-06: se a venda JÁ foi recebida e a apuração mudou, o livro de
+    // efetivação precisa de um evento de AJUSTE para fechar (nunca sobrescreve
+    // o histórico). Só faz sentido em reapuração.
+    if (eraRecalculo) {
+      await reconciliarEfetivacaoAposReapuracao(venda, { id: actor.id || null, name: actor.name }, tx);
+    }
+
     return {
       venda_id: vendaId,
       representantes: resultados,
@@ -1288,6 +1297,7 @@ function escopoDaRequisicao(req: Request): EscopoEmpresa {
 export async function apiIndicadores(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(getResource('vendas')!, actor, 'read');
+  const escopo = escopoDaRequisicao(req);
   const periodo = {
     de: req.query.de ? diaISO(req.query.de) : null,
     ate: req.query.ate ? diaISO(req.query.ate) : null,
@@ -1297,7 +1307,16 @@ export async function apiIndicadores(req: Request, res: Response) {
     equipe_id: idOuNull(req.query.equipe_id),
     territorio_id: idOuNull(req.query.territorio_id),
   };
-  res.json(await calcularIndicadores(getStore(), escopoDaRequisicao(req), filtros, periodo));
+  // A06-14: o representante só vê os PRÓPRIOS indicadores — o filtro é fixado
+  // no servidor, descartando qualquer `representante_id`/`equipe_id` da query
+  // que tentaria abrir a carteira de outro.
+  const carteira = idCarteiraDoEscopo(escopo);
+  if (carteira !== null) {
+    filtros.representante_id = carteira;
+    filtros.equipe_id = null;
+    filtros.territorio_id = null;
+  }
+  res.json(await calcularIndicadores(getStore(), escopo, filtros, periodo));
 }
 
 /** GET /api/comercial/metas/:id/acompanhamento */
@@ -1663,7 +1682,12 @@ export async function painelDoRepresentante(s: Store, escopo: EscopoEmpresa, id:
 export async function apiPainelRepresentante(req: Request, res: Response) {
   const actor = currentUser(req);
   checkAccess(getResource('representantes')!, actor, 'read');
+  const escopo = escopoDaRequisicao(req);
   const id = Number(req.params.id);
   if (!Number.isInteger(id) || id <= 0) throw new HttpError(400, 'Representante inválido.');
-  res.json(await painelDoRepresentante(getStore(), escopoDaRequisicao(req), id));
+  // A06-14: um representante só abre o PRÓPRIO painel — o de outro responde
+  // 404, sem revelar que existe.
+  const carteira = idCarteiraDoEscopo(escopo);
+  if (carteira !== null && carteira !== id) throw new HttpError(404, 'Representante não encontrado.');
+  res.json(await painelDoRepresentante(getStore(), escopo, id));
 }

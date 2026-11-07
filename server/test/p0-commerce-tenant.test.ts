@@ -90,6 +90,9 @@ class ConcurrentSalesDb implements ConnectorDatabase {
     } else if (sql.startsWith('DELETE FROM sale_items')) {
       const saleId = String(params[0]);
       for (let i = this.items.length - 1; i >= 0; i -= 1) if (this.items[i].sale_id === saleId) this.items.splice(i, 1);
+    } else if (sql.startsWith('SELECT') && sql.includes('FROM sale_items')) {
+      const saleId = String(params[0]);
+      rows = this.items.filter((i) => i.sale_id === saleId).map((i) => ({ ...i }));
     } else if (sql.startsWith('INSERT INTO sale_items')) {
       const [id, saleId, productId, sizeId, variacaoExterna, quantity, unitPriceCents, discountCents, subtotalCents] = params;
       this.items.push({ id, sale_id: saleId, product_id: productId, size_id: sizeId, variacao_externa: variacaoExterna, quantity, unit_price_cents: unitPriceCents, discount_cents: discountCents, subtotal_cents: subtotalCents });

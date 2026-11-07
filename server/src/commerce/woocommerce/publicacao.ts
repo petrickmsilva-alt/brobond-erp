@@ -24,15 +24,15 @@ import { getStore } from '../../services';
 import type { Row, Tx } from '../../store';
 import { getResource } from '../../resources';
 import { PublicacaoFalha } from '../publicacaoCanais';
-import { disponibilidadesPorTamanho } from '../catalogo';
+import { disponivelDoProdutoVendavel } from '../catalogo';
 import { escopoDeSistema } from '../../empresa';
-import type { ConfigStore } from './registry';
+import type { ConfigStore, StoreKey } from './registry';
 import { wooStoreFetch, ehDryRun } from './cliente';
 import { precoDaLoja, minimoAtacado, validarPrecoPublicavel } from './precos';
+import { linhaOverrideDaLoja } from './precoAutoridade';
 import { registrarVinculo, vinculoDoProduto, vinculoDeVariacao } from './vinculos';
 
 const R_PRODUTOS = () => getResource('produtos')!;
-const R_PRECOS = () => getResource('commerce_precos')!;
 const R_TAMANHOS = () => getResource('tamanhos')!;
 
 type WooProduto = { id?: number; sku?: string; type?: string; permalink?: string };
@@ -54,8 +54,10 @@ async function variacoesDoProduto(empresaId: number, produtoId: number, tx?: Tx)
   return out.rows;
 }
 
-async function linhaPreco(empresaId: number, produtoId: number, canal: string, tx?: Tx): Promise<Row | null> {
-  return getStore().findOneWhere(R_PRECOS(), { empresa_id: empresaId, produto_id: produtoId, canal }, tx);
+async function linhaPreco(empresaId: number, produtoId: number, canal: string, store: StoreKey, tx?: Tx): Promise<Row | null> {
+  // Override por LOJA (A06-12): RETAIL e WHOLESALE não compartilham o preço de
+  // canal. Linhas legadas sem store_key (NULL) continuam valendo como base.
+  return linhaOverrideDaLoja(empresaId, produtoId, canal, store, tx);
 }
 
 /** Descobre o produto na loja por SKU (uma única chamada; [] quando não há). */
@@ -95,7 +97,7 @@ export async function publicarProdutoNaLoja(
   const ativo = produto.ativo !== false && produto.exibir_site !== false;
   const status = ativo ? 'publish' : 'private';
 
-  const precoPai = precoDaLoja(produto, cfg.store_key, await linhaPreco(empresaId, produtoId, 'WOOCOMMERCE', tx));
+  const precoPai = precoDaLoja(produto, cfg.store_key, await linhaPreco(empresaId, produtoId, 'WOOCOMMERCE', cfg.store_key, tx));
   const invalido = validarPrecoPublicavel(precoPai, produto, cfg.store_key);
   // Produto variável pode não ter preço no pai (o preço vive na variação). Só
   // recusamos o pai simples sem preço; no variável, cada variação é validada.
@@ -156,7 +158,7 @@ export async function publicarProdutoNaLoja(
   }
 
   // Produto SIMPLES: preço e estoque vivem nele.
-  const disponivel = await disponivelDoProduto(empresaId, produtoId, tx);
+  const disponivel = await disponivelDoProduto(empresaId, produto, tx);
   const corpo: Record<string, unknown> = {
     name: String(produto.nome || sku),
     type: 'simple',
@@ -203,10 +205,10 @@ async function publicarVariacao(
   const codigo = tamanhos.get(Number(variacao.variacao_tamanho_id)) ?? '';
   if (!codigo) return null; // variação sem tamanho não tem atributo — não inventamos
   const skuVariacao = String(variacao.sku || '').trim();
-  const preco = precoDaLoja(variacao, cfg.store_key, await linhaPreco(empresaId, variacaoId, 'WOOCOMMERCE', tx));
+  const preco = precoDaLoja(variacao, cfg.store_key, await linhaPreco(empresaId, variacaoId, 'WOOCOMMERCE', cfg.store_key, tx));
   const invalido = validarPrecoPublicavel(preco, variacao, cfg.store_key);
   if (invalido) throw new PublicacaoFalha(`Variação ${skuVariacao || `#${variacaoId}`}: ${invalido.mensagem}`);
-  const disponivel = await disponivelDoProduto(empresaId, variacaoId, tx);
+  const disponivel = await disponivelDoProduto(empresaId, variacao, tx);
 
   let externalVariationId: string | null = null;
   const vinculo = await vinculoDeVariacao(empresaId, cfg.store_key, variacaoId, tx);
@@ -249,8 +251,7 @@ async function publicarVariacao(
   return externalVariationId;
 }
 
-/** Disponível vendável do produto (físico − reservas), pelo motor canônico. */
-async function disponivelDoProduto(empresaId: number, produtoId: number, tx?: Tx): Promise<number> {
-  const linhas = await disponibilidadesPorTamanho(escopoDeSistema(empresaId), produtoId, tx);
-  return linhas.reduce((soma, l) => soma + Math.max(0, Number(l.disponivel || 0)), 0);
+/** Disponível vendável do produto pelo vínculo CANÔNICO (pai+tamanho na variação). */
+async function disponivelDoProduto(empresaId: number, produto: Row, tx?: Tx): Promise<number> {
+  return disponivelDoProdutoVendavel(escopoDeSistema(empresaId), produto, tx);
 }

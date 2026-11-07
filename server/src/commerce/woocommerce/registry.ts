@@ -219,6 +219,20 @@ export function statusStores(): StatusStore[] {
 }
 
 /**
+ * A06-09 — lojas que PERTENCEM a uma empresa (por `empresaDaStore`). Inclui as
+ * desabilitadas/incompletas: o painel agregado mostra o status de cada uma, mas
+ * NUNCA a loja de outro tenant.
+ */
+export function lojasDaEmpresa(empresaId: number): StoreKey[] {
+  return STORE_KEYS.filter((s) => empresaDaStore(s) === empresaId);
+}
+
+/** Diagnóstico por loja RECORTADO pela empresa do ator (A06-09). */
+export function statusStoresDaEmpresa(empresaId: number): StatusStore[] {
+  return statusStores().filter((s) => empresaDaStore(s.store_key) === empresaId);
+}
+
+/**
  * Recorte por loja: exige que a loja esteja configurada E pertença à empresa do
  * ator. Devolve a config — nunca a empresa "padrão" implícita.
  */
