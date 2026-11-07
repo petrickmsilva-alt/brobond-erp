@@ -11,6 +11,11 @@ Monorepo: Next.js 15 / React 19 / TypeScript (client) + Node/Express/TS (server)
 - `npm run architecture:audit` e `npm run audit:menu` — coerência recursos × tabelas × tenant × menu.
 - `npm run test:pg` — gate PostgreSQL real; exige `DATABASE_URL` de banco **vazio** e PostgreSQL 16.14.
 
+## CI (GitHub Actions)
+
+- Os jobs `verificar` e `testes-postgres` rodam em **Node 24**. Não volte para o Node 22: o runner de `node --test` do v22.x lê o tamanho do quadro do protocolo como int32 COM SINAL; quando o stdout de um arquivo de teste traz texto NÃO-ASCII (acentos PT-BR + emoji do logger) logo após um quadro de relatório, esses bytes são interpretados como tamanho e o runner pai aborta com `Unable to deserialize cloned data due to invalid or unsupported version`, descartando o arquivo inteiro. É um bug do Node corrigido no v24 (#64706) e NÃO retroportado ao v22 (#65934). O sintoma é um `not ok` aleatório em qualquer arquivo, nunca no mesmo.
+- `npm run architecture:audit` regenera `docs/ERP-3.0-ARCHITECTURE-INVENTORY.json`; quando o número de casos muda, o arquivo precisa ser commitado junto.
+
 ## Convenções
 
 - **Ambiente de teste:** o shell pode ter `DATABASE_URL` exportado (ex.: `brobond_test`). Isso faz testes que deveriam pular rodarem contra banco sujo. Rode `unset DATABASE_URL` antes da suíte de memória.
