@@ -25,10 +25,19 @@ type StatusEnvio = 'pendente' | 'cotado' | 'gerado' | 'postado' | 'em_transito' 
 const ROTULO: Record<string, string> = {
   pendente: 'Pendente',
   cotado: 'Cotado',
+  pronto_expedicao: 'Pronto p/ expedir',
+  separacao: 'Em separação',
+  embalada: 'Embalada',
+  etiqueta_pendente: 'Etiqueta pendente',
+  etiqueta_gerada: 'Etiqueta gerada',
   gerado: 'Gerado',
   postado: 'Postado',
   em_transito: 'Em trânsito',
+  em_rota: 'Em rota',
   entregue: 'Entregue',
+  tentativa_falha: 'Tentativa falhou',
+  devolvido: 'Devolvido',
+  extraviado: 'Extraviado',
   cancelado: 'Cancelado',
   erro: 'Erro',
 };
@@ -36,10 +45,19 @@ const ROTULO: Record<string, string> = {
 const TOM: Record<string, 'slate' | 'blue' | 'amber' | 'green' | 'red'> = {
   pendente: 'slate',
   cotado: 'slate',
+  pronto_expedicao: 'blue',
+  separacao: 'blue',
+  embalada: 'blue',
+  etiqueta_pendente: 'amber',
+  etiqueta_gerada: 'blue',
   gerado: 'blue',
   postado: 'blue',
   em_transito: 'amber',
+  em_rota: 'amber',
   entregue: 'green',
+  tentativa_falha: 'red',
+  devolvido: 'red',
+  extraviado: 'red',
   cancelado: 'slate',
   erro: 'red',
 };
@@ -100,6 +118,56 @@ type Config = {
 
 type EventoEnvio = { id: number; status: string | null; mensagem: string | null; criado_em: string };
 
+// --- Motor de frete multicanal (modules/logistics) -------------------------
+type ProviderMulticanal = {
+  slug: string;
+  nome: string;
+  configurado: boolean;
+  habilitado: boolean;
+  motivo: string | null;
+  capacidades: Record<string, boolean>;
+};
+
+type Indicadores = {
+  modulo_habilitado: boolean;
+  provider_padrao: string;
+  contadores: Record<string, number>;
+  atrasadas: number;
+  ocorrencias: number;
+  falhas_integracao: number;
+  custo_previsto: number;
+  custo_efetivo: number;
+  lojas: { store_key: string; remessas: number }[];
+  webhooks: Record<string, number>;
+  providers: ProviderMulticanal[];
+  gerado_em: string;
+};
+
+type RegraFrete = {
+  id: number;
+  nome: string;
+  tipo: string;
+  store_key: string | null;
+  prioridade: number;
+  ativo: boolean;
+  condicoes: Record<string, unknown>;
+  acoes: Record<string, unknown>;
+};
+
+type Remessa = {
+  id: number;
+  venda_id: number;
+  provider: string | null;
+  store_key: string | null;
+  status: string;
+  codigo_rastreamento: string | null;
+  cep_destino: string | null;
+  custo_previsto: number | null;
+  custo_efetivo: number | null;
+  prazo_dias: number | null;
+  criado_em: string;
+};
+
 const FILTROS: Array<{ value: string; label: string }> = [
   { value: 'postado', label: 'Postados' },
   { value: 'em_transito', label: 'Em trânsito' },
@@ -113,7 +181,7 @@ export default function LogisticaPage() {
   const { user } = useAuth();
   const isAdmin = user?.perfil === 'admin';
 
-  const [aba, setAba] = useState<'envios' | 'gerar' | 'config'>('envios');
+  const [aba, setAba] = useState<'envios' | 'gerar' | 'multicanal' | 'config'>('envios');
   const [carregando, setCarregando] = useState(true);
   const [envios, setEnvios] = useState<Envio[]>([]);
   const [filtro, setFiltro] = useState('postado');
@@ -144,6 +212,20 @@ export default function LogisticaPage() {
     correios_codigo_administrativo: '',
     correios_senha: '',
   });
+
+  // Motor multicanal
+  const [indicadores, setIndicadores] = useState<Indicadores | null>(null);
+  const [regras, setRegras] = useState<RegraFrete[]>([]);
+  const [tiposRegra, setTiposRegra] = useState<string[]>([]);
+  const [remessas, setRemessas] = useState<Remessa[]>([]);
+  const [carregandoMulticanal, setCarregandoMulticanal] = useState(false);
+  const [erroMulticanal, setErroMulticanal] = useState('');
+  const [filtroLoja, setFiltroLoja] = useState('');
+  const [filtroProvider, setFiltroProvider] = useState('');
+  const [buscaRemessa, setBuscaRemessa] = useState('');
+  const [novaRegra, setNovaRegra] = useState({ nome: '', tipo: 'FRETE_GRATIS_VALOR', store_key: '', prioridade: '10', valor_minimo: '', percentual: '' });
+  const [reprocessando, setReprocessando] = useState(false);
+  const [reconciliando, setReconciliando] = useState(false);
 
   // -------------------------------------------------------------------------
   // Envios
@@ -189,6 +271,125 @@ export default function LogisticaPage() {
   useEffect(() => {
     if (aba === 'config') void carregarConfig();
   }, [aba, carregarConfig]);
+
+  // -------------------------------------------------------------------------
+  // Motor multicanal
+  // -------------------------------------------------------------------------
+  const carregarMulticanal = useCallback(async () => {
+    setCarregandoMulticanal(true);
+    setErroMulticanal('');
+    try {
+      const qs = filtroLoja ? `?store=${encodeURIComponent(filtroLoja)}` : '';
+      const [ind, reg, rem] = await Promise.all([
+        api.get<Indicadores>(`/logistics/painel${qs}`),
+        api.get<{ regras: RegraFrete[]; tipos: string[] }>(`/logistics/rules${qs}`),
+        api.get<ListResult<Remessa>>(`/logistics/shipments?page=1&pageSize=50${filtroLoja ? `&store=${encodeURIComponent(filtroLoja)}` : ''}${filtroProvider ? `&provider=${encodeURIComponent(filtroProvider)}` : ''}`),
+      ]);
+      setIndicadores(ind);
+      setRegras(reg.regras);
+      setTiposRegra(reg.tipos);
+      setRemessas(rem.rows);
+    } catch (e) {
+      setErroMulticanal(e instanceof ApiError ? e.message : 'Não foi possível carregar o painel logístico.');
+    } finally {
+      setCarregandoMulticanal(false);
+    }
+  }, [filtroLoja, filtroProvider]);
+
+  useEffect(() => {
+    if (aba === 'multicanal') void carregarMulticanal();
+  }, [aba, carregarMulticanal]);
+
+  async function criarRegraFrete() {
+    setOcupado(true);
+    try {
+      const condicoes: Record<string, unknown> = {};
+      const acoes: Record<string, unknown> = {};
+      if (novaRegra.valor_minimo) condicoes.valor_minimo = Number(novaRegra.valor_minimo);
+      if (novaRegra.percentual) acoes.percentual = Number(novaRegra.percentual);
+      await api.post('/logistics/rules', {
+        nome: novaRegra.nome,
+        tipo: novaRegra.tipo,
+        store_key: novaRegra.store_key || null,
+        prioridade: Number(novaRegra.prioridade) || 0,
+        condicoes,
+        acoes,
+      });
+      toast.success('Regra criada.');
+      setNovaRegra({ nome: '', tipo: 'FRETE_GRATIS_VALOR', store_key: '', prioridade: '10', valor_minimo: '', percentual: '' });
+      await carregarMulticanal();
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : 'Falha ao criar a regra.');
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  async function alternarRegra(r: RegraFrete) {
+    setOcupado(true);
+    try {
+      await api.put(`/logistics/rules/${r.id}`, { ativo: !r.ativo });
+      await carregarMulticanal();
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : 'Falha ao atualizar a regra.');
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  async function reprocessarWebhooks() {
+    setReprocessando(true);
+    try {
+      const r = await api.post<{ recuperados: number }>('/logistics/webhooks/recuperar', {});
+      toast.success(`${r.recuperados} entrega(s) reprocessada(s).`);
+      await carregarMulticanal();
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : 'Falha ao reprocessar.');
+    } finally {
+      setReprocessando(false);
+    }
+  }
+
+  async function reconciliar() {
+    setReconciliando(true);
+    try {
+      const r = await api.post<{ analisados: number; corrigidas: number; requer_humano: number }>('/logistics/reconcile', { limite: 50 });
+      toast.success(`Reconciliação: ${r.analisados} analisados, ${r.corrigidas} corrigidos, ${r.requer_humano} p/ humano.`);
+      await carregarMulticanal();
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : 'Falha na reconciliação.');
+    } finally {
+      setReconciliando(false);
+    }
+  }
+
+  const remessasVisiveis = useMemo(() => {
+    const q = buscaRemessa.trim().toLowerCase();
+    if (!q) return remessas;
+    return remessas.filter((r) =>
+      `${r.id} ${r.venda_id} ${r.codigo_rastreamento ?? ''} ${r.provider ?? ''} ${r.cep_destino ?? ''}`.toLowerCase().includes(q)
+    );
+  }, [remessas, buscaRemessa]);
+
+  const CONTADOR_ROTULO: Record<string, string> = {
+    pendente: 'Aguardando expedição',
+    cotado: 'Cotados',
+    pronto_expedicao: 'Prontos p/ expedir',
+    separacao: 'Em separação',
+    embalada: 'Embalados',
+    etiqueta_pendente: 'Etiqueta pendente',
+    etiqueta_gerada: 'Etiqueta gerada',
+    gerado: 'Gerados',
+    postado: 'Expedidos',
+    em_transito: 'Em trânsito',
+    em_rota: 'Em rota',
+    entregue: 'Entregues',
+    tentativa_falha: 'Tentativa falhou',
+    devolvido: 'Devolvidos',
+    extraviado: 'Extraviados',
+    cancelado: 'Cancelados',
+    erro: 'Com erro',
+  };
 
   const visiveis = useMemo(() => {
     const q = busca.trim().toLowerCase();
@@ -347,6 +548,9 @@ export default function LogisticaPage() {
             </button>
             <button className={aba === 'gerar' ? 'btn-primary' : 'btn-secondary'} onClick={() => setAba('gerar')}>
               Gerar remessa
+            </button>
+            <button className={aba === 'multicanal' ? 'btn-primary' : 'btn-secondary'} onClick={() => setAba('multicanal')}>
+              <Truck className="h-4 w-4" /> Multicanal
             </button>
             {isAdmin && (
               <button className={aba === 'config' ? 'btn-primary' : 'btn-secondary'} onClick={() => setAba('config')}>
@@ -555,6 +759,219 @@ export default function LogisticaPage() {
                   </table>
                 )}
               </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ---------------------------------------------------------- multicanal */}
+      {aba === 'multicanal' && (
+        <div className="space-y-4">
+          {erroMulticanal && <Alert tone="red">{erroMulticanal}</Alert>}
+          {indicadores && !indicadores.modulo_habilitado && (
+            <Alert tone="amber">
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                <span>
+                  Módulo logístico em <strong>modo seguro</strong> (LOGISTICS_ENABLED desligado). Nenhum operador externo é
+                  chamado e as cotações retornam o motivo explícito — nada é simulado.
+                </span>
+              </div>
+            </Alert>
+          )}
+
+          {/* Indicadores */}
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            {[
+              { k: 'pendente', label: 'Aguardando expedição' },
+              { k: 'separacao', label: 'Em separação' },
+              { k: 'postado', label: 'Expedidos' },
+              { k: 'em_transito', label: 'Em trânsito' },
+              { k: 'entregue', label: 'Entregues' },
+            ].map((c) => (
+              <div key={c.k} className="card p-3">
+                <div className="text-xs uppercase text-slate-400">{c.label}</div>
+                <div className="mt-1 text-2xl font-semibold tabular-nums text-navy-900 dark:text-white">
+                  {formatNumber(indicadores?.contadores?.[c.k] ?? 0)}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="card p-3">
+              <div className="text-xs uppercase text-slate-400">Atrasadas</div>
+              <div className="mt-1 text-2xl font-semibold tabular-nums text-amber-600">{formatNumber(indicadores?.atrasadas ?? 0)}</div>
+            </div>
+            <div className="card p-3">
+              <div className="text-xs uppercase text-slate-400">Ocorrências</div>
+              <div className="mt-1 text-2xl font-semibold tabular-nums text-navy-900 dark:text-white">{formatNumber(indicadores?.ocorrencias ?? 0)}</div>
+            </div>
+            <div className="card p-3">
+              <div className="text-xs uppercase text-slate-400">Falhas de integração</div>
+              <div className="mt-1 text-2xl font-semibold tabular-nums text-red-600">{formatNumber(indicadores?.falhas_integracao ?? 0)}</div>
+            </div>
+            <div className="card p-3">
+              <div className="text-xs uppercase text-slate-400">Custo previsto / efetivo</div>
+              <div className="mt-1 text-lg font-semibold tabular-nums text-navy-900 dark:text-white">
+                {formatMoney(indicadores?.custo_previsto ?? 0)} / {formatMoney(indicadores?.custo_efetivo ?? 0)}
+              </div>
+            </div>
+          </div>
+
+          {/* Operadores */}
+          <div className="card p-4">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <h3 className="text-sm font-semibold text-navy-900 dark:text-white">Operadores</h3>
+              <div className="flex flex-wrap gap-2">
+                <select className="input" value={filtroLoja} onChange={(e) => setFiltroLoja(e.target.value)}>
+                  <option value="">Todas as lojas</option>
+                  <option value="RETAIL">RETAIL</option>
+                  <option value="WHOLESALE">WHOLESALE</option>
+                </select>
+                <select className="input" value={filtroProvider} onChange={(e) => setFiltroProvider(e.target.value)}>
+                  <option value="">Todos os operadores</option>
+                  {(indicadores?.providers ?? []).map((p) => (
+                    <option key={p.slug} value={p.slug}>
+                      {p.nome}
+                    </option>
+                  ))}
+                </select>
+                <button className="btn-secondary" onClick={() => void carregarMulticanal()} disabled={carregandoMulticanal}>
+                  <RefreshCw className="h-4 w-4" /> Atualizar
+                </button>
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {(indicadores?.providers ?? []).map((p) => (
+                <div key={p.slug} className="rounded-lg border border-slate-100 px-3 py-2 text-xs dark:border-navy-700">
+                  <div className="flex items-center gap-2">
+                    <span className="font-semibold text-navy-900 dark:text-white">{p.nome}</span>
+                    <Badge tone={p.habilitado ? 'green' : 'slate'}>{p.habilitado ? 'habilitado' : 'desabilitado'}</Badge>
+                  </div>
+                  <div className="mt-1 flex flex-wrap gap-1 text-[11px] text-slate-400">
+                    {Object.entries(p.capacidades ?? {})
+                      .filter(([, v]) => v)
+                      .map(([k]) => (
+                        <span key={k} className="rounded bg-slate-100 px-1.5 py-0.5 dark:bg-navy-800">{k}</span>
+                      ))}
+                  </div>
+                  {p.motivo && <div className="mt-1 max-w-64 text-[11px] text-amber-600">{p.motivo}</div>}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Remessas */}
+          <div className="card overflow-hidden">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 p-3 dark:border-navy-700">
+              <h3 className="text-sm font-semibold text-navy-900 dark:text-white">Remessas</h3>
+              <div className="flex flex-wrap gap-2">
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                  <input className="input pl-9" placeholder="Buscar pedido, rastreio ou CEP" value={buscaRemessa} onChange={(e) => setBuscaRemessa(e.target.value)} />
+                </div>
+                <button className="btn-secondary" onClick={() => void reconciliar()} disabled={reconciliando}>
+                  <RefreshCw className="h-4 w-4" /> Reconciliar
+                </button>
+                <button className="btn-secondary" onClick={() => void reprocessarWebhooks()} disabled={reprocessando}>
+                  <RefreshCw className="h-4 w-4" /> Reprocessar webhooks
+                </button>
+              </div>
+            </div>
+            {carregandoMulticanal ? (
+              <Spinner label="Carregando painel logístico..." />
+            ) : remessasVisiveis.length === 0 ? (
+              <EmptyState icon={<Truck className="h-6 w-6" />} title="Nenhuma remessa" description="As remessas criadas pelo motor multicanal aparecem aqui." />
+            ) : (
+              <table className="w-full text-sm">
+                <thead className="border-b border-slate-100 text-left text-xs uppercase text-slate-400 dark:border-navy-700">
+                  <tr>
+                    <th className="px-3 py-2">#</th>
+                    <th className="px-3 py-2">Pedido</th>
+                    <th className="px-3 py-2">Loja</th>
+                    <th className="px-3 py-2">Operador</th>
+                    <th className="px-3 py-2">Rastreio</th>
+                    <th className="px-2 py-2 text-right">Previsto</th>
+                    <th className="px-2 py-2 text-right">Efetivo</th>
+                    <th className="px-3 py-2">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {remessasVisiveis.map((r) => (
+                    <tr key={r.id} className="border-b border-slate-50 dark:border-navy-800">
+                      <td className="px-3 py-2 text-slate-400">{r.id}</td>
+                      <td className="px-3 py-2">#{r.venda_id}</td>
+                      <td className="px-3 py-2">{r.store_key ?? '—'}</td>
+                      <td className="px-3 py-2">{r.provider ?? '—'}</td>
+                      <td className="px-3 py-2 font-mono text-xs">{r.codigo_rastreamento ?? '—'}</td>
+                      <td className="px-2 py-2 text-right tabular-nums">{r.custo_previsto != null ? formatMoney(r.custo_previsto) : '—'}</td>
+                      <td className="px-2 py-2 text-right tabular-nums">{r.custo_efetivo != null ? formatMoney(r.custo_efetivo) : '—'}</td>
+                      <td className="px-3 py-2">
+                        <Badge tone={TOM[r.status] ?? 'slate'}>{ROTULO[r.status] ?? r.status}</Badge>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+
+          {/* Regras de frete */}
+          <div className="card p-4">
+            <h3 className="mb-3 text-sm font-semibold text-navy-900 dark:text-white">Regras comerciais de frete</h3>
+            <div className="mb-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+              <input className="input" placeholder="Nome da regra" value={novaRegra.nome} onChange={(e) => setNovaRegra((s) => ({ ...s, nome: e.target.value }))} />
+              <select className="input" value={novaRegra.tipo} onChange={(e) => setNovaRegra((s) => ({ ...s, tipo: e.target.value }))}>
+                {(tiposRegra.length ? tiposRegra : ['FRETE_GRATIS_VALOR', 'FRETE_SUBSIDIADO']).map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
+              </select>
+              <select className="input" value={novaRegra.store_key} onChange={(e) => setNovaRegra((s) => ({ ...s, store_key: e.target.value }))}>
+                <option value="">Todas as lojas</option>
+                <option value="RETAIL">RETAIL</option>
+                <option value="WHOLESALE">WHOLESALE</option>
+              </select>
+              <input className="input" placeholder="Prioridade" value={novaRegra.prioridade} onChange={(e) => setNovaRegra((s) => ({ ...s, prioridade: e.target.value }))} />
+              <button className="btn-accent" onClick={() => void criarRegraFrete()} disabled={ocupado || novaRegra.nome.trim().length < 3}>
+                Adicionar
+              </button>
+            </div>
+            {regras.length === 0 ? (
+              <p className="text-sm text-slate-500 dark:text-navy-300">Nenhuma regra cadastrada.</p>
+            ) : (
+              <table className="w-full text-sm">
+                <thead className="border-b border-slate-100 text-left text-xs uppercase text-slate-400 dark:border-navy-700">
+                  <tr>
+                    <th className="px-3 py-2">Nome</th>
+                    <th className="px-3 py-2">Tipo</th>
+                    <th className="px-3 py-2">Loja</th>
+                    <th className="px-2 py-2 text-right">Prioridade</th>
+                    <th className="px-3 py-2">Status</th>
+                    <th className="px-3 py-2" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {regras.map((r) => (
+                    <tr key={r.id} className="border-b border-slate-50 dark:border-navy-800">
+                      <td className="px-3 py-2">{r.nome}</td>
+                      <td className="px-3 py-2 text-xs text-slate-500">{r.tipo}</td>
+                      <td className="px-3 py-2">{r.store_key ?? 'Todas'}</td>
+                      <td className="px-2 py-2 text-right tabular-nums">{r.prioridade}</td>
+                      <td className="px-3 py-2">
+                        <Badge tone={r.ativo ? 'green' : 'slate'}>{r.ativo ? 'ativa' : 'inativa'}</Badge>
+                      </td>
+                      <td className="px-3 py-2 text-right">
+                        <button className="btn-ghost" onClick={() => void alternarRegra(r)} disabled={ocupado}>
+                          {r.ativo ? 'Desativar' : 'Ativar'}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             )}
           </div>
         </div>

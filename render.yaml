@@ -160,6 +160,33 @@ services:
       - key: WOOCOMMERCE_SYNC_DRY_RUN
         sync: false
 
+      # ── MOTOR DE FRETE E LOGÍSTICA MULTICANAL ──
+      # Desligado por padrão (modo seguro): nenhum operador é chamado e a
+      # cotação devolve o motivo explícito. Ative só após homologar cada
+      # transportadora. Credenciais de transportadora NUNCA são versionadas —
+      # ficam cifradas em `configuracoes` e são preenchidas pelo painel.
+      - key: LOGISTICS_ENABLED
+        sync: false
+      - key: LOGISTICS_DEFAULT_PROVIDER
+        sync: false
+      - key: LOGISTICS_SYNC_DRY_RUN
+        sync: false
+      - key: LOGISTICS_TRACKING_POLL_INTERVAL
+        sync: false
+      - key: LOGISTICS_RECONCILIATION_ENABLED
+        sync: false
+      # Segredo do webhook de CADA operador (copiado do operador ao cadastrar o
+      # webhook). Ausente = endpoint daquele operador DESABILITADO (falha
+      # fechada). Endpoint público: POST /api/logistics/webhooks/:provider
+      - key: LOGISTICS_WEBHOOK_MAX_BYTES
+        sync: false
+      - key: LOGISTICS_WEBHOOK_TOLERANCE_S
+        sync: false
+      - key: LOGISTICS_WEBHOOK_RATE_WINDOW_MS
+        sync: false
+      - key: LOGISTICS_WEBHOOK_RATE_MAX
+        sync: false
+
 # databases:
 #   - name: brobond-db
 #     databaseName: brobond

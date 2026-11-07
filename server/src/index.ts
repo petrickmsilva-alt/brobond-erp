@@ -419,6 +419,8 @@ import {
   corrigirDivergenciaRota,
 } from './commerce/woocommerce/rotas';
 import { publicWoocommerceWebhookRouter } from './commerce/woocommerce/webhookRouter';
+import { logisticsRouter } from '../../modules/logistics/api/routes';
+import { publicLogisticsWebhookRouter } from '../../modules/logistics/api/webhookRouter';
 import {
   initNegociosEngine,
   negociosABC,
@@ -502,6 +504,10 @@ app.use(publicGatewayRouter);
 // de fora, com assinatura HMAC sobre os bytes crus. Mesmo padrão: monta antes
 // do express.json() e do requireAuth. Loja desconhecida no path cai no next().
 app.use(publicWoocommerceWebhookRouter);
+// MOTOR DE FRETE: webhooks das TRANSPORTADORAS também chegam de fora, com
+// assinatura HMAC sobre os bytes crus. Mesmo padrão: monta antes do
+// express.json() e do requireAuth. Operador desconhecido no path cai no next().
+app.use(publicLogisticsWebhookRouter);
 
 app.use(express.json({ limit: '4mb' })); // fotos chegam em base64 (já reduzidas no navegador)
 app.use(express.urlencoded({ extended: true }));
@@ -1178,6 +1184,9 @@ app.get('/api/pdv/vendas/:id/pagamentos', wrap(pagamentosVenda));
 app.get('/api/logistica/config', wrap(obterConfigLogisticaHandler));
 app.put('/api/logistica/config', wrap(salvarConfigLogisticaHandler));
 app.get('/api/logistica/frete', wrap(cotarFrete));
+// ---- Motor de Frete e Logística Multicanal (modules/logistics) ----
+// Router próprio, com RBAC, recorte por empresa/loja e auditoria no módulo.
+app.use('/api/logistics', logisticsRouter);
 app.get('/api/envios/rastreio/:codigo', wrap(buscarEnvioPorCodigo));
 app.get('/api/envios/:id/eventos', wrap(eventosEnvio));
 app.post('/api/envios/:id/rastrear', wrap(rastrearEnvio));

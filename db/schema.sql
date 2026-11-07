@@ -2602,17 +2602,30 @@ CREATE TABLE IF NOT EXISTS envios (
   prazo_dias INTEGER,
   erro TEXT,
   idempotency_key TEXT,
+  -- Motor de frete multicanal (migration 0102): loja de origem, modalidade,
+  -- cotação de origem e custo previsto/efetivo.
+  store_key TEXT,
+  modalidade TEXT,
+  quote_id INTEGER,
+  servico_nome TEXT,
+  custo_previsto NUMERIC(12,2),
+  custo_efetivo NUMERIC(12,2),
   criado_por INTEGER REFERENCES usuarios(id),
   criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
   atualizado_em TIMESTAMPTZ,
   CONSTRAINT envios_status_valido CHECK (status IN (
-    'pendente', 'cotado', 'gerado', 'postado', 'em_transito', 'entregue',
-    'devolvido', 'extraviado', 'cancelado', 'erro'
+    'pendente', 'cotado', 'pronto_expedicao', 'separacao', 'embalada',
+    'etiqueta_pendente', 'etiqueta_gerada', 'gerado', 'postado', 'em_transito',
+    'em_rota', 'entregue', 'tentativa_falha', 'devolvido', 'extraviado',
+    'cancelado', 'erro'
   )),
+  CONSTRAINT envios_store_ck CHECK (
+    store_key IS NULL OR store_key IN ('RETAIL', 'WHOLESALE')
+  ),
   -- Um envio só é "postado" se houver prova: código de rastreamento OU a
   -- referência do provedor. Sem isso, "postado" é inalcançável.
   CONSTRAINT envios_postado_tem_prova CHECK (
-    status NOT IN ('postado', 'em_transito', 'entregue')
+    status NOT IN ('postado', 'em_transito', 'em_rota', 'entregue')
     OR codigo_rastreamento IS NOT NULL OR provider_ref IS NOT NULL
   ),
   CONSTRAINT envios_custo_valido CHECK (custo >= 0),
@@ -2639,6 +2652,12 @@ CREATE TABLE IF NOT EXISTS envio_eventos (
   mensagem TEXT,
   local TEXT,
   payload JSONB,
+  -- Motor de frete multicanal (migration 0102): status normalizado, código
+  -- externo, origem do evento (webhook/polling/manual) e chave de dedupe.
+  status_normalizado TEXT,
+  external_code TEXT,
+  origem TEXT,
+  dedupe_key TEXT,
   usuario_id INTEGER REFERENCES usuarios(id),
   criado_em TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -8622,3 +8641,184 @@ CREATE INDEX IF NOT EXISTS ix_woo_divergencia_produto
 
 -- 3) Última reconciliação por loja (água-marca operacional do painel).
 ALTER TABLE woocommerce_sync_state ADD COLUMN IF NOT EXISTS ultima_reconciliacao_em TIMESTAMPTZ;
+
+-- ============================================================================
+-- MOTOR DE FRETE E LOGÍSTICA MULTICANAL (migration 0102_logistics_engine.sql)
+-- Espelho das tabelas do módulo para instalação limpa (bootstrap + migrações).
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS logistics_shipping_rules (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL REFERENCES empresas(id),
+  store_key TEXT,
+  CONSTRAINT logistics_rules_store_ck CHECK (store_key IS NULL OR store_key IN ('RETAIL', 'WHOLESALE')),
+  nome TEXT NOT NULL,
+  descricao TEXT,
+  tipo TEXT NOT NULL,
+  CONSTRAINT logistics_rules_tipo_ck CHECK (tipo IN (
+    'FRETE_GRATIS_VALOR', 'FRETE_GRATIS_REGIAO', 'FRETE_SUBSIDIADO', 'DESCONTO_LOGISTICO',
+    'RESTRICAO_MODALIDADE', 'OPERADOR_PREFERENCIAL', 'RESTRICAO_REGIAO'
+  )),
+  prioridade INTEGER NOT NULL DEFAULT 0,
+  ativo BOOLEAN NOT NULL DEFAULT TRUE,
+  condicoes JSONB NOT NULL DEFAULT '{}'::jsonb,
+  acoes JSONB NOT NULL DEFAULT '{}'::jsonb,
+  inicio_em TIMESTAMPTZ,
+  fim_em TIMESTAMPTZ,
+  CONSTRAINT logistics_rules_vigencia_ck CHECK (
+    inicio_em IS NULL OR fim_em IS NULL OR fim_em >= inicio_em
+  ),
+  criado_por INTEGER REFERENCES usuarios(id),
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  atualizado_em TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS ix_logistics_rules_ativas
+  ON logistics_shipping_rules (empresa_id, ativo, prioridade DESC);
+CREATE INDEX IF NOT EXISTS ix_logistics_rules_store
+  ON logistics_shipping_rules (empresa_id, store_key) WHERE store_key IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS logistics_quotes (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL REFERENCES empresas(id),
+  store_key TEXT,
+  CONSTRAINT logistics_quotes_store_ck CHECK (store_key IS NULL OR store_key IN ('RETAIL', 'WHOLESALE')),
+  venda_id INTEGER REFERENCES vendas(id) ON DELETE SET NULL,
+  provider TEXT NOT NULL,
+  modalidade TEXT,
+  estado TEXT NOT NULL DEFAULT 'OK',
+  CONSTRAINT logistics_quotes_estado_ck CHECK (estado IN (
+    'OK', 'PROVIDER_UNAVAILABLE', 'CREDENTIALS_MISSING', 'QUOTE_FAILED',
+    'INVALID_DESTINATION', 'NO_SERVICE_AVAILABLE'
+  )),
+  cep_origem TEXT,
+  cep_destino TEXT,
+  peso_g INTEGER,
+  volumes INTEGER,
+  valor_declarado NUMERIC(12,2),
+  valor_pedido NUMERIC(12,2),
+  opcoes JSONB NOT NULL DEFAULT '[]'::jsonb,
+  opcao_selecionada TEXT,
+  valor_escolhido NUMERIC(12,2),
+  prazo_escolhido INTEGER,
+  frete_gratis BOOLEAN NOT NULL DEFAULT FALSE,
+  subsidio NUMERIC(12,2) NOT NULL DEFAULT 0,
+  valor_final NUMERIC(12,2),
+  referencia_externa TEXT,
+  motivo TEXT,
+  fingerprint TEXT NOT NULL,
+  valida_ate TIMESTAMPTZ,
+  criado_por INTEGER REFERENCES usuarios(id),
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  atualizado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT logistics_quotes_valores_ck CHECK (
+    (valor_escolhido IS NULL OR valor_escolhido >= 0)
+    AND subsidio >= 0
+    AND (valor_final IS NULL OR valor_final >= 0)
+  )
+);
+CREATE INDEX IF NOT EXISTS ix_logistics_quotes_venda
+  ON logistics_quotes (empresa_id, venda_id, criado_em DESC);
+CREATE INDEX IF NOT EXISTS ix_logistics_quotes_fingerprint
+  ON logistics_quotes (empresa_id, fingerprint, criado_em DESC);
+CREATE INDEX IF NOT EXISTS ix_logistics_quotes_store
+  ON logistics_quotes (empresa_id, store_key) WHERE store_key IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS logistics_packages (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL REFERENCES empresas(id),
+  envio_id INTEGER NOT NULL REFERENCES envios(id) ON DELETE CASCADE,
+  indice INTEGER NOT NULL DEFAULT 1,
+  peso_g INTEGER,
+  altura_cm NUMERIC(8,2),
+  largura_cm NUMERIC(8,2),
+  comprimento_cm NUMERIC(8,2),
+  codigo_rastreamento TEXT,
+  provider_ref TEXT,
+  observacao TEXT,
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  atualizado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT logistics_packages_indice_ck CHECK (indice >= 1),
+  CONSTRAINT logistics_packages_peso_ck CHECK (peso_g IS NULL OR peso_g >= 0)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_logistics_packages_indice
+  ON logistics_packages (envio_id, indice);
+CREATE INDEX IF NOT EXISTS ix_logistics_packages_envio
+  ON logistics_packages (empresa_id, envio_id);
+
+CREATE TABLE IF NOT EXISTS logistics_labels (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL REFERENCES empresas(id),
+  envio_id INTEGER NOT NULL REFERENCES envios(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL,
+  provider_ref TEXT,
+  url_externa TEXT,
+  arquivo_id INTEGER,
+  mime TEXT,
+  tamanho_bytes INTEGER,
+  estado TEXT NOT NULL DEFAULT 'PENDENTE',
+  CONSTRAINT logistics_labels_estado_ck CHECK (estado IN ('PENDENTE', 'GERADA', 'ERRO', 'CANCELADA')),
+  idempotency_key TEXT,
+  erro TEXT,
+  gerada_em TIMESTAMPTZ,
+  criado_por INTEGER REFERENCES usuarios(id),
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  atualizado_em TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_logistics_labels_idempotency
+  ON logistics_labels (empresa_id, idempotency_key) WHERE idempotency_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS ix_logistics_labels_envio
+  ON logistics_labels (empresa_id, envio_id, criado_em DESC);
+
+CREATE TABLE IF NOT EXISTS logistics_webhook_inbox (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL REFERENCES empresas(id),
+  provider TEXT NOT NULL,
+  external_delivery_id TEXT,
+  event_type TEXT,
+  payload JSONB,
+  payload_hash TEXT NOT NULL,
+  assinatura_ok BOOLEAN NOT NULL DEFAULT FALSE,
+  status TEXT NOT NULL DEFAULT 'recebido',
+  CONSTRAINT logistics_webhook_inbox_status_ck CHECK (status IN (
+    'recebido', 'enfileirado', 'processado', 'erro', 'rejeitado', 'duplicado'
+  )),
+  attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+  outbox_id INTEGER,
+  correlation_id TEXT,
+  received_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  processed_at TIMESTAMPTZ,
+  last_error TEXT,
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  atualizado_em TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_logistics_webhook_delivery
+  ON logistics_webhook_inbox (empresa_id, provider, external_delivery_id)
+  WHERE external_delivery_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_logistics_webhook_dedupe
+  ON logistics_webhook_inbox (empresa_id, provider, event_type, payload_hash)
+  WHERE external_delivery_id IS NULL;
+CREATE INDEX IF NOT EXISTS ix_logistics_webhook_provider_status
+  ON logistics_webhook_inbox (empresa_id, provider, status, received_at DESC);
+CREATE INDEX IF NOT EXISTS ix_logistics_webhook_pendentes
+  ON logistics_webhook_inbox (status, received_at) WHERE status IN ('recebido', 'enfileirado');
+
+CREATE TABLE IF NOT EXISTS logistics_audit_logs (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL REFERENCES empresas(id),
+  store_key TEXT,
+  entidade TEXT NOT NULL,
+  entidade_id INTEGER,
+  acao TEXT NOT NULL,
+  descricao TEXT,
+  dados JSONB,
+  usuario_id INTEGER REFERENCES usuarios(id),
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS ix_logistics_audit_entidade
+  ON logistics_audit_logs (empresa_id, entidade, entidade_id, criado_em DESC);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_logistics_evento_dedupe
+  ON envio_eventos (envio_id, dedupe_key) WHERE dedupe_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS ix_logistics_evento_status
+  ON envio_eventos (empresa_id, envio_id, status_normalizado);
+CREATE INDEX IF NOT EXISTS ix_envios_store
+  ON envios (empresa_id, store_key, status) WHERE store_key IS NOT NULL;

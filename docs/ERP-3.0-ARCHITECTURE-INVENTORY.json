@@ -1,26 +1,26 @@
 {
-  "gerado_em": "2026-11-06T21:41:42.649Z",
+  "gerado_em": "2026-11-07T04:17:40.005Z",
   "fonte_de_verdade_do_schema": "db/schema.sql + db/migrations/*.sql (PostgreSQL); Prisma = bounded context do commerce",
   "migrations": {
-    "sql": 100,
-    "sql_com_conteudo": 100,
+    "sql": 102,
+    "sql_com_conteudo": 102,
     "prisma": 7
   },
   "tabelas": {
-    "total": 204,
-    "com_empresa_id": 176,
+    "total": 212,
+    "com_empresa_id": 184,
     "sem_empresa_id": 28,
-    "fora_do_prisma": 193
+    "fora_do_prisma": 201
   },
-  "indices": 543,
-  "constraints": 368,
+  "indices": 568,
+  "constraints": 385,
   "recursos": {
-    "total": 172,
-    "com_tabela": 172,
-    "multiempresa": 154,
-    "somente_leitura": 79,
+    "total": 174,
+    "com_tabela": 174,
+    "multiempresa": 156,
+    "somente_leitura": 81,
     "rbac_restrito": 80,
-    "cobertura_tenant_pct": 89.5
+    "cobertura_tenant_pct": 89.7
   },
   "crm": [
     {
@@ -87,10 +87,10 @@
     "com_recurso": 107
   },
   "rotas": {
-    "total": 468,
+    "total": 474,
     "por_metodo": {
-      "GET": 208,
-      "POST": 221,
+      "GET": 210,
+      "POST": 225,
       "PUT": 22,
       "DELETE": 14,
       "PATCH": 3
@@ -104,6 +104,10 @@
       {
         "base": "/api/commerce/payments",
         "router": "paymentsRouter"
+      },
+      {
+        "base": "/api/logistics",
+        "router": "logisticsRouter"
       },
       {
         "base": "/api/connectors",
@@ -197,17 +201,17 @@
   },
   "testes": {
     "server": {
-      "arquivos": 277,
-      "casos": 2204
+      "arquivos": 281,
+      "casos": 2320
     },
     "client": {
       "arquivos": 133,
-      "casos": 1132
+      "casos": 1140
     },
-    "total": 3336
+    "total": 3460
   },
   "integracoes": {
-    "arquivos_modules": 56,
+    "arquivos_modules": 78,
     "arquivos_server_modules": 1
   },
   "achados": [
@@ -260,6 +264,36 @@
       "nivel": "AVISO",
       "regra": "TABELA_SEM_RECURSO",
       "mensagem": "A tabela \"gateway_webhook_events\" tem empresa_id, mas nenhum recurso a expõe no CRUD genérico (escopo aplicado por endpoint próprio)."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TABELA_SEM_RECURSO",
+      "mensagem": "A tabela \"logistics_audit_logs\" tem empresa_id, mas nenhum recurso a expõe no CRUD genérico (escopo aplicado por endpoint próprio)."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TABELA_SEM_RECURSO",
+      "mensagem": "A tabela \"logistics_labels\" tem empresa_id, mas nenhum recurso a expõe no CRUD genérico (escopo aplicado por endpoint próprio)."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TABELA_SEM_RECURSO",
+      "mensagem": "A tabela \"logistics_packages\" tem empresa_id, mas nenhum recurso a expõe no CRUD genérico (escopo aplicado por endpoint próprio)."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TABELA_SEM_RECURSO",
+      "mensagem": "A tabela \"logistics_quotes\" tem empresa_id, mas nenhum recurso a expõe no CRUD genérico (escopo aplicado por endpoint próprio)."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TABELA_SEM_RECURSO",
+      "mensagem": "A tabela \"logistics_shipping_rules\" tem empresa_id, mas nenhum recurso a expõe no CRUD genérico (escopo aplicado por endpoint próprio)."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TABELA_SEM_RECURSO",
+      "mensagem": "A tabela \"logistics_webhook_inbox\" tem empresa_id, mas nenhum recurso a expõe no CRUD genérico (escopo aplicado por endpoint próprio)."
     },
     {
       "nivel": "AVISO",
@@ -335,6 +369,16 @@
       "nivel": "AVISO",
       "regra": "TENANT_SEM_TESTE",
       "mensagem": "O recurso \"woocommerce_sync_state\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TENANT_SEM_TESTE",
+      "mensagem": "O recurso \"woocommerce_webhook_events\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TENANT_SEM_TESTE",
+      "mensagem": "O recurso \"woocommerce_reconciliacao_divergencias\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
     },
     {
       "nivel": "AVISO",
@@ -495,6 +539,12 @@
     "listas_preco_historico",
     "locais",
     "login_tentativas",
+    "logistics_audit_logs",
+    "logistics_labels",
+    "logistics_packages",
+    "logistics_quotes",
+    "logistics_shipping_rules",
+    "logistics_webhook_inbox",
     "loyalty_movements",
     "loyalty_programs",
     "loyalty_tiers",
@@ -565,6 +615,8 @@
     "webhook_entregas",
     "webhooks",
     "woocommerce_product_links",
-    "woocommerce_sync_state"
+    "woocommerce_reconciliacao_divergencias",
+    "woocommerce_sync_state",
+    "woocommerce_webhook_events"
   ]
 }

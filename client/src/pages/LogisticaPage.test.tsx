@@ -308,3 +308,113 @@ describe('Logística — tela', () => {
     expect(screen.queryByTitle('Cancelar')).not.toBeInTheDocument();
   });
 });
+
+// ============================================================================
+// MOTOR MULTICANAL — painel integrado
+// ============================================================================
+const PAINEL = {
+  modulo_habilitado: true,
+  provider_padrao: 'melhor_envio',
+  contadores: { pendente: 3, separacao: 1, postado: 5, em_transito: 2, entregue: 9 },
+  atrasadas: 1,
+  ocorrencias: 4,
+  falhas_integracao: 2,
+  custo_previsto: 120.5,
+  custo_efetivo: 118.2,
+  lojas: [
+    { store_key: 'RETAIL', remessas: 12 },
+    { store_key: 'WHOLESALE', remessas: 8 },
+  ],
+  webhooks: { processado: 6, erro: 2 },
+  providers: [
+    { slug: 'melhor_envio', nome: 'Melhor Envio', configurado: true, habilitado: true, motivo: null, capacidades: { cotacao: true, remessa: true, etiqueta: true, rastreio: true, cancelamento: false, webhook: false } },
+    { slug: 'correios', nome: 'Correios', configurado: false, habilitado: false, motivo: 'Sem credencial configurada.', capacidades: { cotacao: true, remessa: false, etiqueta: false, rastreio: true, cancelamento: false, webhook: false } },
+  ],
+  gerado_em: '2026-11-07T10:00:00.000Z',
+};
+
+const REGRAS = {
+  regras: [
+    { id: 1, nome: 'Frete grátis acima de 300', tipo: 'FRETE_GRATIS_VALOR', store_key: null, prioridade: 10, ativo: true, condicoes: { valor_minimo: 300 }, acoes: {} },
+    { id: 2, nome: 'Subsídio atacado', tipo: 'FRETE_SUBSIDIADO', store_key: 'WHOLESALE', prioridade: 5, ativo: false, condicoes: {}, acoes: { percentual: 50 } },
+  ],
+  tipos: ['FRETE_GRATIS_VALOR', 'FRETE_SUBSIDIADO'],
+};
+
+const REMESSAS = {
+  rows: [
+    { id: 21, venda_id: 100, provider: 'melhor_envio', store_key: 'RETAIL', status: 'em_transito', codigo_rastreamento: 'BR999', cep_destino: '30130110', custo_previsto: 39.9, custo_efetivo: 41.2, prazo_dias: 3, criado_em: '2026-11-01T10:00:00.000Z' },
+    { id: 22, venda_id: 101, provider: 'correios', store_key: 'WHOLESALE', status: 'entregue', codigo_rastreamento: 'BR111', cep_destino: '20040020', custo_previsto: 22, custo_efetivo: 22, prazo_dias: 7, criado_em: '2026-11-02T10:00:00.000Z' },
+  ],
+  total: 2,
+};
+
+describe('Logística — painel multicanal', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('mostra indicadores, operadores e remessas com custo previsto/efetivo', async () => {
+    mockRotas({ '/envios?': ENVIOS, '/logistics/painel': PAINEL, '/logistics/rules': REGRAS, '/logistics/shipments': REMESSAS });
+    renderPage();
+
+    fireEvent.click(await screen.findByText('Multicanal'));
+
+    expect(await screen.findByText('Em trânsito')).toBeInTheDocument();
+    expect(screen.getAllByText('Melhor Envio').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Correios').length).toBeGreaterThan(0);
+    expect(screen.getByText('BR999')).toBeInTheDocument();
+    expect(screen.getByText('Frete grátis acima de 300')).toBeInTheDocument();
+    // Operador sem credencial exibe o motivo — nunca "integrado".
+    expect(screen.getByText(/Sem credencial configurada/)).toBeInTheDocument();
+    expect(screen.getByText('R$ 39,90')).toBeInTheDocument();
+    expect(screen.getByText('R$ 41,20')).toBeInTheDocument();
+  });
+
+  it('mostra o aviso de modo seguro quando o módulo está desabilitado', async () => {
+    mockRotas({
+      '/envios?': ENVIOS,
+      '/logistics/painel': { ...PAINEL, modulo_habilitado: false },
+      '/logistics/rules': REGRAS,
+      '/logistics/shipments': REMESSAS,
+    });
+    renderPage();
+
+    fireEvent.click(await screen.findByText('Multicanal'));
+    expect(await screen.findByText(/modo seguro/)).toBeInTheDocument();
+  });
+
+  it('estado vazio: sem remessas mostra a mensagem de vazio', async () => {
+    mockRotas({
+      '/envios?': ENVIOS,
+      '/logistics/painel': PAINEL,
+      '/logistics/rules': REGRAS,
+      '/logistics/shipments': { rows: [], total: 0 },
+    });
+    renderPage();
+
+    fireEvent.click(await screen.findByText('Multicanal'));
+    expect(await screen.findByText('Nenhuma remessa')).toBeInTheDocument();
+  });
+
+  it('erro na carga mostra alerta em vez de quebrar a tela', async () => {
+    apiGet.mockImplementation(((path: string) => {
+      if (path.startsWith('/envios?')) return Promise.resolve(ENVIOS);
+      return Promise.reject(new Error('falha de rede'));
+    }) as never);
+    renderPage();
+
+    fireEvent.click(await screen.findByText('Multicanal'));
+    expect(await screen.findByText(/Não foi possível carregar o painel logístico/)).toBeInTheDocument();
+  });
+
+  it('reprocessar webhooks chama o endpoint de recuperação', async () => {
+    mockRotas({ '/envios?': ENVIOS, '/logistics/painel': PAINEL, '/logistics/rules': REGRAS, '/logistics/shipments': REMESSAS });
+    apiPost.mockResolvedValue({ recuperados: 2 } as never);
+    renderPage();
+
+    fireEvent.click(await screen.findByText('Multicanal'));
+    fireEvent.click(await screen.findByText('Reprocessar webhooks'));
+    await waitFor(() => expect(apiPost).toHaveBeenCalledWith('/logistics/webhooks/recuperar', {}));
+  });
+});

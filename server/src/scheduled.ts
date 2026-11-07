@@ -487,6 +487,64 @@ async function reconciliarMultiLojaSeVencida(): Promise<number> {
   return detectadas;
 }
 
+/**
+ * Polling de rastreio (contingência quando o operador não envia webhook).
+ * Consulta o operador para as remessas vivas que já têm código e não foram
+ * atualizadas dentro do intervalo configurado. Desligado por padrão (exige o
+ * motor ligado). Uma remessa que falha não interrompe as demais.
+ */
+async function pollRastreioLogistica(): Promise<number> {
+  const { logisticsHabilitado, intervaloPollMin } = await import('../../modules/logistics/application/quotes');
+  if (!logisticsHabilitado()) return 0;
+  const intervaloMin = intervaloPollMin();
+  if (intervaloMin <= 0) return 0;
+  const { carrier, CARRIER_NULO } = await import('../../modules/logistics/providers/contract');
+  const { registrarCarriers } = await import('../../modules/logistics/providers/registry');
+  const { sincronizarRastreio } = await import('../../modules/logistics/application/tracking');
+  registrarCarriers();
+  const R_ENVIO = getResource('envios')!;
+  const envios = (await getStore().list(R_ENVIO, { page: 1, pageSize: 500, sort: 'atualizado_em', dir: 'asc' })).rows;
+  const limite = Date.now() - intervaloMin * 60_000;
+  let atualizados = 0;
+  for (const envio of envios) {
+    const status = String(envio.status);
+    if (['entregue', 'cancelado', 'extraviado', 'pendente'].includes(status)) continue;
+    if (!envio.codigo_rastreamento) continue;
+    const ultimo = Date.parse(String(envio.atualizado_em || envio.criado_em || ''));
+    if (Number.isFinite(ultimo) && ultimo > limite) continue;
+    try {
+      const adapter = carrier(String(envio.provider)) ?? CARRIER_NULO;
+      const r = await sincronizarRastreio(Number(envio.empresa_id), Number(envio.id), adapter);
+      if (r.ok && r.gravados > 0) atualizados += 1;
+    } catch { /* a remessa falhou; as outras seguem */ }
+  }
+  return atualizados;
+}
+
+/**
+ * Reconciliação logística periódica (contingência): compara as remessas vivas
+ * de cada empresa com o operador e corrige SOMENTE divergências seguras
+ * (AUTOMATICAS). Divergências financeiras/ambíguas ficam para decisão humana.
+ *
+ * Desligada por padrão: só roda com `LOGISTICS_RECONCILIATION_ENABLED` ligado e
+ * o motor habilitado. Uma empresa indisponível não interrompe as demais, e o
+ * módulo logístico NUNCA derruba a sincronização das lojas.
+ */
+async function reconciliarLogisticaSeHabilitada(): Promise<number> {
+  const { reconciliacaoHabilitada } = await import('../../modules/logistics/application/quotes');
+  if (!reconciliacaoHabilitada()) return 0;
+  const { reconciliarEmpresa } = await import('../../modules/logistics/application/reconciliation');
+  const empresas = (await getStore().list(getResource('empresas')!, { page: 1, pageSize: 1000 })).rows;
+  let corrigidas = 0;
+  for (const empresa of empresas) {
+    try {
+      const r = await reconciliarEmpresa(Number(empresa.id), 50);
+      corrigidas += r.corrigidas;
+    } catch { /* a empresa falhou; as outras seguem */ }
+  }
+  return corrigidas;
+}
+
 /** Recuperação de pedidos de marketplace e eventos de pedido (conversão, notificação, sincronização). */
 async function executarPedidosCron(): Promise<ResultadoExecutorCron> {
   const falhas: string[] = [];
@@ -503,6 +561,11 @@ async function executarPedidosCron(): Promise<ResultadoExecutorCron> {
   // Contingência: reconciliação periódica (throttled por loja) — detecta o que o
   // webhook/polling não alcançaram. Nunca escreve nas lojas.
   try { itens += await reconciliarMultiLojaSeVencida(); } catch { falhas.push('reconciliacao_multi_loja'); }
+  // Contingência logística: reconcilia remessas com o operador (desligada por
+  // padrão). Uma falha aqui NÃO derruba a sincronização das lojas.
+  try { itens += await reconciliarLogisticaSeHabilitada(); } catch { falhas.push('reconciliacao_logistica'); }
+  // Polling de rastreio: contingência quando o operador não envia webhook.
+  try { itens += await pollRastreioLogistica(); } catch { falhas.push('poll_rastreio_logistica'); }
   return { itens, detalhes: [], falhas };
 }
 

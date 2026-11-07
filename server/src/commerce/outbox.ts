@@ -188,6 +188,15 @@ async function processarEntrada(row: Row): Promise<Desfecho> {
       if (r === 'ignorado') return { status: 'erro', erro: 'Entrega de webhook desconhecida ou loja desabilitada.' };
       return { status: 'processado' };
     }
+    if (acao.startsWith('logistics-')) {
+      // MOTOR DE FRETE: as ações logísticas assíncronas (webhook de
+      // transportadora, atualização de rastreio, sincronização de rastreio para
+      // a loja) reusam ESTA fila — nenhuma fila paralela. O import é dinâmico
+      // para não criar ciclo entre commerce/outbox e modules/logistics.
+      const { processarAcaoLogistica } = await import('../../../modules/logistics/application/jobs');
+      const desfecho = await processarAcaoLogistica(acao, payload, empresaId, Number(row.store_key ?? 0) || null);
+      return desfecho;
+    }
     return { status: 'erro', erro: 'Ação de sincronização desconhecida.' };
   }
 

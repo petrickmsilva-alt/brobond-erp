@@ -14,6 +14,7 @@ import { getStore } from './services';
 import { currentUser } from './auth';
 import { RESOURCES } from './resources';
 import { PAYMENT_RESOURCES } from '../../modules/payments/infrastructure/resources';
+import { LOGISTICS_RESOURCES } from '../../modules/logistics/infrastructure/resources';
 
 /** Colunas binárias/secretas que nunca entram no backup (fotos e segredos). */
 const EXCLUIR_COLUNAS = new Set(['dados', 'thumb', 'senha_hash', 'mfa_secret', 'convite_token_hash', 'reset_token_hash']);
@@ -35,7 +36,7 @@ async function colunasDaTabela(pool: any, tabela: string): Promise<string[]> {
 export async function gerarBackupSql(usuario: string): Promise<string> {
   const { pool } = await import('./db');
   if (!pool) throw new HttpError(503, 'Banco indisponível.');
-  const tabelas = Array.from(new Set([...Object.values(RESOURCES), ...PAYMENT_RESOURCES].map((r) => r.table))).sort();
+  const tabelas = Array.from(new Set([...Object.values(RESOURCES), ...PAYMENT_RESOURCES, ...LOGISTICS_RESOURCES].map((r) => r.table))).sort();
   const client = await pool.connect();
   try {
     await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
@@ -216,7 +217,7 @@ export async function backupInfo(_req: Request, res: Response) {
   let tabelas = 0;
   if (pool) {
     try {
-      for (const tabela of Array.from(new Set([...Object.values(RESOURCES), ...PAYMENT_RESOURCES].map((r) => r.table)))) {
+      for (const tabela of Array.from(new Set([...Object.values(RESOURCES), ...PAYMENT_RESOURCES, ...LOGISTICS_RESOURCES].map((r) => r.table)))) {
         const r = await pool.query(`SELECT COUNT(*)::int AS n FROM "${tabela}"`);
         registros += Number(r.rows[0]?.n || 0);
         tabelas++;

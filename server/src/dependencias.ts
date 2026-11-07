@@ -500,6 +500,9 @@ export const RELACOES_FK: RelacaoFkDeclarada[] = [
   // ticket de atendimento — vínculo histórico protegido, nunca apagado.
   { alvo: 'vendas', tabela: 'loyalty_movements', colunas: ['venda_id'], acao: 'NO_ACTION' },
   { alvo: 'vendas', tabela: 'service_tickets', colunas: ['venda_id'], acao: 'NO_ACTION' },
+  // Motor de frete (0102): a cotação guarda a venda que a originou (SET NULL —
+  // a cotação é histórico de preço e sobrevive ao cancelamento do pedido).
+  { alvo: 'vendas', tabela: 'logistics_quotes', colunas: ['venda_id'], acao: 'SET_NULL' },
 
   // compras — todas as FKs de entrada
   { alvo: 'compras', tabela: 'itens_compra', colunas: ['compra_id'], acao: 'CASCADE' },

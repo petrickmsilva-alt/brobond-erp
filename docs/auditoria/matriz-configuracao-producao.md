@@ -210,6 +210,32 @@ reconciliação. Todas opcionais; sem elas os padrões seguros valem.
 | `WOOCOMMERCE_RECONCILIACAO_MAX_PAGINAS` | `reconciliacao.ts` | Não | 10 páginas de 100 produtos por loja | ausente |
 | `WOOCOMMERCE_RECONCILIACAO_INTERVALO_MIN` | `server/src/scheduled.ts` | Não | 60 min (mínimo 5) | ausente |
 
+### Motor de Frete e Logística Multicanal — `modules/logistics` — migration 0102
+
+Motor desacoplado de cotação, expedição, etiqueta, rastreamento e reconciliação.
+Reusa `envios`/`envio_eventos`, `commerce_outbox` e o registry multi-loja. Sem
+`LOGISTICS_ENABLED`, o módulo sobe em MODO SEGURO: nenhum operador é chamado e
+toda cotação devolve estado explícito (`CREDENTIALS_MISSING`).
+
+| Variável | Arquivo | Obrigatória | Quando ausente | Render |
+|---|---|---|---|---|
+| `LOGISTICS_ENABLED` | `modules/logistics/application/quotes.ts` | Não | Módulo DESLIGADO (modo seguro): cotação não chama operador, devolve `CREDENTIALS_MISSING` | ausente |
+| `LOGISTICS_QUOTE_ALLOW_DISABLED` | `quotes.ts` | Não | Com `LOGISTICS_ENABLED=false`, permite cotar mesmo assim (homologação) | ausente |
+| `LOGISTICS_DEFAULT_PROVIDER` | `quotes.ts` | Não | `manual` (nenhuma cotação automática) | ausente |
+| `LOGISTICS_SYNC_DRY_RUN` | `modules/logistics/integration/woocommerce.ts` (`logisticsDryRun`) | Não | Publica de verdade na loja (respeitando ainda o `WOOCOMMERCE_SYNC_DRY_RUN` global) | ausente |
+| `LOGISTICS_TRACKING_POLL_INTERVAL` | `modules/logistics/application/quotes.ts` (`intervaloPollMin`) | Não | 1800 s (30 min). `0` desliga o polling de rastreio | ausente |
+| `LOGISTICS_RECONCILIATION_ENABLED` | `modules/logistics/application/quotes.ts` (`reconciliacaoHabilitada`) | Não | Reconciliação periódica DESLIGADA (exige também `LOGISTICS_ENABLED`) | ausente |
+| `LOGISTICS_DEFAULT_MODALIDADE` | `modules/logistics/application/contexto.ts` | Não | `CIF` | ausente |
+| `LOGISTICS_QUOTE_TTL_MIN` | `quotes.ts` | Não | 30 min (teto 1440) — validade da cotação | ausente |
+| `LOGISTICS_EMPRESA_ID` | `modules/logistics/infrastructure/webhookRecebimento.ts` | Não | Empresa padrão (1) para webhooks de operador | ausente |
+| `LOGISTICS_<PROVIDER>_EMPRESA_ID` | `webhookRecebimento.ts` | Não | Cai em `LOGISTICS_EMPRESA_ID` e na padrão (1) | ausente |
+| `LOGISTICS_<PROVIDER>_ENABLED` | `modules/logistics/providers/registry.ts` | Não | Operador com contrato pendente fica DESABILITADO mesmo com credencial | ausente |
+| `LOGISTICS_<PROVIDER>_WEBHOOK_SECRET` | `modules/logistics/infrastructure/webhookSeguranca.ts` | Condicional (webhook) | Endpoint do operador recusa toda entrega (falha fechada) | ausente |
+| `LOGISTICS_WEBHOOK_MAX_BYTES` | `webhookSeguranca.ts` | Não | 1 MiB (teto 8 MiB) | ausente |
+| `LOGISTICS_WEBHOOK_TOLERANCE_S` | `webhookSeguranca.ts` | Não | 300 s (0 desliga a checagem de timestamp) | ausente |
+| `LOGISTICS_WEBHOOK_RATE_WINDOW_MS` | `webhookSeguranca.ts` | Não | 60 000 ms | ausente |
+| `LOGISTICS_WEBHOOK_RATE_MAX` | `webhookSeguranca.ts` | Não | 120 entregas por janela/IP | ausente |
+
 ## 9. Armazenamento, observabilidade e ajustes
 
 | Variável | Arquivo:linha | Obrigatória | Quando ausente | Render |
