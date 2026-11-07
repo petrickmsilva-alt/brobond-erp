@@ -2866,6 +2866,9 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 -- Item de venda: o preço de tabela e a lista que o originaram ficam congelados.
 ALTER TABLE itens_venda ADD COLUMN IF NOT EXISTS lista_preco_id INTEGER REFERENCES listas_preco(id) ON DELETE SET NULL;
 ALTER TABLE itens_venda ADD COLUMN IF NOT EXISTS preco_tabela NUMERIC(12,2);
+-- 0103 (Agente 07): EVIDÊNCIA do preço informado pela loja externa na importação
+-- WooCommerce. A autoridade do preço da venda continua sendo o ERP (A06-01).
+ALTER TABLE itens_venda ADD COLUMN IF NOT EXISTS preco_externo_recebido NUMERIC(12,2);
 
 -- Item de compra: quanto já foi recebido (parcial).
 ALTER TABLE itens_compra ADD COLUMN IF NOT EXISTS quantidade_recebida NUMERIC(12,3) NOT NULL DEFAULT 0;
@@ -6706,11 +6709,22 @@ CREATE TABLE IF NOT EXISTS commerce_precos (
   preco_promo NUMERIC(12,2) CHECK (preco_promo IS NULL OR preco_promo >= 0),
   vigencia_inicio DATE,
   vigencia_fim DATE,
+  -- 0103 (Agente 07): escopo de LOJA do override (RETAIL/WHOLESALE). NULL nas
+  -- linhas legadas — nunca reatribuídas arbitrariamente (A06-12).
+  store_key TEXT,
+  CONSTRAINT commerce_precos_store_key_ck CHECK (store_key IS NULL OR store_key IN ('RETAIL', 'WHOLESALE')),
   criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
-  atualizado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
-  CONSTRAINT uq_commerce_precos UNIQUE (empresa_id, produto_id, canal)
+  atualizado_em TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- Unicidade por empresa+produto+canal+LOJA: COALESCE preserva a chave antiga das
+-- linhas legadas (store_key NULL) e separa RETAIL de WHOLESALE (A06-12). A
+-- transição da constraint antiga é feita pela migration 0103 (não aqui, para
+-- não tentar dropar um índice que ainda sustenta a constraint em bancos legados).
+CREATE UNIQUE INDEX IF NOT EXISTS uq_commerce_precos
+  ON commerce_precos (empresa_id, produto_id, canal, COALESCE(store_key, ''));
 CREATE INDEX IF NOT EXISTS ix_commerce_precos_empresa ON commerce_precos (empresa_id, canal);
+CREATE INDEX IF NOT EXISTS ix_commerce_precos_store
+  ON commerce_precos (empresa_id, store_key, canal) WHERE store_key IS NOT NULL;
 
 -- ----------------------------------------------------------------------------
 -- FILA DE PUBLICAÇÃO multicanal — máquina de estados + idempotência

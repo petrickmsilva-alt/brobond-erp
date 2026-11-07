@@ -59,6 +59,32 @@ export function minimoAtacado(produto: Row): number {
   return Math.max(0, Math.trunc(Number(produto?.atacado_min_qtd ?? 0) || 0));
 }
 
+/**
+ * A06-11 — ENFORCEMENT da quantidade mínima de atacado no BACKEND do ERP.
+ *
+ * O `atacado_min_qtd` publicado como metadado na loja (`_brobond_atacado_min_qtd`)
+ * NÃO é garantia: depende de a loja externa aplicar a regra, o que só se prova
+ * por homologação (nunca presumida). O ERP, porém, recusa um pedido WHOLESALE
+ * com item abaixo do mínimo — exceto quando há EXCEÇÃO comercial explícita e
+ * auditada (preço/quantidade negociados), que fica registrada.
+ *
+ * Devolve `null` quando não há bloqueio; senão o motivo da recusa.
+ */
+export function validarMinimoAtacado(
+  store: StoreKey,
+  produto: Row,
+  quantidade: number,
+  excecao?: { autorizada: boolean; motivo?: string } | null
+): string | null {
+  if (store !== 'WHOLESALE') return null;
+  const minimo = minimoAtacado(produto);
+  if (minimo <= 0) return null;
+  const qtd = Math.max(0, Math.trunc(Number(quantidade) || 0));
+  if (qtd >= minimo) return null;
+  if (excecao?.autorizada) return null;
+  return `Quantidade ${qtd} abaixo do mínimo de atacado (${minimo}) do produto ${String(produto?.sku || produto?.id || '')}.`;
+}
+
 export type MotivoPrecoInvalido = { codigo: 'SEM_PRECO' | 'ABAIXO_MINIMO'; mensagem: string };
 
 /**
