@@ -28,7 +28,13 @@ const METHOD_BY_LEGACY: Record<MetodoCobranca, PaymentMethod> = {
   cartao_debito: 'DEBIT_CARD',
 };
 
-function adapterCode(legacyId: string): ProviderCode | null {
+/**
+ * Adaptador do Engine correspondente a um id legado do gateway, ou `null`
+ * quando o id NÃO é uma integração de provedor — caso do duplo de demonstração
+ * `mock`, que nunca existe em produção. O adaptador de compatibilidade usa isto
+ * para decidir entre o Engine (provedores reais) e o duplo de demonstração.
+ */
+export function adaptadorEngineDoLegado(legacyId: string): ProviderCode | null {
   const p = providerRegistry.list().find((x) => x.legacyId === String(legacyId || '').toLowerCase());
   return p ? p.code : null;
 }
@@ -84,7 +90,7 @@ export async function criarCobrancaAvulsaEngine(
   empresaId: number,
   params: CobrancaAvulsaParams
 ): Promise<CobrancaProviderResult> {
-  const code = adapterCode(params.provider);
+  const code = adaptadorEngineDoLegado(params.provider);
   if (!code) throw new HttpError(404, `Provedor "${params.provider}" não está registrado no Payment Engine.`);
   const method = METHOD_BY_LEGACY[params.metodo];
   const operationKey = String(params.idempotencyKey).slice(0, 120);
@@ -128,7 +134,7 @@ export async function consultarCobrancaAvulsaEngine(
   provider: string,
   providerRef: string
 ): Promise<CobrancaProviderResult | null> {
-  const code = adapterCode(provider);
+  const code = adaptadorEngineDoLegado(provider);
   if (!code) return null;
   const ctx = await contextoEngine(empresaId, code, `query:${providerRef}`);
   const result = await providerRegistry.get(code).getPayment(ctx, providerRef);

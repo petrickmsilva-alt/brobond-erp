@@ -20,9 +20,27 @@ const { getStore } = await import('../src/services');
 const { ETAPAS, proximaEtapa, compararLeitura } = await import('../src/expedicao');
 const { chamar, criarAtor, esperarErro, garantirAdmin, novoCliente, novoLocal, novoProduto, reqDe, resFake, saldoInicial } = await import('./_p1util');
 const exp = await import('../src/expedicao');
+const { isValidGtin } = await import('../src/ean');
 
 await garantirAdmin();
 await novoLocal('loja');
+
+/**
+ * EAN-13 válido e único por chamada. O sufixo de relógio anterior repetia a
+ * cada 10 s (`Date.now()` cortado em 4 dígitos), então duas vendas da mesma
+ * suíte colidiam no índice único de `codigo_barras` e o teste falhava de forma
+ * intermitente. Um contador monotônico + dígito verificador real elimina isso.
+ */
+let seqEan = 0;
+function ean13Unico(): string {
+  seqEan++;
+  const corpo = `789${String(seqEan).padStart(9, '0')}`;
+  for (let dv = 0; dv <= 9; dv++) {
+    const candidato = `${corpo}${dv}`;
+    if (isValidGtin(candidato)) return candidato;
+  }
+  throw new Error('não foi possível gerar EAN-13 válido');
+}
 
 /** Venda aberta (não faturada) com itens que TÊM código de barras. */
 async function pedidoParaExpedir(quantidades: number[] = [2], opts: { status?: string; comCodigo?: boolean } = {}) {
@@ -39,7 +57,7 @@ async function pedidoParaExpedir(quantidades: number[] = [2], opts: { status?: s
   const itens: any[] = [];
   for (let i = 0; i < quantidades.length; i++) {
     const qtd = quantidades[i];
-    const codigo = opts.comCodigo === false ? null : `78900000${String(i).padStart(5, '0')}${String(Date.now()).slice(-4)}`;
+    const codigo = opts.comCodigo === false ? null : ean13Unico();
     const p = await novoProduto({ preco_venda: 100, codigo_barras: codigo ?? undefined });
     await saldoInicial(p, 500);
     const est = await s.findOneWhere(RESOURCES.estoques, { produto_id: Number(p.id) });

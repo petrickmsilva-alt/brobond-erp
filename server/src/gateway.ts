@@ -562,7 +562,7 @@ export async function criarCobrancaGateway(
   const idempotencyKey = params.idempotencyKey.slice(0, 120);
 
   // Configuration errors happen before reserving an external effect.
-  await contextoDoProvider(escopo.empresaId, providerId);
+  const ctx = await contextoDoProvider(escopo.empresaId, providerId);
   const input: CobrancaInput = {
     valor, metodo,
     descricao: params.descricao ? String(params.descricao).slice(0, 200) : lancamento ? String(lancamento.descricao) : venda ? `Venda #${venda.id}` : 'Cobrança',
@@ -623,22 +623,26 @@ export async function criarCobrancaGateway(
     // ADR-001: a criação NÃO é implementada no gateway legado. Esta ponte
     // encaminha a operação ao adaptador canônico do Payment Engine (mesmo
     // provider, mesma chave de idempotência) — não existe segunda criação.
+    // O duplo de demonstração `mock` não é um provedor do Engine (nunca existe
+    // em produção): ele permanece no adaptador de compatibilidade.
     // Nenhuma transação é mantida durante a rede. O estado PROCESSING impede
     // fechamento/reenvio mesmo se o processo cair depois do efeito externo.
-    const { criarCobrancaAvulsaEngine } = await import('../../modules/payments/application/standalone-charge');
-    const resultado = await criarCobrancaAvulsaEngine(escopo.empresaId, {
-      provider: providerId,
-      metodo,
-      valor,
-      descricao: input.descricao,
-      expiraEm: input.expira_em,
-      parcelas,
-      payerEmail: input.payer_email,
-      payerDocumento: input.payer_documento,
-      payerNome: input.payer_nome,
-      token: input.token,
-      idempotencyKey,
-    });
+    const { criarCobrancaAvulsaEngine, adaptadorEngineDoLegado } = await import('../../modules/payments/application/standalone-charge');
+    const resultado = adaptadorEngineDoLegado(providerId)
+      ? await criarCobrancaAvulsaEngine(escopo.empresaId, {
+          provider: providerId,
+          metodo,
+          valor,
+          descricao: input.descricao,
+          expiraEm: input.expira_em,
+          parcelas,
+          payerEmail: input.payer_email,
+          payerDocumento: input.payer_documento,
+          payerNome: input.payer_nome,
+          token: input.token,
+          idempotencyKey,
+        })
+      : await provider.criaCobranca(ctx, input);
     if (!resultado.provider_ref || !['pendente', 'autorizada', 'paga', 'cancelada', 'falhou', 'expirada'].includes(String(resultado.status)))
       throw new HttpError(409, 'Provider não retornou referência e estado verificáveis.');
     const row = await comTravaContabil(escopo.empresaId, async (tx) => {
