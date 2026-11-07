@@ -94,8 +94,45 @@ export class PagBankProvider extends GenericPaymentProvider {
   parseWebhook(raw: string) {
     try {
       const b = JSON.parse(raw);
-      if (!String(b.id || '').startsWith('ORDE_')) return null;
-      return { id: createHash('sha256').update(raw).digest('hex'), reference: String(b.id), type: 'order.updated' };
+      const orderId = String(b.id || '');
+      if (!orderId.startsWith('ORDE_')) return null;
+      // P3-02: o payload do webhook de Order NÃO tem um identificador de
+      // notificação no topo, mas o contrato oficial inclui, para PIX, um
+      // `charges[].payment_method.pix.notification_id` (formato `NTF_...`) que
+      // identifica a NOTIFICAÇÃO. Fonte:
+      // developer.pagbank.com.br/reference/webhooks ("notification_id").
+      // A identidade é:
+      //   1. os `notification_id` oficiais, quando presentes (mais estável que
+      //      qualquer composição — uma reentrega do mesmo aviso mantém o mesmo
+      //      id mesmo com bytes diferentes);
+      //   2. senão, a Order (`id`) + o conjunto normalizado de cobranças
+      //      (`charges[].id` + `charges[].status`) — de modo que:
+      //        • reentrega do mesmo estado, com formatação diferente, deduplica;
+      //        • mudança legítima de estado da MESMA cobrança é um evento novo;
+      //        • uma nova cobrança na mesma Order também é um evento novo.
+      // O hash do corpo continua como evidência complementar em
+      // `gateway_webhook_events.payload_hash` (nunca como chave de deduplicação).
+      const charges = Array.isArray(b.charges) ? (b.charges as Record<string, unknown>[]) : [];
+      const notificationIds = [
+        ...new Set(
+          charges
+            .map((c) => {
+              const pm = c?.payment_method as Record<string, unknown> | undefined;
+              const pix = pm?.pix as Record<string, unknown> | undefined;
+              const ntf = String(pix?.notification_id ?? '');
+              return ntf.startsWith('NTF_') ? ntf : '';
+            })
+            .filter(Boolean)
+        ),
+      ].sort();
+      if (notificationIds.length) return { id: `${orderId}:${notificationIds.join('|')}`.slice(0, 300), reference: orderId, type: 'order.notification' };
+      const assinatura = charges.length
+        ? charges
+            .map((c) => `${String(c?.id ?? '')}:${String(c?.status ?? '')}`)
+            .sort()
+            .join('|')
+        : String(b.status ?? '');
+      return { id: `${orderId}:${assinatura}`.slice(0, 300), reference: orderId, type: 'order.updated' };
     } catch {
       return null;
     }

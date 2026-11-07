@@ -51,9 +51,19 @@ export class MercadoPagoProvider extends GenericPaymentProvider {
   }
   capabilities(ctx: ProviderContext) {
     if (!(ctx.credentials.access_token || ctx.credentials.accessToken) || !ctx.webhookSecret) return [];
-    // Preserve existing PIX integration. Other methods need an explicitly enabled secure checkout flow.
+    // Checkout próprio: apenas PIX (fluxo seguro completo). O gateway legado
+    // (cobrança avulsa do financeiro) preserva PIX, boleto e cartão tokenizado
+    // via `createPaymentIntent`, sem um segundo caminho de criação.
     const enabled = (ctx.credentials.enabled_methods || 'PIX').split(',');
-    return ['PIX'].filter((m) => enabled.includes(m)).map(() => capability('PIX', { refund: true, partialRefund: true, cancel: true }));
+    const pedidos: Partial<Record<PaymentInput['method'], Parameters<typeof capability>[1]>> = {
+      PIX: { refund: true, partialRefund: true, cancel: true },
+      BOLETO: { cancel: true },
+      CREDIT_CARD: { authorize: true, capture: true, cancel: true, refund: true, partialRefund: true, tokenization: true },
+      DEBIT_CARD: { authorize: true, capture: true, cancel: true, refund: true, partialRefund: true, tokenization: true },
+    };
+    return (['PIX', 'BOLETO', 'CREDIT_CARD', 'DEBIT_CARD'] as const)
+      .filter((m) => enabled.includes(m))
+      .map((m) => capability(m, pedidos[m]));
   }
   async createPaymentIntent(ctx: ProviderContext, input: PaymentInput): Promise<PaymentResult> {
     if (!this.supports(ctx, input.method)) throw new PaymentError('INVALID_PAYMENT_METHOD');
@@ -75,7 +85,7 @@ export class MercadoPagoProvider extends GenericPaymentProvider {
         return {
           reference: r.provider_ref,
           status: r.status === 'falhou' ? 'FAILED' : 'PENDING',
-          action: { type: input.method, code: r.linha_digitavel || undefined, ticketUrl: r.ticket_url || undefined, expiresAt: r.expires_em || undefined },
+          action: { type: input.method, code: r.linha_digitavel || undefined, nossoNumero: r.nosso_numero || undefined, ticketUrl: r.ticket_url || undefined, expiresAt: r.expires_em || undefined },
         };
       }
       // PIX: payment_method.qr_code → code (Copia e Cola), qr_code_base64 →

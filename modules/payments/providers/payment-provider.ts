@@ -52,7 +52,7 @@ export type RefundEvidence = {
  *  - `expiresAt`: expiração informada pelo provider.
  * O antigo `qrCode` (ambíguo: ora imagem, ora texto) foi removido.
  */
-export type PaymentAction = { type: string; url?: string; code?: string; qrCodeBase64?: string; ticketUrl?: string; expiresAt?: string };
+export type PaymentAction = { type: string; url?: string; code?: string; qrCodeBase64?: string; ticketUrl?: string; nossoNumero?: string; expiresAt?: string };
 export type PaymentResult = {
   reference: string;
   status: PaymentStatus;
