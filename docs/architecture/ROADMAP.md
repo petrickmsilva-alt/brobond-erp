@@ -89,6 +89,21 @@ integridade validada; implementação testada; PR independente.
 
 **Dependência:** Fase 1 (fundação consolidada).
 
+### 4.1 Status da Fase 2 (esta rodada)
+
+| # | Entrega | Status |
+|---|---|---|
+| 1–8 | Documentos canônicos de dados (itens 1–8) | ✅ entregues |
+| 9 | `NATIVE-STORE-DECOMMISSION-REPORT.md` | ✅ entregue — **execução BLOQUEADA** (impedimentos I-1..I-4) |
+| 10 | FK composta cross-tenant de `crm_*` (GAP-P2-04) | ✅ migração `0104` + espelho + teste |
+| 11 | Descontinuação segura da loja nativa `/loja` | ⛔ **não executada** — sem PG real, sem credenciais Woo, sem decisão DNS |
+| 12 | Testes do núcleo (preço, disponibilidade, identidade, integridade) | ✅ `fase2-nucleo-canonico` (8), `fase2-identidade-comercial` (4), `fase2-integridade-referencial` (4) |
+| 13 | Gates PostgreSQL reais | ⛔ bloqueado no sandbox (BL-009) — roda no CI |
+
+> A retirada da loja nativa foi **conscientemente** deixada para a Fase 3: o §6.8
+> do PROMPT MASTER manda entregar o plano e registrar o impedimento quando a
+> remoção não puder ser feita com segurança. Ver BL-015 / DEC-004.
+
 ---
 
 ## 5. Dependências técnicas entre fases

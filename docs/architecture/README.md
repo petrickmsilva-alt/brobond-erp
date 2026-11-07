@@ -112,6 +112,24 @@ missão das Fases 1 e 2 **não** é reescrevê-lo, e sim **consolidar, formaliza
 provar** o que existe, fechando as lacunas de governança e de dados identificadas
 neste blueprint.
 
+### 3.1 Delta após a Fase 2
+
+Números relidos de `npm run architecture:audit` ao fim da Fase 2:
+
+| Dimensão | Fase 0 | Fase 2 | Δ |
+|---|---:|---:|---:|
+| Migrations SQL | 103 | **104** | +1 (`0104_crm_integridade_multempresa.sql`) |
+| Tabelas SQL | 212 | 212 | — |
+| Tabelas com `empresa_id` | 192 | 192 | — |
+| Tabelas sem `empresa_id` (classificadas) | 20 | 20 | — |
+| Índices | 570 | **580** | +10 (E4.2 do CRM) |
+| Constraints | 386 | 386 | — |
+| Casos de teste declarados | 3.533 | **3.565** | +32 (Fases 1 e 2) |
+
+> O `docs/ERP-3.0-ARCHITECTURE-INVENTORY.json` é **regenerado** por
+> `npm run architecture:audit`; quando o número de casos muda, o arquivo é
+> commitado junto (regra do `AGENTS.md`).
+
 ---
 
 ## 4. Escopo desta missão

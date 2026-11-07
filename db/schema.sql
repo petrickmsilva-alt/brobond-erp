@@ -4006,6 +4006,53 @@ COMMENT ON INDEX uq_e42_estoques_empresa_prod_sem_tam_local_id IS 'E4.2: célula
 COMMENT ON INDEX uq_e42_estoques_empresa_prod_sem_tam_legado IS 'E4.2: saldos sem local_id preservam unicidade textual legada sem backfill.';
 COMMENT ON INDEX uq_e42_itens_inv_empresa_prod_sem_tam IS 'E4.2: linha sem tamanho é única por empresa/inventário/produto.';
 
+-- ---- 0104 Fase 2 — integridade cross-tenant do CRM (GAP-P2-04), padrão E4.2 ----
+-- Espelho da migração 0104: chaves de destino + FKs compostas (empresa_id, fk).
+CREATE UNIQUE INDEX IF NOT EXISTS uq_e42_crm_leads_empresa_id ON crm_leads (empresa_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_e42_crm_oportunidades_empresa_id ON crm_oportunidades (empresa_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_e42_crm_motivos_perda_empresa_id ON crm_motivos_perda (empresa_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_e42_crm_origens_empresa_id ON crm_origens (empresa_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_e42_crm_funis_empresa_id ON crm_funis (empresa_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_e42_clientes_empresa_id ON clientes (empresa_id, id);
+
+DO $e42_crm_foreign_keys$
+DECLARE fk RECORD;
+BEGIN
+  FOR fk IN
+    SELECT * FROM (VALUES
+      ('crm_oportunidades', 'fk_e42_crm_oportunidades_empresa_lead', 'FOREIGN KEY (empresa_id, lead_id) REFERENCES crm_leads (empresa_id, id)'),
+      ('crm_oportunidades', 'fk_e42_crm_oportunidades_empresa_cliente', 'FOREIGN KEY (empresa_id, cliente_id) REFERENCES clientes (empresa_id, id)'),
+      ('crm_oportunidades', 'fk_e42_crm_oportunidades_empresa_motivo', 'FOREIGN KEY (empresa_id, motivo_perda_id) REFERENCES crm_motivos_perda (empresa_id, id)'),
+      ('crm_atividades', 'fk_e42_crm_atividades_empresa_lead', 'FOREIGN KEY (empresa_id, lead_id) REFERENCES crm_leads (empresa_id, id)'),
+      ('crm_atividades', 'fk_e42_crm_atividades_empresa_oportunidade', 'FOREIGN KEY (empresa_id, oportunidade_id) REFERENCES crm_oportunidades (empresa_id, id)'),
+      ('crm_atividades', 'fk_e42_crm_atividades_empresa_cliente', 'FOREIGN KEY (empresa_id, cliente_id) REFERENCES clientes (empresa_id, id)'),
+      ('crm_oportunidade_estagio_historico', 'fk_e42_crm_hist_empresa_oportunidade', 'FOREIGN KEY (empresa_id, oportunidade_id) REFERENCES crm_oportunidades (empresa_id, id) ON DELETE CASCADE'),
+      ('crm_leads', 'fk_e42_crm_leads_empresa_cliente', 'FOREIGN KEY (empresa_id, cliente_id) REFERENCES clientes (empresa_id, id)'),
+      ('crm_campanhas', 'fk_e42_crm_campanhas_empresa_origem', 'FOREIGN KEY (empresa_id, origem_id) REFERENCES crm_origens (empresa_id, id)'),
+      ('crm_etapas', 'fk_e42_crm_etapas_empresa_funil', 'FOREIGN KEY (empresa_id, funil_id) REFERENCES crm_funis (empresa_id, id) ON DELETE CASCADE')
+    ) AS v(tabela, nome, ddl)
+  LOOP
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_constraint
+       WHERE conrelid = to_regclass('public.' || fk.tabela) AND conname = fk.nome
+    ) THEN
+      EXECUTE format('ALTER TABLE %I ADD CONSTRAINT %I %s NOT VALID', fk.tabela, fk.nome, fk.ddl);
+    END IF;
+    EXECUTE format('ALTER TABLE %I VALIDATE CONSTRAINT %I', fk.tabela, fk.nome);
+  END LOOP;
+END
+$e42_crm_foreign_keys$;
+
+CREATE INDEX IF NOT EXISTS e42_crm_oport_empresa_lead_idx ON crm_oportunidades (empresa_id, lead_id);
+CREATE INDEX IF NOT EXISTS e42_crm_oport_empresa_cliente_idx ON crm_oportunidades (empresa_id, cliente_id);
+CREATE INDEX IF NOT EXISTS e42_crm_ativ_empresa_oport_idx ON crm_atividades (empresa_id, oportunidade_id);
+CREATE INDEX IF NOT EXISTS e42_crm_hist_empresa_oport_idx ON crm_oportunidade_estagio_historico (empresa_id, oportunidade_id);
+CREATE INDEX IF NOT EXISTS e42_crm_etapas_empresa_funil_idx ON crm_etapas (empresa_id, funil_id);
+
+COMMENT ON INDEX uq_e42_crm_oportunidades_empresa_id IS 'E4.2/CRM: oportunidade é única por (empresa, id) — alvo de FK composta.';
+COMMENT ON INDEX uq_e42_crm_leads_empresa_id IS 'E4.2/CRM: lead é único por (empresa, id) — alvo de FK composta.';
+
+
 -- ---- 0031 E4.2.1 — integridade de estoque: venda_id, local canônico de venda e idempotência de devolução ----
 DO $e421_preflight$
 DECLARE
