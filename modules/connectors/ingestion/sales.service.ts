@@ -189,6 +189,122 @@ async function runInTransactionComCorrida<T>(
   }
 }
 
+/** Item casado, pronto para gravar (mesma forma nos dois caminhos). */
+type ItemCasado = {
+  productId: number | null;
+  sizeId: number | null;
+  variacaoExterna: string;
+  quantity: number;
+  unitPriceCents: number;
+  discountCents: number;
+  subtotalCents: number;
+};
+
+/** Casa um item da ingestão com o catálogo do ERP (produto + tamanho). */
+async function casarItem(tx: ConnectorDatabase, tenantId: number, item: IngestedSaleItemInput): Promise<ItemCasado> {
+  const itemQuantity = positiveInt(item.quantity, 1);
+  const unitPriceCents = Math.max(0, Math.trunc(item.unitPriceCents) || 0);
+  const discountCents = Math.max(0, Math.trunc(item.discountCents ?? 0) || 0);
+  const subtotalCents = Math.max(0, itemQuantity * unitPriceCents - discountCents);
+  const match = await matchCatalogItem(tx, tenantId, {
+    sku: item.sku,
+    title: item.title,
+    sizeLabel: item.sizeLabel,
+    variacaoExterna: item.variacaoExterna,
+  });
+  return {
+    productId: match.productId,
+    sizeId: match.sizeId,
+    variacaoExterna: item.variacaoExterna ?? item.title,
+    quantity: itemQuantity,
+    unitPriceCents,
+    discountCents,
+    subtotalCents,
+  };
+}
+
+/** Reescreve os itens de uma venda (bloco) — nunca deixa linha órfã/duplicada. */
+async function gravarItensDaIngestao(
+  tx: ConnectorDatabase,
+  tenantId: number,
+  saleId: string,
+  itens: IngestedSaleItemInput[]
+): Promise<number> {
+  await tx.query(`DELETE FROM sale_items WHERE sale_id = $1`, [saleId]);
+  let itemCount = 0;
+  for (const item of itens) {
+    const casado = await casarItem(tx, tenantId, item);
+    await tx.query(
+      `INSERT INTO sale_items (
+         id, sale_id, product_id, size_id, variacao_externa, quantity,
+         unit_price_cents, discount_cents, subtotal_cents, created_at
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())`,
+      [
+        connectorCuid(),
+        saleId,
+        casado.productId,
+        casado.sizeId,
+        casado.variacaoExterna,
+        casado.quantity,
+        casado.unitPriceCents,
+        casado.discountCents,
+        casado.subtotalCents,
+      ]
+    );
+    itemCount += 1;
+  }
+  return itemCount;
+}
+
+/**
+ * A06-08 — rematch de itens com o cabeçalho INALTERADO.
+ *
+ * Recalcula a associação de cada item com o catálogo e compara com o que está
+ * gravado. Só reescreve quando o vínculo (produto/tamanho) ou os valores
+ * divergem — então uma reentrega idêntica continua `unchanged` (idempotência) e
+ * um item que antes não casava (SKU cadastrado depois) é REMATCHADO. Devolve o
+ * número de itens reescritos (0 = nada mudou).
+ */
+async function reconciliarItensDaIngestao(
+  tx: ConnectorDatabase,
+  tenantId: number,
+  saleId: string,
+  itens: IngestedSaleItemInput[]
+): Promise<number> {
+  const { rows: atuais } = await tx.query<{
+    product_id: number | null;
+    size_id: number | null;
+    variacao_externa: string | null;
+    quantity: number;
+    unit_price_cents: number;
+    discount_cents: number;
+    subtotal_cents: number;
+  }>(
+    `SELECT product_id, size_id, variacao_externa, quantity, unit_price_cents, discount_cents, subtotal_cents
+       FROM sale_items WHERE sale_id = $1 ORDER BY id`,
+    [saleId]
+  );
+  const casados: ItemCasado[] = [];
+  for (const item of itens) casados.push(await casarItem(tx, tenantId, item));
+
+  const igual =
+    atuais.length === casados.length &&
+    atuais.every((a, i) => {
+      const c = casados[i];
+      return (
+        (a.product_id == null ? null : Number(a.product_id)) === c.productId &&
+        (a.size_id == null ? null : Number(a.size_id)) === c.sizeId &&
+        String(a.variacao_externa ?? '') === c.variacaoExterna &&
+        Number(a.quantity) === c.quantity &&
+        Number(a.unit_price_cents) === c.unitPriceCents &&
+        Number(a.discount_cents) === c.discountCents &&
+        Number(a.subtotal_cents) === c.subtotalCents
+      );
+    });
+  if (igual) return 0;
+  return gravarItensDaIngestao(tx, tenantId, saleId, itens);
+}
+
 export function createSalesService(resolveDb: () => ConnectorDatabase) {
   return {
     /**
@@ -214,16 +330,23 @@ export function createSalesService(resolveDb: () => ConnectorDatabase) {
         );
         const existing = existingRows[0] ? mapSale(existingRows[0]) : null;
 
-        // Reentrega idêntica: nada muda no banco e nenhum item é
-        // reescrito — é o caminho mais comum de um webhook "at-least-once".
-        if (
+        // Cabeçalho idêntico: a linha de `sales` não precisa ser reescrita.
+        // MAS a associação de itens com o catálogo do ERP pode ter mudado desde
+        // a primeira ingestão (SKU cadastrado depois, produto corrigido). O
+        // rematch é separado da detecção de alteração do cabeçalho (A06-08):
+        // quando os itens casados divergem do que está gravado, reescrevemos os
+        // itens (outcome `updated`); quando nada muda, `unchanged` de verdade.
+        const cabecalhoIgual =
           existing &&
           existing.status === input.status &&
           existing.amountCents === amountCents &&
           existing.quantity === quantity &&
-          existing.currency === currency
-        ) {
-          return { sale: existing, outcome: 'unchanged' as const, itemCount: 0 };
+          existing.currency === currency;
+        if (cabecalhoIgual) {
+          const reconciliado = await reconciliarItensDaIngestao(tx, tenantId, existing!.id, input.items);
+          return reconciliado
+            ? { sale: existing!, outcome: 'updated' as const, itemCount: reconciliado }
+            : { sale: existing!, outcome: 'unchanged' as const, itemCount: 0 };
         }
 
         // O árbitro do ON CONFLICT precisa ser o índice que a corrida viola.
@@ -274,38 +397,7 @@ export function createSalesService(resolveDb: () => ConnectorDatabase) {
         // Itens: reescrita em bloco dentro da transação. Reprocessar um
         // pedido corrigido (quantidade alterada, item cancelado) nunca
         // deixa linha órfã nem duplicada.
-        await tx.query(`DELETE FROM sale_items WHERE sale_id = $1`, [sale.id]);
-        let itemCount = 0;
-        for (const item of input.items) {
-          const itemQuantity = positiveInt(item.quantity, 1);
-          const unitPriceCents = Math.max(0, Math.trunc(item.unitPriceCents) || 0);
-          const discountCents = Math.max(0, Math.trunc(item.discountCents ?? 0) || 0);
-          const subtotalCents = Math.max(0, itemQuantity * unitPriceCents - discountCents);
-          const match = await matchCatalogItem(tx, tenantId, {
-            sku: item.sku,
-            title: item.title,
-            sizeLabel: item.sizeLabel,
-            variacaoExterna: item.variacaoExterna,
-          });
-          await tx.query(
-            `INSERT INTO sale_items (
-               id, sale_id, product_id, size_id, variacao_externa, quantity,
-               unit_price_cents, discount_cents, subtotal_cents, created_at
-             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())`,
-            [
-              connectorCuid(),
-              sale.id,
-              match.productId,
-              match.sizeId,
-              item.variacaoExterna ?? item.title,
-              itemQuantity,
-              unitPriceCents,
-              discountCents,
-              subtotalCents,
-            ]
-          );
-          itemCount += 1;
-        }
+        const itemCount = await gravarItensDaIngestao(tx, tenantId, sale.id, input.items);
 
         return { sale, outcome: rows[0]?.was_inserted === true ? ('created' as const) : ('updated' as const), itemCount };
       });

@@ -1647,6 +1647,23 @@ async function listarRecursoCompleto(recurso: Resource, maxPaginas = 200): Promi
   return linhas;
 }
 
+/**
+ * Ids de vendas operacionais que JÁ têm representação analítica própria
+ * (marketplace convertido → `sales.operational_venda_id`). Só essas a projeção
+ * `vendas → sales` deve pular; a mera presença de `pedido_externo_id` NÃO basta
+ * (A06-05).
+ */
+async function idsOperacionaisJaRepresentados(): Promise<Set<number>> {
+  const s = getStore();
+  const linhas = await listarRecursoCompleto(RESOURCES.sales);
+  const ids = new Set<number>();
+  for (const linha of linhas) {
+    const op = Number(linha.operational_venda_id);
+    if (Number.isInteger(op) && op > 0) ids.add(op);
+  }
+  return ids;
+}
+
 /** Projeção no modo demonstração: espelha `vendas`/`itens_venda` do store. */
 async function projetarVendasErpMemoria(escopo: number[] | null): Promise<ProjecaoErpResultado> {
   const vendas = (await listarRecursoCompleto(RESOURCES.vendas)).filter((v) => !escopo || escopo.includes(Number(v.id)));
@@ -1658,6 +1675,12 @@ async function projetarVendasErpMemoria(escopo: number[] | null): Promise<Projec
     if (lista) lista.push(item);
     else itensPorVenda.set(vendaId, [item]);
   }
+  // A06-05: a venda JÁ representada por uma linha analítica própria é a única
+  // que a projeção deve pular. O critério é o VÍNCULO (`operational_venda_id`),
+  // não a mera presença de `pedido_externo_id`: pedidos importados do
+  // WooCommerce têm `pedido_externo_id` e NÃO têm linha em `sales`, e antes
+  // ficavam invisíveis no BI.
+  const jaRepresentadas = await idsOperacionaisJaRepresentados();
 
   let removidas = 0;
   let canceladas = 0;
@@ -1668,9 +1691,11 @@ async function projetarVendasErpMemoria(escopo: number[] | null): Promise<Projec
   for (const venda of vendas) {
     const vendaId = Number(venda.id);
     const salesId = `${ERP_ID_PREFIXO_VENDA}${vendaId}`;
-    // GOLIVE-03: venda de marketplace já tem representação analítica própria
-    // (a linha de `sales` que a originou) — projetá-la criaria duplicidade no BI.
-    if (String(venda.pedido_externo_id ?? '').trim() !== '') continue;
+    // GOLIVE-03/A06-05: pula SOMENTE a venda que já tem representação
+    // analítica própria vinculada (marketplace convertido). A importação
+    // WooCommerce grava `pedido_externo_id` sem linha em `sales` — precisa ser
+    // projetada, senão a venda some do BI.
+    if (jaRepresentadas.has(vendaId)) continue;
     const status = statusErpParaSales(venda.status);
     const existente = memoria.vendas.find((v) => v.id === salesId);
 
@@ -1798,11 +1823,12 @@ export async function projetarVendasErp(ids?: number[]): Promise<ProjecaoErpResu
         CROSS JOIN fallback_usuario fb
        WHERE v.status IN ('faturada', 'entregue')
          ${filtroVendas}
-         -- GOLIVE-03: a venda de marketplace já tem representação analítica
-         -- PRÓPRIA (a linha de sales que a originou, vinculada por
-         -- operational_venda_id). Projetá-la aqui criaria uma SEGUNDA linha e
-         -- o BI contaria a mesma venda duas vezes.
-         AND v.pedido_externo_id IS NULL
+         -- GOLIVE-03/A06-05: pula SOMENTE a venda já representada por uma
+         -- linha analítica própria (marketplace convertido, ligado por
+         -- operational_venda_id). A venda importada do WooCommerce tem
+         -- pedido_externo_id mas NÃO tem linha em sales — projetá-la é o
+         -- que a faz aparecer no BI (antes sumia).
+         AND NOT EXISTS (SELECT 1 FROM sales s WHERE s.operational_venda_id = v.id)
          AND COALESCE(eu.usuario_id, fb.usuario_id) IS NOT NULL
       ON CONFLICT (id) DO UPDATE SET
         reference = EXCLUDED.reference,
@@ -1837,7 +1863,7 @@ export async function projetarVendasErp(ids?: number[]): Promise<ProjecaoErpResu
         JOIN vendas v ON v.id = iv.venda_id
        WHERE v.status IN ('faturada', 'entregue')
          ${filtroVendas}
-         AND v.pedido_externo_id IS NULL
+         AND NOT EXISTS (SELECT 1 FROM sales s WHERE s.operational_venda_id = v.id)
          -- P2-08 (auditoria independente, 2026-10-11): o passo 1 não projeta a
          -- venda sem responsável ativo; sem repetir a condição AQUI, o item
          -- entrava órfão e violava a FK "sale_items_sale_id_fkey" (23503), abortando

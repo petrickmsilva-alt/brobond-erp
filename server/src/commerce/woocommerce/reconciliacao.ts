@@ -38,11 +38,11 @@ import { wooStoreFetch, ehDryRun } from './cliente';
 import { listarVinculos } from './vinculos';
 import { registrarSincronizacao } from './estado';
 import { precoDaLoja } from './precos';
+import { linhaOverrideDaLoja } from './precoAutoridade';
 import { enfileirarPublicacaoDaLoja, enfileirarEstoqueDaLoja, enfileirarPedidosDaLoja } from './outboxStore';
 
 const R_PRODUTOS = () => getResource('produtos')!;
 const R_VENDAS = () => getResource('vendas')!;
-const R_PRECOS = () => getResource('commerce_precos')!;
 const R_DIVERGENCIAS = () => getResource('woocommerce_reconciliacao_divergencias')!;
 
 export type CategoriaDivergencia = 'CATALOGO' | 'PRECO' | 'ESTOQUE' | 'PEDIDOS';
@@ -168,6 +168,76 @@ export async function fecharDivergenciasAusentes(
   return fechadas;
 }
 
+/**
+ * Registra as divergências de PREÇO de um pedido importado: o preço recebido da
+ * loja difere do preço oficial do ERP (o ERP prevaleceu). É o rastro auditável de
+ * A06-01 — nunca corrige cadastro, só reporta para conferência humana.
+ */
+export async function registrarDivergenciasPreco(
+  empresaId: number,
+  store: StoreKey,
+  divergencias: { produto_id: number; sku: string; preco_erp: number; preco_remoto: number; motivo: string }[],
+  pedidoRef: string
+): Promise<void> {
+  for (const d of divergencias) {
+    await registrarDivergencia(empresaId, store, {
+      categoria: 'PRECO',
+      tipo: 'PRECO_REMOTO_DIVERGENTE',
+      classificacao: 'HUMANA',
+      produto_id: d.produto_id,
+      sku: d.sku,
+      pedido_ref: pedidoRef,
+      detalhe: d.motivo,
+      dados: { preco_erp: d.preco_erp, preco_remoto: d.preco_remoto, pedido_ref: pedidoRef },
+    }).catch(() => undefined);
+  }
+}
+
+/**
+ * Registra um CONFLITO DE IDENTIDADE de pedido (A06-03): a referência legada
+ * `WOO-<id>` já pertence a outra loja ou tem origem ambígua. Nunca resolvido
+ * automaticamente — a venda nova é criada e o conflito fica para conferência.
+ */
+export async function registrarConflitoIdentidade(
+  empresaId: number,
+  store: StoreKey,
+  pedidoRef: string,
+  detalhe: string
+): Promise<void> {
+  await registrarDivergencia(empresaId, store, {
+    categoria: 'PEDIDOS',
+    tipo: 'IDENTIDADE_PEDIDO_CONFLITANTE',
+    classificacao: 'HUMANA',
+    pedido_ref: pedidoRef,
+    detalhe,
+    dados: { pedido_ref: pedidoRef },
+  }).catch(() => undefined);
+}
+
+/**
+ * Registra a REJEIÇÃO de um item WHOLESALE por quantidade abaixo do mínimo de
+ * atacado (A06-11). O item não entra na venda; a ocorrência fica auditável.
+ */
+export async function registrarMinimoAtacadoRejeitado(
+  empresaId: number,
+  store: StoreKey,
+  itens: { produto_id: number; sku: string; quantidade: number; minimo: number }[],
+  pedidoRef: string
+): Promise<void> {
+  for (const i of itens) {
+    await registrarDivergencia(empresaId, store, {
+      categoria: 'PEDIDOS',
+      tipo: 'ATACADO_ABAIXO_MINIMO',
+      classificacao: 'HUMANA',
+      produto_id: i.produto_id,
+      sku: i.sku,
+      pedido_ref: pedidoRef,
+      detalhe: `Quantidade ${i.quantidade} abaixo do mínimo de atacado (${i.minimo}) — item não importado.`,
+      dados: { quantidade: i.quantidade, minimo: i.minimo, pedido_ref: pedidoRef },
+    }).catch(() => undefined);
+  }
+}
+
 /** Divergências de uma loja (para o painel). */
 export async function listarDivergencias(
   empresaId: number,
@@ -246,7 +316,7 @@ async function lerVariacoesLoja(cfg: ConfigStore, externalProductId: string, dep
 
 /** Preço do ERP para o produto na loja (base + promoção de canal vigente). */
 async function precoErp(empresaId: number, produto: Row, store: StoreKey): Promise<number> {
-  const linha = await getStore().findOneWhere(R_PRECOS(), { empresa_id: empresaId, produto_id: Number(produto.id), canal: 'WOOCOMMERCE' });
+  const linha = await linhaOverrideDaLoja(empresaId, Number(produto.id), 'WOOCOMMERCE', store);
   return precoDaLoja(produto, store, linha).preco;
 }
 
