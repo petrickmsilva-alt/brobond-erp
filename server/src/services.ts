@@ -36,12 +36,16 @@ import {
   registrarHistoricoEstagio,
   resolverFunilPadrao,
 } from './crm';
+import { invalidarCacheCarteira } from './empresasAcesso';
 import {
   aplicarFiltroEmpresa,
+  aplicarFiltroCarteira,
   assertRegistroDaEmpresa,
   EMPRESA_PADRAO,
   assertRegistroDaEmpresaParaEscrita,
   carimbarEmpresa,
+  idCarteiraDoEscopo,
+  protegerCarteiraNaEdicao,
   empresaDoAtorAudit,
   empresaDoRegistroAudit,
   escopoDoAtor,
@@ -343,7 +347,8 @@ export async function listRecords(r: Resource, p: ListParams, escopoOuAtor?: Esc
   }
   // MULTIEMPRESA: o recorte entra como filtro obrigatório (AND) e descarta
   // qualquer `f.empresa_id` que o cliente tenha tentado injetar.
-  const params: ListParams = { ...p, filter: aplicarFiltroEmpresa(r, p.filter, escopo) };
+  // A06-14: o mesmo vale para a CARTEIRA — o representante só lista a própria.
+  const params: ListParams = { ...p, filter: aplicarFiltroCarteira(r, aplicarFiltroEmpresa(r, p.filter, escopo), escopo) };
   // REPRESENTANTES 2.0: `f.equipe_id` e a busca pelo NOME DA EQUIPE são
   // filtros VIRTUAIS (a composição vive em `equipe_membros`, não em uma coluna
   // duplicada no cadastro). O caminho dedicado devolve lista/total/paginação
@@ -1195,6 +1200,9 @@ export async function createRecord(r: Resource, body: unknown, actor: Actor, ctx
   // MULTIEMPRESA: a empresa do novo registro é decidida pelo SERVIDOR.
   const escopo = ctx.escopo === undefined ? escopoDe(actor) : (comoEscopo(ctx.escopo) ?? escopoDeSistema());
   carimbarEmpresa(r, data, escopo);
+  // A06-14: um representante só cria linha em nome da própria carteira. A
+  // imposição e a recusa do valor do corpo acontecem dentro da transação.
+  const carteiraImposta = idCarteiraDoEscopo(escopo);
   // Metadados da contagem cíclica são sempre derivados pelo endpoint de fluxo,
   // nunca aceitos de campos do formulário genérico.
   if (r.key === 'inventarios' && ctx.cyclicCounting) Object.assign(data, ctx.cyclicCounting);
@@ -1272,6 +1280,18 @@ export async function createRecord(r: Resource, body: unknown, actor: Actor, ctx
       // ciclo, carteira sem sobreposição, meta sem período ambíguo, participações
       // somando no máximo 100%. As mesmas funções valem para PUT (abaixo).
       await validarRegrasComerciais(r, data, null, s, escopo, tx);
+      // A06-14: um representante só cria linha na PRÓPRIA carteira. O valor do
+      // corpo (que poderia apontar para outro representante) é recusado; vazio
+      // é simplesmente carimbado. A tentativa vira 403 explícito em vez de uma
+      // linha silenciosamente trocada.
+      if (carteiraImposta !== null) {
+        const dono = data[r.escopo!];
+        const informado = dono !== undefined && dono !== null && dono !== '' && Number(dono) > 0;
+        if (informado && Number(dono) !== carteiraImposta) {
+          throw new HttpError(403, 'Você só pode lançar registros na sua própria carteira.');
+        }
+        data[r.escopo!] = carteiraImposta;
+      }
 
       const row = await s.insert(r, data, tx);
       if (r.key === 'locais') await garantirLocalPadrao(tx, escopo);
@@ -1381,8 +1401,10 @@ export async function updateRecord(r: Resource, id: number, body: unknown, actor
   // A empresa de um registro NUNCA muda por um PUT.
   protegerEmpresaNaEdicao(r, data);
   const escopo = opts.escopo === undefined ? escopoDe(actor) : (comoEscopo(opts.escopo) ?? escopoDeSistema());
+  // A06-14: o representante não reatribui o dono da linha para outra carteira.
+  protegerCarteiraNaEdicao(r, data, escopo);
   try {
-    return await s.transaction(async (tx) => {
+    const atualizado = await s.transaction(async (tx) => {
       if (r.key === 'ordens' && tx) await tx.query('SELECT id FROM ordens_fabricacao WHERE empresa_id=$1 AND id=$2 FOR UPDATE', [escopo.empresaId, id]);
       const filtroAntes = temEscopoEmpresa(r) ? { id, empresa_id: escopo.empresaId } : { id };
       const before = await s.findOneWhere(r, filtroAntes, tx);
@@ -1643,6 +1665,10 @@ export async function updateRecord(r: Resource, id: number, body: unknown, actor
       await attachGradeTamanhos(r, [final], tx);
       return final;
     });
+    // A06-14: pós-commit, o vínculo representante ↔ usuário entra em vigor no
+    // cache de carteira (a transação já confirmou).
+    if (r.key === 'representantes' && 'usuario_id' in data) invalidarCacheCarteira();
+    return atualizado;
   } catch (e) {
     throw toHttpError(e, r);
   }
