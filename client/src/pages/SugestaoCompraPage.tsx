@@ -22,11 +22,18 @@ type LinhaSugestao = {
   nome: string | null;
   estoque_atual: number;
   estoque_min: number;
+  estoque_seguranca: number;
+  lote_minimo_compra: number;
+  multiplo_compra: number;
+  lead_time_dias: number | null;
+  ponto_pedido: number | null;
   estoque_max: number;
   consumo_medio_mensal: number;
   em_pedidos_venda: number;
   em_compras_transito: number;
+  em_comprometido: number;
   disponivel_projetado: number;
+  sugerido_bruto: number;
   sugerido: number;
   fornecedor_id: number | null;
   codigo_fornecedor: string | null;
@@ -260,8 +267,10 @@ export default function SugestaoCompraPage() {
                     <th className="px-3 py-2">Produto</th>
                     <th className="px-2 py-2 text-right">Atual</th>
                     <th className="px-2 py-2 text-right">Mín</th>
+                    <th className="px-2 py-2 text-right">Seg.</th>
                     <th className="px-2 py-2 text-right">Em venda</th>
                     <th className="px-2 py-2 text-right">Em trânsito</th>
+                    <th className="px-2 py-2 text-right">Lead</th>
                     <th className="px-2 py-2 text-right">Comprar</th>
                     <th className="px-3 py-2 text-right">Custo</th>
                   </tr>
@@ -292,8 +301,15 @@ export default function SugestaoCompraPage() {
                           {formatNumber(l.estoque_atual)}
                         </td>
                         <td className="px-2 py-2 text-right tabular-nums text-slate-500">{formatNumber(l.estoque_min)}</td>
+                        <td className="px-2 py-2 text-right tabular-nums text-slate-500">{formatNumber(l.estoque_seguranca)}</td>
                         <td className="px-2 py-2 text-right tabular-nums text-slate-500">{formatNumber(l.em_pedidos_venda)}</td>
                         <td className="px-2 py-2 text-right tabular-nums text-slate-500">{formatNumber(l.em_compras_transito)}</td>
+                        <td className="px-2 py-2 text-right tabular-nums text-slate-500">
+                          {l.lead_time_dias === null ? '—' : `${formatNumber(l.lead_time_dias)}d`}
+                          {l.ponto_pedido !== null && (
+                            <div className="text-[10px] text-slate-400">PP {formatNumber(l.ponto_pedido)}</div>
+                          )}
+                        </td>
                         <td className="px-2 py-2 text-right">
                           <input
                             type="number"

@@ -1,6 +1,6 @@
 # ERP 3.0 — Mapa de entregas das Fases 3, 4 e 5
 
-**Base:** `main` @ `f4f8b81` (incremento *Devolução ao Fornecedor*, PR #116, MERGED).
+**Base:** `main` @ `2704cf4` (incremento *Rastreabilidade ponta a ponta*, PR #117, MERGED).
 **Regra:** nenhum status sem evidência no código. `pronto` = há tabela/rota/tela/teste
 executado; `parcial` = existe fundação real mas falta a cadeia completa; `pendente`
 = não existe. Onde a prova depende de homologação externa, o item é `parcial` com a
@@ -17,13 +17,14 @@ pendência declarada — nunca `pronto`.
 | Capacidade | Estado | Evidência |
 |---|---|---|
 | Estoque canônico + disponibilidade | **pronto** | `server/src/estoqueCanonico.ts`, `estoqueTransferencia.ts` (`disponivel = físico − reservado − bloqueado − empenho`), `GET /api/estoques/disponivel` |
+| Reposição (MRP): lead time, lote mínimo, múltiplo, estoque de segurança | **pronto** | migração `0107` (`produtos`/`estoque_insumos`), `sugerirQuantidade` + `sugestaoCompra` em `compras.ts`, `GET /api/suprimentos/sugestao-compra`, tela `SugestaoCompraPage.tsx` |
 | Endereçamento WMS (armazém → zona → endereço) | **pronto (fundação)** | `locais.nivel_wms`/`local_pai_id`, `server/src/wmsEnderecamento.ts`, migração `0072` |
 | Put-away dirigido, waves, slotting, replenishment | **pendente** | não há tabela/rota; endereço é metadata do local |
 | Recebimento de compra (parcial/total, idempotente) | **pronto** | `server/src/compras.ts` `receberParcial`, `POST /api/compras/:id/receber`, `compra_recebimentos` |
 | Compras, cotação, homologação de fornecedor | **pronto** | `cotacoesCompra.ts`, `comprasFornecedor.ts`, `fornecedor_scorecards`, `POST /api/compras/:id/aprovar` |
 | Requisição interna / solicitação de compra formal | **parcial** | sugestão de compra (`suprimentos.ts`) e cotação existem; requisição interna como documento próprio não |
 | Devolução ao fornecedor | **pronto** | `server/src/devolucaoFornecedor.ts`, `devolucoes_fornecedor` (migração `0105`), PR #116 |
-| MRP (planejamento/necessidade) | **parcial** | `producaoCapacidade.ts` (`calculo.tipo = mrp_planejamento_necessidade`); sem lead time, lote mínimo, calendário, capacidade finita, pegging |
+| MRP (planejamento/necessidade) | **parcial (avançado)** | `producaoCapacidade.ts` (`calculo.tipo = mrp_planejamento_necessidade`); reposição com **lead time, lote mínimo, múltiplo de compra e estoque de segurança** (migração `0107`, `sugerirQuantidade` em `compras.ts`, `GET /api/suprimentos/sugestao-compra`); sem calendário/capacidade finita nem pegging |
 | Ordens de produção, apontamento, perda/refugo | **pronto** | `producao.ts`, `ordens*`, `ordens_apontamentos`, `ordens_eventos` |
 | Ficha técnica / BOM multinível | **pronto** | `fichas`, `itens_ficha_tecnica`, `produto_composicao` |
 | TMS: transportadora, remessa, rastreio, eventos | **pronto (fundação)** | `logistica.ts`, `envios`, `envio_eventos`, `GET /api/envios/rastreio/:codigo`, migração `0102` |
@@ -63,11 +64,12 @@ pendência declarada — nunca `pronto`.
 
 ## Incrementos abertos priorizados
 
-1. **Fase 3 — Rastreabilidade ponta a ponta** (este PR): lote por recebimento/devolução/
-   movimentação + consulta por produto, SKU, lote e documento de origem.
+1. **Fase 3 — MRP evoluído** (este PR): parâmetros de reposição (lead time, lote mínimo,
+   múltiplo de compra, estoque de segurança) no produto e no insumo + piso/caixa fechada
+   na sugestão de compra. Entrega a base de `GAP-P2-15`; faltam calendário/capacidade finita.
 2. **Fase 3 — WMS dirigido** (put-away/picking/packing por endereço, wave, contagem
    cíclica automatizada) — `GAP-P2-16`.
-3. **Fase 3 — MRP evoluído** (lead time, lote mínimo, calendário) — `GAP-P2-15`.
+3. **Fase 3 — Rastreabilidade ponta a ponta** — entregue no PR #117 (lote físico + consulta).
 4. **Fase 4 — Promoções e precedência de preço** (kits, cupons, elegibilidade, simulador).
 5. **Fase 5 — OMS: máquina de estados versionada + conciliação automática de repasse.**
 

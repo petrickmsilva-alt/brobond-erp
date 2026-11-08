@@ -9064,3 +9064,13 @@ ALTER TABLE movimentacoes ADD COLUMN IF NOT EXISTS lote_id INTEGER;
 ALTER TABLE movimentacoes_insumos ADD COLUMN IF NOT EXISTS lote_id INTEGER;
 ALTER TABLE compra_recebimento_itens ADD COLUMN IF NOT EXISTS lote_id INTEGER;
 ALTER TABLE devolucao_fornecedor_itens ADD COLUMN IF NOT EXISTS lote_id INTEGER;
+
+-- ============================================================================
+-- ESPELHO da migração 0107 — MRP EVOLUÍDO / REPOSIÇÃO
+-- (a autoridade é db/migrations/0107_supply_chain_mrp_reposicao.sql; este espelho
+--  existe para o parser de schema e o contrato de colunas dos recursos)
+-- ============================================================================
+ALTER TABLE produtos ADD COLUMN IF NOT EXISTS estoque_seguranca INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE produtos ADD COLUMN IF NOT EXISTS lote_minimo_compra INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE produtos ADD COLUMN IF NOT EXISTS multiplo_compra INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE produtos ADD COLUMN IF NOT EXISTS lead_time_dias INTEGER;

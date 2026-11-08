@@ -14,7 +14,15 @@ Operação inversa do recebimento, sobre o que foi EFETIVAMENTE recebido. O docu
 
 Hierarquia armazém → zona → endereço é metadata dos locais canônicos, com FK de empresa. Separação, conferência, embalagem, expedição, divergência e inventário existentes são fluxos parciais; putaway dirigido, waves, slotting e replenishment empresariais não estão completos. Não existe segundo saldo WMS.
 
-`GET /api/producao/{capacidade,mrp}?de=AAAA-MM-DD&ate=AAAA-MM-DD` valida janela de até 730 dias. Calendário/feriados, itens, OPs e compras são paginados sem truncamento silencioso; OP fora do horizonte não cobre demanda, consumo é associado à sua OP e compra sem previsão é destacada. BOM multinível detecta ciclos/corte de profundidade e avisa; MRP não cria compras. Leituras não são todas um snapshot único, e consumo não alocado, alocação ótima, lead times, capacidade finita e cenários grandes ainda exigem validação adicional.
+`GET /api/producao/{capacidade,mrp}?de=AAAA-MM-DD&ate=AAAA-MM-DD` valida janela de até 730 dias. Calendário/feriados, itens, OPs e compras são paginados sem truncamento silencioso; OP fora do horizonte não cobre demanda, consumo é associado à sua OP e compra sem previsão é destacada. BOM multinível detecta ciclos/corte de profundidade e avisa; MRP não cria compras. Leituras não são todas um snapshot único, e consumo não alocado, alocação ótima, capacidade finita e cenários grandes ainda exigem validação adicional.
+
+### Reposição (MRP de compra) — migração 0107
+
+A sugestão de compra (`GET /api/suprimentos/sugestao-compra`) é um CÁLCULO: nunca cria pedido. A migração `0107` adicionou parâmetros de reposição **aditivos e opt-in** a `produtos` — `estoque_seguranca`, `lote_minimo_compra`, `multiplo_compra` e `lead_time_dias`. Todos nascem neutros (0/1/1/NULL), então com a configuração antiga a sugestão dá o MESMO número.
+
+Regras: o **piso** de reposição é o maior entre `estoque_min` (alerta) e `estoque_seguranca` (colchão); a quantidade é arredondada para cima no **múltiplo de compra** e nunca fica abaixo do **lote mínimo** (caixa fechada do fornecedor); o **lead time** do produto (ou, na ausência, o `prazo_entrega_dias` do fornecedor principal) alimenta o **ponto de pedido** informativo. O comprometido NÃO-venda (empenho de OP + bloqueio de qualidade, lidos das reservas canônicas `estoque_reservas`) é descontado; a reserva de VENDA já entra em "em pedidos de venda", então não se conta a mesma peça duas vezes. A tela `SugestaoCompraPage` mostra segurança, lead time e ponto de pedido.
+
+O cálculo NÃO cobre calendário/capacidade finita, pegging nem conversão automática de necessidade em pedido — isso continua exigindo decisão do Diretor.
 
 Expedição e logística existentes registram remessa/rastreio e possuem contratos de transportadora configuráveis, sem criar sucesso remoto fictício. Não há certificação completa TMS/carriers/etiquetas nem operação real homologada. A devolução testada atualiza o estoque de itens em bom estado e reverte financeiro em devolução total, mas não comprova a cadeia completa de refund eletrônico no provider.
 

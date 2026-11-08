@@ -448,11 +448,21 @@ export type LinhaSugestao = {
   nome: string | null;
   estoque_atual: number;
   estoque_min: number;
+  estoque_seguranca: number;
+  lote_minimo_compra: number;
+  multiplo_compra: number;
+  lead_time_dias: number | null;
+  /** Ponto de pedido: piso + consumo previsto durante o lead time. Informativo. */
+  ponto_pedido: number | null;
   estoque_max: number;
   consumo_medio_mensal: number;
   em_pedidos_venda: number;
   em_compras_transito: number;
+  /** Empenho de OP + bloqueio de qualidade (não-venda) que a sugestão desconta. */
+  em_comprometido: number;
   disponivel_projetado: number;
+  /** Quantidade antes de aplicar lote mínimo/múltiplo — mostra o efeito do arredondamento. */
+  sugerido_bruto: number;
   sugerido: number;
   fornecedor_id: number | null;
   codigo_fornecedor: string | null;
@@ -464,6 +474,12 @@ export type LinhaSugestao = {
 /**
  * Calcula a sugestão. Pura o suficiente para testar: recebe os dados, devolve
  * a linha. Exportada para o teste unitário da fórmula.
+ *
+ * REPOSIÇÃO (0107): além do cálculo original (estoque atual, mínimo, máximo,
+ * consumo, trânsito), considera o PISO de reposição (o maior entre mínimo e
+ * estoque de segurança) e a CAIXA FECHADA do fornecedor (lote mínimo e múltiplo
+ * de compra). Com os parâmetros neutros (0/1/1) o resultado é IDÊNTICO ao de
+ * antes — a evolução é opt-in.
  */
 export function sugerirQuantidade(input: {
   estoqueAtual: number;
@@ -472,25 +488,54 @@ export function sugerirQuantidade(input: {
   consumoMensal: number;
   emPedidosVenda: number;
   emComprasTransito: number;
-}): { sugerido: number; disponivelProjetado: number; motivo: string } {
+  estoqueSeguranca?: number;
+  loteMinimo?: number;
+  multiplo?: number;
+  /**
+   * Comprometido NÃO-venda: empenho de OP + bloqueio de qualidade, lidos das
+   * reservas canônicas (`estoque_reservas`). A reserva de VENDA já vem em
+   * `emPedidosVenda` — somar as duas contaria a mesma peça duas vezes.
+   */
+  emComprometido?: number;
+}): { sugerido: number; sugeridoBruto: number; disponivelProjetado: number; motivo: string } {
   const { estoqueAtual, estoqueMin, estoqueMax, consumoMensal, emPedidosVenda, emComprasTransito } = input;
-  // O que sobra depois de atender o que já foi vendido e o que já está vindo.
-  const disponivelProjetado = estoqueAtual + emComprasTransito - emPedidosVenda;
-  if (disponivelProjetado >= estoqueMin) {
-    return { sugerido: 0, disponivelProjetado, motivo: 'Estoque projetado acima do mínimo.' };
+  const seguranca = Math.max(0, Math.trunc(input.estoqueSeguranca ?? 0));
+  const loteMinimo = Math.max(1, Math.trunc(input.loteMinimo ?? 1));
+  const multiplo = Math.max(1, Math.trunc(input.multiplo ?? 1));
+  const comprometido = Math.max(0, input.emComprometido ?? 0);
+  // PISO de reposição: o mínimo é ALERTA; a segurança é o piso. Repõe-se até o
+  // maior dos dois, nunca abaixo dele.
+  const piso = Math.max(estoqueMin, seguranca);
+  // O que sobra depois de atender o que já foi vendido, o que está empenhado/
+  // bloqueado e o que já está vindo.
+  const disponivelProjetado = estoqueAtual + emComprasTransito - emPedidosVenda - comprometido;
+  if (disponivelProjetado >= piso) {
+    return { sugerido: 0, sugeridoBruto: 0, disponivelProjetado, motivo: 'Estoque projetado acima do mínimo.' };
   }
-  // Alvo: o teto declarado. Sem teto, cobre 1 mês de consumo além do mínimo —
+  // Alvo: o teto declarado. Sem teto, cobre 1 mês de consumo além do piso —
   // uma regra explícita, não um palpite.
-  const alvo = estoqueMax > estoqueMin ? estoqueMax : Math.max(estoqueMin, Math.ceil(consumoMensal) + estoqueMin);
+  const alvo = estoqueMax > piso ? estoqueMax : Math.max(piso, Math.ceil(consumoMensal) + piso);
   const bruto = alvo - disponivelProjetado;
-  if (bruto <= 0) return { sugerido: 0, disponivelProjetado, motivo: 'Estoque projetado suficiente.' };
+  if (bruto <= 0) return { sugerido: 0, sugeridoBruto: 0, disponivelProjetado, motivo: 'Estoque projetado suficiente.' };
+  const sugeridoBruto = Math.max(1, Math.ceil(bruto));
+  // CAIXA FECHADA: nunca abaixo do lote mínimo; arredonda para cima no múltiplo.
+  let sugerido = Math.max(sugeridoBruto, loteMinimo);
+  if (multiplo > 1) sugerido = Math.ceil(sugerido / multiplo) * multiplo;
+  sugerido = Math.max(sugerido, loteMinimo);
+  const pisoDesc = seguranca > estoqueMin ? `piso de reposição ${piso} (segurança ${seguranca})` : `mínimo ${piso}`;
+  const rodape =
+    multiplo > 1 || loteMinimo > 1
+      ? ` Ajustado à caixa do fornecedor (mínimo ${loteMinimo}${multiplo > 1 ? `, múltiplo de ${multiplo}` : ''}).`
+      : '';
+  const notaComprometido = comprometido > 0 ? ` ${comprometido} comprometido(s) (empenho/bloqueio) não contam.` : '';
   return {
-    sugerido: Math.max(1, Math.ceil(bruto)),
+    sugerido,
+    sugeridoBruto,
     disponivelProjetado,
     motivo:
-      emComprasTransito > 0
-        ? `Estoque projetado ${disponivelProjetado} abaixo do mínimo ${estoqueMin} (há ${emComprasTransito} em trânsito).`
-        : `Estoque projetado ${disponivelProjetado} abaixo do mínimo ${estoqueMin}.`,
+      (emComprasTransito > 0
+        ? `Estoque projetado ${disponivelProjetado} abaixo do ${pisoDesc} (há ${emComprasTransito} em trânsito).`
+        : `Estoque projetado ${disponivelProjetado} abaixo do ${pisoDesc}.`) + notaComprometido + rodape,
   };
 }
 
@@ -515,6 +560,28 @@ export async function sugestaoCompra(req: Request, res: Response) {
   const compras = await s.list(getResource('compras')!, { page: 1, pageSize: 20000, filter: { empresa_id: empresaId } });
   const itensCompra = await s.list(getResource('itens_compra')!, { page: 1, pageSize: 100000, filter: { empresa_id: empresaId } });
   const movimentos = await s.list(getResource('movimentacoes')!, { page: 1, pageSize: 200000, filter: { empresa_id: empresaId } });
+  // Prazo de entrega por fornecedor (lead time herdado quando o produto não
+  // declara o seu). Só os fornecedores com prazo cadastrado entram no mapa.
+  const fornecedores = await s.list(getResource('fornecedores')!, { page: 1, pageSize: 20000, filter: { empresa_id: empresaId } });
+  const prazoPorFornecedor = new Map<number, number>();
+  for (const f of fornecedores.rows) {
+    const prazo = f.prazo_entrega_dias;
+    if (prazo === null || prazo === undefined || !Number.isFinite(Number(prazo))) continue;
+    prazoPorFornecedor.set(Number(f.id), Math.max(0, Math.trunc(Number(prazo))));
+  }
+
+  // ---- comprometido NÃO-venda: empenho (OP) + bloqueio (qualidade) ----
+  // Lido da reserva CANÔNICA (`estoque_reservas`). A reserva de VENDA é contada
+  // em `emPedidosVenda` (venda em aberto) e NÃO entra aqui — do contrário a
+  // mesma peça seria descontada duas vezes (regra do motor canônico de estoque).
+  const reservas = await s.list(getResource('estoque_reservas')!, { page: 1, pageSize: 100000, filter: { empresa_id: empresaId, status: 'ativa' } });
+  const emComprometido = new Map<number, number>();
+  for (const r of reservas.rows) {
+    const tipo = String(r.tipo || '');
+    if (tipo !== 'empenho' && tipo !== 'bloqueio') continue;
+    const pid = Number(r.produto_id);
+    emComprometido.set(pid, (emComprometido.get(pid) || 0) + num(r.quantidade));
+  }
 
   // ---- estoque atual por produto ----
   const estoqueAtual = new Map<number, number>();
@@ -571,22 +638,47 @@ export async function sugestaoCompra(req: Request, res: Response) {
       consumoMensal: consumo,
       emPedidosVenda: emPedidosVenda.get(pid) || 0,
       emComprasTransito: Math.trunc(emComprasTransito.get(pid) || 0),
+      estoqueSeguranca: Math.trunc(num(p.estoque_seguranca)),
+      loteMinimo: Math.max(1, Math.trunc(num(p.lote_minimo_compra, 1))),
+      multiplo: Math.max(1, Math.trunc(num(p.multiplo_compra, 1))),
+      emComprometido: emComprometido.get(pid) || 0,
     });
     if (calculo.sugerido <= 0) continue;
     const custo = round2(num(p.custo));
+    const fornecedorId = p.fornecedor_id ? Number(p.fornecedor_id) : null;
+    // Lead time: o próprio do produto (0107) ou o prazo de entrega do fornecedor
+    // principal. Nunca inventado — sem os dois, fica null e o cálculo segue.
+    const leadTime = p.lead_time_dias !== null && p.lead_time_dias !== undefined && Number.isFinite(Number(p.lead_time_dias))
+      ? Math.max(0, Math.trunc(Number(p.lead_time_dias)))
+      : fornecedorId !== null
+        ? prazoPorFornecedor.get(fornecedorId) ?? null
+        : null;
+    const seguranca = Math.trunc(num(p.estoque_seguranca));
+    const piso = Math.max(min, seguranca);
+    // Ponto de pedido informativo: piso + consumo previsto durante o lead time
+    // (consumo médio diário × dias de lead time). Sem lead time, fica null.
+    const pontoPedido =
+      leadTime === null ? null : round2(piso + (consumo / 30) * leadTime);
     linhas.push({
       produto_id: pid,
       sku: p.sku ? String(p.sku) : null,
       nome: p.nome ? String(p.nome) : null,
       estoque_atual: atual,
       estoque_min: min,
+      estoque_seguranca: seguranca,
+      lote_minimo_compra: Math.max(1, Math.trunc(num(p.lote_minimo_compra, 1))),
+      multiplo_compra: Math.max(1, Math.trunc(num(p.multiplo_compra, 1))),
+      lead_time_dias: leadTime,
+      ponto_pedido: pontoPedido,
       estoque_max: Math.trunc(num(p.estoque_max)),
       consumo_medio_mensal: consumo,
       em_pedidos_venda: emPedidosVenda.get(pid) || 0,
       em_compras_transito: Math.trunc(emComprasTransito.get(pid) || 0),
+      em_comprometido: round3(emComprometido.get(pid) || 0),
       disponivel_projetado: calculo.disponivelProjetado,
+      sugerido_bruto: calculo.sugeridoBruto,
       sugerido: calculo.sugerido,
-      fornecedor_id: p.fornecedor_id ? Number(p.fornecedor_id) : null,
+      fornecedor_id: fornecedorId,
       codigo_fornecedor: p.codigo_fornecedor ? String(p.codigo_fornecedor) : null,
       custo_unitario: custo,
       custo_total: round2(custo * calculo.sugerido),
