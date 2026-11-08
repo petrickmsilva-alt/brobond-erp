@@ -1,5 +1,5 @@
 {
-  "gerado_em": "2026-11-07T22:06:44.572Z",
+  "gerado_em": "2026-11-07T23:26:59.869Z",
   "fonte_de_verdade_do_schema": "db/schema.sql + db/migrations/*.sql (PostgreSQL); Prisma = bounded context do commerce",
   "migrations": {
     "sql": 103,
@@ -8,8 +8,8 @@
   },
   "tabelas": {
     "total": 212,
-    "com_empresa_id": 184,
-    "sem_empresa_id": 28,
+    "com_empresa_id": 192,
+    "sem_empresa_id": 20,
     "fora_do_prisma": 201
   },
   "indices": 570,
@@ -201,14 +201,14 @@
   },
   "testes": {
     "server": {
-      "arquivos": 287,
-      "casos": 2393
+      "arquivos": 290,
+      "casos": 2409
     },
     "client": {
       "arquivos": 133,
       "casos": 1140
     },
-    "total": 3533
+    "total": 3549
   },
   "integracoes": {
     "arquivos_modules": 80,
@@ -298,6 +298,11 @@
     {
       "nivel": "AVISO",
       "regra": "TABELA_SEM_RECURSO",
+      "mensagem": "A tabela \"payment_attempts\" tem empresa_id, mas nenhum recurso a expõe no CRUD genérico (escopo aplicado por endpoint próprio)."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TABELA_SEM_RECURSO",
       "mensagem": "A tabela \"payment_dispute_events\" tem empresa_id, mas nenhum recurso a expõe no CRUD genérico (escopo aplicado por endpoint próprio)."
     },
     {
@@ -308,7 +313,27 @@
     {
       "nivel": "AVISO",
       "regra": "TABELA_SEM_RECURSO",
+      "mensagem": "A tabela \"payment_disputes\" tem empresa_id, mas nenhum recurso a expõe no CRUD genérico (escopo aplicado por endpoint próprio)."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TABELA_SEM_RECURSO",
+      "mensagem": "A tabela \"payment_intents\" tem empresa_id, mas nenhum recurso a expõe no CRUD genérico (escopo aplicado por endpoint próprio)."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TABELA_SEM_RECURSO",
       "mensagem": "A tabela \"payment_late_reviews\" tem empresa_id, mas nenhum recurso a expõe no CRUD genérico (escopo aplicado por endpoint próprio)."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TABELA_SEM_RECURSO",
+      "mensagem": "A tabela \"payment_methods\" tem empresa_id, mas nenhum recurso a expõe no CRUD genérico (escopo aplicado por endpoint próprio)."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TABELA_SEM_RECURSO",
+      "mensagem": "A tabela \"payment_operations\" tem empresa_id, mas nenhum recurso a expõe no CRUD genérico (escopo aplicado por endpoint próprio)."
     },
     {
       "nivel": "AVISO",
@@ -324,6 +349,21 @@
       "nivel": "AVISO",
       "regra": "TABELA_SEM_RECURSO",
       "mensagem": "A tabela \"payment_payouts\" tem empresa_id, mas nenhum recurso a expõe no CRUD genérico (escopo aplicado por endpoint próprio)."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TABELA_SEM_RECURSO",
+      "mensagem": "A tabela \"payment_refunds\" tem empresa_id, mas nenhum recurso a expõe no CRUD genérico (escopo aplicado por endpoint próprio)."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TABELA_SEM_RECURSO",
+      "mensagem": "A tabela \"payment_routing_rules\" tem empresa_id, mas nenhum recurso a expõe no CRUD genérico (escopo aplicado por endpoint próprio)."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TABELA_SEM_RECURSO",
+      "mensagem": "A tabela \"payment_settlements\" tem empresa_id, mas nenhum recurso a expõe no CRUD genérico (escopo aplicado por endpoint próprio)."
     },
     {
       "nivel": "AVISO",
@@ -403,14 +443,6 @@
     "login_tentativas",
     "medida_valores",
     "medidas",
-    "payment_attempts",
-    "payment_disputes",
-    "payment_intents",
-    "payment_methods",
-    "payment_operations",
-    "payment_refunds",
-    "payment_routing_rules",
-    "payment_settlements",
     "portal_acessos",
     "sale_items",
     "sessoes",
