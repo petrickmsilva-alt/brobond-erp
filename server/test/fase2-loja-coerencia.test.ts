@@ -80,6 +80,7 @@ test('nenhum documento de arquitetura afirma a retirada da /loja como concluída
     'docs/architecture/TARGET-ARCHITECTURE.md',
     'docs/architecture/README.md',
     'docs/architecture/NATIVE-STORE-DECOMMISSION.md',
+    'docs/architecture/NATIVE-STORE-DECOMMISSION-REPORT.md',
   ];
   for (const arquivo of arquivos) {
     const texto = ler(arquivo);
@@ -93,5 +94,18 @@ test('nenhum documento de arquitetura afirma a retirada da /loja como concluída
       /retirada[^\n]*\*\*(concluída|executada)\*\*/i,
       `${arquivo}: a retirada não pode ser descrita como concluída/executada`
     );
+    // Afirmação em prosa (sem negrito) do tipo "A retirada é executada na
+    // Fase 2" também é incoerente com o estado real (retirada não executada).
+    assert.doesNotMatch(
+      texto,
+      /retirada (?:é|e|foi) executada/i,
+      `${arquivo}: a retirada não pode ser afirmada como executada (ainda pendente — BL-015)`
+    );
   }
+});
+
+test('o plano de retirada (NATIVE-STORE-DECOMMISSION.md) declara a execução bloqueada', () => {
+  const plano = ler('docs/architecture/NATIVE-STORE-DECOMMISSION.md');
+  assert.match(plano, /execução está\s+bloqueada\*\*/i, 'o plano deve declarar a execução bloqueada');
+  assert.match(plano, /ainda está ativa/i, 'o plano deve declarar a superfície ainda ativa');
 });

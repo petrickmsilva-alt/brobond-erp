@@ -3,7 +3,11 @@
 **Data:** 2026-11-07 · **Branch:** `architecture/fase-0-blueprint`
 **Decisão do Diretor (ADR-0007):** a loja nativa `/loja` **não** é mais
 experiência pública de varejo; a **RETAIL WooCommerce** passa a ser a única loja
-pública. A retirada é **executada na Fase 2**; esta é a auditoria e o plano.
+pública. A retirada foi **planejada para a Fase 2**, mas a **execução está
+bloqueada** por ambiente/decisão (impedimentos I-1..I-4) — a superfície nativa
+**ainda está ativa**. Ver
+[`NATIVE-STORE-DECOMMISSION-REPORT.md`](NATIVE-STORE-DECOMMISSION-REPORT.md).
+Este documento é a auditoria e o **plano** de retirada; nada aqui foi executado.
 
 > **Restrições absolutas.** Não apagar tabelas/históricos/pedidos/clientes/
 > produtos/financeiro. Não remover rota administrativa só porque o caminho
