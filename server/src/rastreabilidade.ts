@@ -34,7 +34,6 @@ const R_DEV = () => getResource('devolucoes_fornecedor')!;
 const R_COMPRA = () => getResource('compras')!;
 const R_FORNECEDOR = () => getResource('fornecedores')!;
 const R_LOCAL = () => getResource('locais')!;
-const R_ENVIO = () => getResource('envios')!;
 
 const LIMITE = 2000;
 
