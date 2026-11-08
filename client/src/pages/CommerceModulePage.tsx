@@ -15,6 +15,7 @@ import CommercePromocaoFormPage from './commerce/PromocaoFormPage';
 import CommerceCuponsPage from './commerce/CuponsPage';
 import CommerceCupomFormPage from './commerce/CupomFormPage';
 import CommercePrecosPage from './commerce/PrecosPage';
+import CommerceOmnichannelPage from './commerce/OmnichannelPage';
 import CommercePagamentosPage from './commerce/PagamentosPage';
 import PaymentEnginePage from './commerce/PaymentEnginePage';
 
@@ -35,6 +36,7 @@ const COMMERCE_PAGES: Record<string, () => JSX.Element> = {
   'commerce-promocao-nova': CommercePromocaoFormPage,
   'commerce-promocao-editar': CommercePromocaoFormPage,
   'commerce-precos': CommercePrecosPage,
+  'commerce-omnichannel': CommerceOmnichannelPage,
   'commerce-pagamentos': CommercePagamentosPage,
   'commerce-providers': PaymentEnginePage,
   'commerce-cupons': CommerceCuponsPage,

@@ -9125,3 +9125,58 @@ CREATE INDEX IF NOT EXISTS vendas_status_historico_idx
   ON vendas_status_historico (empresa_id, venda_id, criado_em DESC);
 CREATE INDEX IF NOT EXISTS vendas_status_historico_origem_idx
   ON vendas_status_historico (empresa_id, origem);
+
+-- ============================================================================
+-- ESPELHO da migração 0110 — COMMERCE & OMNICHANNEL: RECONCILIAÇÃO MULTICANAL
+-- (a autoridade é db/migrations/0110_commerce_omnichannel_reconciliacao.sql;
+--  este espelho existe para o parser de schema e o contrato de colunas)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS commerce_reconciliacao (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL REFERENCES empresas(id),
+  canal TEXT NOT NULL,
+  CONSTRAINT commerce_reconciliacao_canal_ck CHECK (canal IN (
+    'BROBOND', 'MERCADOLIVRE', 'NUVEMSHOP', 'WOOCOMMERCE', 'INSTAGRAM_SHOPPING', 'MERCADOPAGO'
+  )),
+  store_key TEXT,
+  CONSTRAINT commerce_reconciliacao_store_key_ck
+    CHECK (store_key IS NULL OR store_key IN ('RETAIL', 'WHOLESALE')),
+  categoria TEXT NOT NULL,
+  CONSTRAINT commerce_reconciliacao_categoria_ck CHECK (categoria IN (
+    'CATALOGO', 'PRECO', 'ESTOQUE', 'PEDIDOS', 'CONECTOR'
+  )),
+  tipo TEXT NOT NULL,
+  classificacao TEXT NOT NULL,
+  CONSTRAINT commerce_reconciliacao_classificacao_ck
+    CHECK (classificacao IN ('LEGITIMA', 'AUTOMATICA', 'HUMANA')),
+  severidade TEXT NOT NULL DEFAULT 'media',
+  CONSTRAINT commerce_reconciliacao_severidade_ck
+    CHECK (severidade IN ('baixa', 'media', 'alta', 'critica')),
+  produto_id INTEGER REFERENCES produtos(id) ON DELETE SET NULL,
+  sku TEXT,
+  referencia TEXT,
+  detalhe TEXT NOT NULL,
+  acao_recomendada TEXT,
+  dados JSONB,
+  fingerprint TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'ABERTA',
+  CONSTRAINT commerce_reconciliacao_status_ck
+    CHECK (status IN ('ABERTA', 'CORRIGIDA', 'IGNORADA')),
+  resolucao TEXT,
+  detectada_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  resolvida_em TIMESTAMPTZ,
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  atualizado_em TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_commerce_reconciliacao_fingerprint
+  ON commerce_reconciliacao (empresa_id, fingerprint);
+CREATE INDEX IF NOT EXISTS commerce_reconciliacao_painel_idx
+  ON commerce_reconciliacao (empresa_id, canal, status, detectada_em DESC);
+CREATE INDEX IF NOT EXISTS commerce_reconciliacao_categoria_idx
+  ON commerce_reconciliacao (empresa_id, categoria, status);
+CREATE INDEX IF NOT EXISTS commerce_reconciliacao_store_idx
+  ON commerce_reconciliacao (empresa_id, store_key, status)
+  WHERE store_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS commerce_reconciliacao_produto_idx
+  ON commerce_reconciliacao (empresa_id, produto_id)
+  WHERE produto_id IS NOT NULL;
