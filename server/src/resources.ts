@@ -630,6 +630,33 @@ export const RESOURCES: Record<string, Resource> = {
   // ----------------------------------------------------------------
   // Cadastros
   // ----------------------------------------------------------------
+  // Supply chain — LOTE físico (rastreabilidade ponta a ponta). O saldo do lote
+  // é DERIVADO das movimentações; não há coluna de saldo aqui.
+  lotes: {
+    key: 'lotes',
+    empresa: true,
+    table: 'lotes',
+    label: 'Lotes',
+    singular: 'Lote',
+    labelFields: ['codigo'],
+    ops: { create: true, update: true, delete: false },
+    notice:
+      'Lote físico (código do fornecedor + validade). É opcional: produto/insumo sem lote continua funcionando. O saldo do lote é a soma das movimentações — nunca um saldo gravado. Lote em uso não é excluído, é desativado.',
+    fields: [
+      { name: 'codigo', label: 'Código do lote', type: 'text', required: true, search: true, maxLength: 60, placeholder: 'Ex.: L2026-07, lote do fornecedor' },
+      { name: 'produto_id', label: 'Produto', type: 'ref', ref: 'produtos', search: true, hint: 'Informe produto OU insumo — nunca os dois.' },
+      { name: 'insumo_id', label: 'Insumo', type: 'ref', ref: 'insumos', search: true },
+      { name: 'fornecedor_id', label: 'Fornecedor de origem', type: 'ref', ref: 'fornecedores', search: true },
+      { name: 'fabricacao', label: 'Fabricação', type: 'date', list: false },
+      { name: 'validade', label: 'Validade', type: 'date' },
+      { name: 'observacoes', label: 'Observações', type: 'textarea', maxLength: 500, list: false, wide: true },
+      ativo,
+      { name: 'criado_por', label: 'Criado por', type: 'ref', ref: 'usuarios', readonly: true, form: false, list: false },
+      ...auditFields,
+    ],
+    filterFields: ['produto_id', 'insumo_id', 'fornecedor_id', 'ativo'],
+    orderBy: { field: 'id', dir: 'desc' },
+  },
   locais: {
     key: 'locais',
     empresa: true,
@@ -2879,6 +2906,9 @@ export const RESOURCES: Record<string, Resource> = {
       { name: 'recebimento_id', label: 'Recebimento', type: 'ref', ref: 'compra_recebimentos', list: false, hint: 'Preenchido automaticamente quando a entrada vem de um recebimento de compra.' },
       { name: 'item_compra_id', label: 'Item da compra', type: 'ref', ref: 'itens_compra', list: false },
       { name: 'custo_unitario', label: 'Custo unitário', type: 'money', min: 0, list: false, hint: 'Custo efetivo da entrada (preço + frete rateado + imposto que compõe custo). Base do estorno.' },
+      // Rastreabilidade por lote (0106): opcional. Preenchido pelo recebimento de
+      // compra e pela devolução; aceito também no lançamento manual com lote.
+      { name: 'lote_id', label: 'Lote', type: 'ref', ref: 'lotes', search: true, hint: 'Lote físico (opcional). A saída de um lote não é bloqueada por validade — o controle é informativo.' },
       // E2: vínculo FORMAL com a OP. Antes a entrada de produto acabado só era
       // achada pelo texto do motivo ('Produção concluída — OP #N'); o motivo
       // continua sendo escrito para leitura, mas o vínculo agora é a FK.
@@ -3702,6 +3732,7 @@ export const RESOURCES: Record<string, Resource> = {
       // motivo ligava as duas coisas, e o estorno dependia de dar match nele).
       { name: 'ordem_id', label: 'Ordem de fabricação', type: 'ref', ref: 'ordens', search: true, hint: 'Preenchido automaticamente no consumo por OP.' },
       { name: 'devolucao_fornecedor_id', label: 'Devolução ao fornecedor', type: 'integer', readonly: true, list: false, form: false },
+      { name: 'lote_id', label: 'Lote', type: 'ref', ref: 'lotes', search: true, hint: 'Lote físico do insumo (opcional).' },
       { name: 'data', label: 'Data', type: 'datetime', readonly: true },
     ],
     orderBy: { field: 'data', dir: 'desc' },
@@ -5191,6 +5222,7 @@ export const RESOURCES: Record<string, Resource> = {
       { name: 'recebimento_id', label: 'Recebimento', type: 'ref', ref: 'compra_recebimentos' },
       { name: 'item_compra_id', label: 'Item da compra', type: 'ref', ref: 'itens_compra' },
       { name: 'quantidade', label: 'Quantidade', type: 'number' },
+      { name: 'lote_id', label: 'Lote', type: 'ref', ref: 'lotes', list: false },
     ],
   },
 
@@ -5274,6 +5306,7 @@ export const RESOURCES: Record<string, Resource> = {
       { name: 'insumo_id', label: 'Insumo', type: 'ref', ref: 'insumos', list: false },
       { name: 'quantidade', label: 'Quantidade', type: 'number', required: true },
       { name: 'custo_unitario', label: 'Custo unitário (R$)', type: 'money', readonly: true },
+      { name: 'lote_id', label: 'Lote', type: 'ref', ref: 'lotes', list: false },
       { name: 'estoque_baixado', label: 'Estoque baixado', type: 'boolean', readonly: true },
       { name: 'movimentacao_id', label: 'Movimentação', type: 'integer', readonly: true, list: false, form: false },
       { name: 'movimentacao_insumo_id', label: 'Movimentação de insumo', type: 'integer', readonly: true, list: false, form: false },

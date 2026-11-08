@@ -9023,3 +9023,44 @@ CREATE INDEX IF NOT EXISTS idx_movimentacoes_devolucao_fornecedor
   ON movimentacoes (devolucao_fornecedor_id);
 CREATE INDEX IF NOT EXISTS idx_movimentacoes_insumos_devolucao_fornecedor
   ON movimentacoes_insumos (devolucao_fornecedor_id);
+
+-- ============================================================================
+-- ESPELHO da migração 0106 — RASTREABILIDADE POR LOTE
+-- (a autoridade é db/migrations/0106_rastreabilidade_lotes.sql; este espelho
+--  existe para o parser de schema e o contrato de colunas dos recursos)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS lotes (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id),
+  codigo TEXT NOT NULL,
+  produto_id INTEGER REFERENCES produtos(id),
+  insumo_id INTEGER REFERENCES insumos(id),
+  validade DATE,
+  fabricacao DATE,
+  fornecedor_id INTEGER REFERENCES fornecedores(id),
+  observacoes TEXT,
+  ativo BOOLEAN NOT NULL DEFAULT TRUE,
+  criado_por INTEGER REFERENCES usuarios(id),
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  atualizado_em TIMESTAMPTZ,
+  CONSTRAINT lotes_origem_check CHECK (
+    (produto_id IS NOT NULL AND insumo_id IS NULL)
+    OR (produto_id IS NULL AND insumo_id IS NOT NULL)
+  ),
+  CONSTRAINT lotes_codigo_obrigatorio CHECK (TRIM(COALESCE(codigo, '')) <> ''),
+  CONSTRAINT lotes_validade_apos_fabricacao CHECK (
+    validade IS NULL OR fabricacao IS NULL OR validade >= fabricacao
+  )
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_lotes_empresa_codigo_produto
+  ON lotes (empresa_id, codigo, produto_id) WHERE produto_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_lotes_empresa_codigo_insumo
+  ON lotes (empresa_id, codigo, insumo_id) WHERE insumo_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_lotes_empresa_id ON lotes (empresa_id, id);
+CREATE INDEX IF NOT EXISTS lotes_empresa_produto_idx ON lotes (empresa_id, produto_id);
+CREATE INDEX IF NOT EXISTS lotes_empresa_insumo_idx ON lotes (empresa_id, insumo_id);
+CREATE INDEX IF NOT EXISTS lotes_empresa_fornecedor_idx ON lotes (empresa_id, fornecedor_id);
+ALTER TABLE movimentacoes ADD COLUMN IF NOT EXISTS lote_id INTEGER;
+ALTER TABLE movimentacoes_insumos ADD COLUMN IF NOT EXISTS lote_id INTEGER;
+ALTER TABLE compra_recebimento_itens ADD COLUMN IF NOT EXISTS lote_id INTEGER;
+ALTER TABLE devolucao_fornecedor_itens ADD COLUMN IF NOT EXISTS lote_id INTEGER;

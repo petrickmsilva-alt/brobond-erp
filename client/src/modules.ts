@@ -1133,6 +1133,19 @@ export const MODULES: Module[] = [
     path: '/inventario',
     description: 'Contagem física e acerto de saldos. Abra uma contagem por local, digite as quantidades e gere os ajustes.',
   },
+  {
+    id: 'rastreabilidade',
+    label: 'Rastreabilidade',
+    icon: History,
+    space: 'erp',
+    area: 'Estoque & Suprimentos',
+    group: 'Estoque',
+    subgroup: 'Rastreabilidade',
+    keywords: 'rastreabilidade lote validade origem fornecedor recall trilha cadeia de custodia',
+    path: '/rastreabilidade',
+    resource: 'lotes',
+    description: 'Cadeia ponta a ponta por lote: origem (fornecedor/recebimento), movimentações e saldo derivado — nunca um saldo gravado.',
+  },
 {
     id: 'contagem-ciclica-abc',
     label: 'Contagem Cíclica ABC',
@@ -2349,6 +2362,8 @@ export const PAGES_ESPECIAIS = [
   'colecoes',
   'painel-comercial',
   'contagem-ciclica-abc',
+  // SUPPLY CHAIN — rastreabilidade ponta a ponta (lote + trilha; página própria).
+  'rastreabilidade',
   // BROBOND COMMERCE OS — páginas próprias (ZERO MODAL; detalhe/novo/edição
   // sempre em rota dedicada, nunca sobreposição sobre a lista).
   'commerce-produtos',
@@ -2475,6 +2490,7 @@ export const MODULOS_PAGINA_PROPRIA = new Set<string>([
   'fiscal-calendario',
   'balancete',
   'contagem-ciclica-abc',
+  'rastreabilidade',
   'service-painel',
 ]);
 

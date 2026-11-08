@@ -450,6 +450,15 @@
       "rbac": "gerente"
     },
     {
+      "id": "rastreabilidade",
+      "label": "Rastreabilidade",
+      "tipo": "submodulo",
+      "recurso": "lotes",
+      "tabela": "lotes",
+      "rota": "/rastreabilidade",
+      "menu": true
+    },
+    {
       "id": "locais",
       "label": "Locais de Estoque",
       "tipo": "submodulo",

@@ -1,26 +1,26 @@
 {
-  "gerado_em": "2026-11-08T13:50:50.950Z",
+  "gerado_em": "2026-11-08T15:25:05.304Z",
   "fonte_de_verdade_do_schema": "db/schema.sql + db/migrations/*.sql (PostgreSQL); Prisma = bounded context do commerce",
   "migrations": {
-    "sql": 105,
-    "sql_com_conteudo": 105,
+    "sql": 106,
+    "sql_com_conteudo": 106,
     "prisma": 7
   },
   "tabelas": {
-    "total": 215,
-    "com_empresa_id": 195,
+    "total": 216,
+    "com_empresa_id": 196,
     "sem_empresa_id": 20,
-    "fora_do_prisma": 204
+    "fora_do_prisma": 205
   },
-  "indices": 591,
-  "constraints": 392,
+  "indices": 601,
+  "constraints": 399,
   "recursos": {
-    "total": 177,
-    "com_tabela": 177,
-    "multiempresa": 159,
+    "total": 178,
+    "com_tabela": 178,
+    "multiempresa": 160,
     "somente_leitura": 84,
     "rbac_restrito": 83,
-    "cobertura_tenant_pct": 89.8
+    "cobertura_tenant_pct": 89.9
   },
   "crm": [
     {
@@ -79,17 +79,17 @@
     }
   ],
   "modulos": {
-    "total": 145,
-    "navegaveis": 145,
+    "total": 146,
+    "navegaveis": 146,
     "planejados": 0,
     "areas": 11,
     "grupos": 35,
-    "com_recurso": 108
+    "com_recurso": 109
   },
   "rotas": {
-    "total": 480,
+    "total": 486,
     "por_metodo": {
-      "GET": 211,
+      "GET": 217,
       "POST": 230,
       "PUT": 22,
       "DELETE": 14,
@@ -201,14 +201,14 @@
   },
   "testes": {
     "server": {
-      "arquivos": 296,
-      "casos": 2451
+      "arquivos": 297,
+      "casos": 2466
     },
     "client": {
       "arquivos": 133,
       "casos": 1140
     },
-    "total": 3591
+    "total": 3606
   },
   "integracoes": {
     "arquivos_modules": 80,
@@ -595,6 +595,7 @@
     "logistics_quotes",
     "logistics_shipping_rules",
     "logistics_webhook_inbox",
+    "lotes",
     "loyalty_movements",
     "loyalty_programs",
     "loyalty_tiers",

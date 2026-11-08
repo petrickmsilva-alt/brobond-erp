@@ -99,7 +99,7 @@ export async function aprovarCompra(req: Request, res: Response) {
 // RECEBIMENTO PARCIAL
 // ----------------------------------------------------------------------------
 
-type LinhaRecebimento = { item_compra_id: number; quantidade: number };
+type LinhaRecebimento = { item_compra_id: number; quantidade: number; lote_id: number | null };
 
 function normalizarLinhas(bruto: unknown): LinhaRecebimento[] {
   if (!Array.isArray(bruto) || !bruto.length) {
@@ -118,7 +118,14 @@ function normalizarLinhas(bruto: unknown): LinhaRecebimento[] {
     if (!(quantidade > 0)) {
       throw new HttpError(400, `Linha ${index + 1}: a quantidade recebida deve ser maior que zero.`, { [`itens[${index}].quantidade`]: 'Deve ser > 0' });
     }
-    return { item_compra_id: itemId, quantidade };
+    // Lote (0106) — opcional. O vínculo com o produto/insumo é conferido na
+    // regra canônica de custo (aplicarEntradaDeCompra).
+    const loteBruto = linha.lote_id;
+    const loteId = loteBruto === undefined || loteBruto === null || loteBruto === '' ? null : Number(loteBruto);
+    if (loteId !== null && (!Number.isInteger(loteId) || loteId <= 0)) {
+      throw new HttpError(400, `Linha ${index + 1}: lote_id inválido.`, { [`itens[${index}].lote_id`]: 'Inválido' });
+    }
+    return { item_compra_id: itemId, quantidade, lote_id: loteId };
   });
 }
 
@@ -224,7 +231,7 @@ export async function receberParcial(req: Request, res: Response) {
       const local = String(localData.local);
       const localId = Number(localData.local_id);
 
-      const entradas: { produto_id: number | null; insumo_id: number | null; tamanho_id: number | null; quantidade: number; item_id: number }[] = [];
+      const entradas: { produto_id: number | null; insumo_id: number | null; tamanho_id: number | null; quantidade: number; item_id: number; lote_id: number | null }[] = [];
       let total = 0;
 
       for (const linha of linhas) {
@@ -261,6 +268,7 @@ export async function receberParcial(req: Request, res: Response) {
           tamanho_id: item.tamanho_id === null || item.tamanho_id === undefined ? null : Number(item.tamanho_id),
           quantidade: round3(linha.quantidade),
           item_id: linha.item_compra_id,
+          lote_id: linha.lote_id,
         });
       }
 
@@ -283,7 +291,7 @@ export async function receberParcial(req: Request, res: Response) {
       );
 
       for (const e of entradas) {
-        await s.insert(R_RECEBIMENTO_ITEM(), { empresa_id: escopo.empresaId, recebimento_id: Number(recebimento.id), item_compra_id: e.item_id, quantidade: e.quantidade }, tx);
+        await s.insert(R_RECEBIMENTO_ITEM(), { empresa_id: escopo.empresaId, recebimento_id: Number(recebimento.id), item_compra_id: e.item_id, quantidade: e.quantidade, lote_id: e.lote_id }, tx);
       }
 
       // ---- estoque + CUSTO: uma única regra canônica ----
@@ -309,6 +317,7 @@ export async function receberParcial(req: Request, res: Response) {
           preco_unitario: num(porId.get(e.item_id)?.preco_unitario ?? 0),
           local,
           local_id: localId,
+          lote_id: e.lote_id,
         })),
         freteTotal: num(compra.frete),
         actor: { id: actor.id || null, name: actor.name },

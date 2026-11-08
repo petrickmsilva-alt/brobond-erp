@@ -275,7 +275,7 @@ describe('TopNavigation — Master Top Navigation (UX-05)', () => {
     // 143 módulos existentes + a Central de Notificações do Commerce.
     // `modules.test.ts` trava o mesmo número e a lista canônica — aqui só se
     // confirma que o menu não perde nem duplica a fonte única.
-    expect(MODULES).toHaveLength(145);
+    expect(MODULES).toHaveLength(146);
     unmount();
   });
 

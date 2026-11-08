@@ -50,6 +50,7 @@ const R_EVENTO = () => getResource('devolucao_fornecedor_eventos')!;
 const R_COMPRA = () => getResource('compras')!;
 const R_ITENS_COMPRA = () => getResource('itens_compra')!;
 const R_LOCAL = () => getResource('locais')!;
+const R_LOTE = () => getResource('lotes')!;
 
 export const STATUS_DEVOLUCAO_FORNECEDOR = ['solicitada', 'autorizada', 'expedida', 'encerrada', 'cancelada'] as const;
 export type StatusDevolucaoFornecedor = (typeof STATUS_DEVOLUCAO_FORNECEDOR)[number];
@@ -112,7 +113,7 @@ async function transicionar(s: Store, tx: Tx, devolucao: Row, de: string, para: 
 // CRIAÇÃO — SOLICITADA
 // ----------------------------------------------------------------------------
 
-type ItemEntrada = { item_compra_id: number; quantidade: number };
+type ItemEntrada = { item_compra_id: number; quantidade: number; lote_id: number | null };
 
 function normalizarItens(bruto: unknown): ItemEntrada[] {
   if (!Array.isArray(bruto) || !bruto.length) {
@@ -131,7 +132,13 @@ function normalizarItens(bruto: unknown): ItemEntrada[] {
     if (!(quantidade > 0)) {
       throw new HttpError(400, `Linha ${index + 1}: a quantidade deve ser maior que zero.`, { [`itens[${index}].quantidade`]: 'Deve ser > 0' });
     }
-    return { item_compra_id: itemId, quantidade };
+    // Lote (0106) — opcional. O vínculo com o produto/insumo do item é conferido
+    // sob o lock de domínio, antes de gravar o item.
+    const loteId = n(linha.lote_id);
+    if (loteId !== null && (!Number.isInteger(loteId) || loteId <= 0)) {
+      throw new HttpError(400, `Linha ${index + 1}: lote_id inválido.`, { [`itens[${index}].lote_id`]: 'Inválido' });
+    }
+    return { item_compra_id: itemId, quantidade, lote_id: loteId };
   });
 }
 
@@ -224,6 +231,15 @@ export async function criarDevolucaoFornecedor(req: Request, res: Response) {
       const criados: Row[] = [];
       for (const linha of itens) {
         const itemCompra = await s.get(R_ITENS_COMPRA(), linha.item_compra_id, tx);
+        // Lote (0106): precisa ser da empresa e do MESMO produto/insumo do item.
+        if (linha.lote_id !== null) {
+          const lote = await s.findOneWhere(R_LOTE(), { id: linha.lote_id, empresa_id: escopo.empresaId }, tx);
+          if (!lote) throw new HttpError(404, `O lote #${linha.lote_id} não pertence a esta empresa.`);
+          const idRef = (v: unknown) => (v === null || v === undefined || v === '' ? null : Number(v));
+          if (idRef(lote.produto_id) !== idRef(itemCompra?.produto_id) || idRef(lote.insumo_id) !== idRef(itemCompra?.insumo_id)) {
+            throw new HttpError(409, `O lote #${linha.lote_id} não corresponde ao produto/insumo deste item.`);
+          }
+        }
         criados.push(await s.insert(
           R_ITEM(),
           {
@@ -235,6 +251,7 @@ export async function criarDevolucaoFornecedor(req: Request, res: Response) {
             insumo_id: itemCompra?.insumo_id ? Number(itemCompra.insumo_id) : null,
             quantidade: linha.quantidade,
             custo_unitario: round2(Number(itemCompra?.preco_unitario || 0)),
+            lote_id: linha.lote_id,
             // Explícito: o compare-and-swap da expedição depende deste valor
             // existir como FALSE (o banco tem DEFAULT, o store em memória não).
             estoque_baixado: false,
@@ -345,6 +362,7 @@ export async function expedirDevolucaoFornecedor(req: Request, res: Response) {
               item_compra_id: Number(item.item_compra_id),
               custo_unitario: Number(item.custo_unitario || 0),
               devolucao_fornecedor_id: id,
+              lote_id: item.lote_id === null || item.lote_id === undefined ? null : Number(item.lote_id),
             },
             actor,
             tx,
@@ -363,6 +381,7 @@ export async function expedirDevolucaoFornecedor(req: Request, res: Response) {
               item_compra_id: Number(item.item_compra_id),
               custo_unitario: Number(item.custo_unitario || 0),
               devolucao_fornecedor_id: id,
+              lote_id: item.lote_id === null || item.lote_id === undefined ? null : Number(item.lote_id),
             },
             actor,
             tx,

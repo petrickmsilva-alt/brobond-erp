@@ -92,6 +92,8 @@ export type LinhaRecebimento = {
   preco_unitario: number;
   local: string;
   local_id?: number | null;
+  /** Lote físico (0106). Opcional; quando informado, precisa bater com o produto/insumo. */
+  lote_id?: number | null;
 };
 
 export type CustoDaLinha = {
@@ -311,6 +313,20 @@ export async function aplicarEntradaDeCompra(args: AplicarEntradaArgs): Promise<
     // 3) QUANTIDADE
     if (!(qtd > 0)) throw new HttpError(422, `Quantidade inválida (${qtd}) no item #${linha.item_compra_id}.`);
 
+    // LOTE (0106) — opcional. Quando informado, precisa pertencer à empresa e
+    // ao MESMO produto/insumo do item (não se recebe "lote do produto A" no
+    // item do produto B). O saldo do lote é derivado das movimentações.
+    let loteId: number | null = null;
+    if (linha.lote_id !== undefined && linha.lote_id !== null) {
+      loteId = Number(linha.lote_id);
+      const lote = await s.findOneWhere(getResource('lotes')!, { id: loteId, empresa_id: escopo.empresaId }, tx);
+      if (!lote) throw new HttpError(404, `O lote #${loteId} não pertence a esta empresa.`);
+      const idRef = (v: unknown) => (v === null || v === undefined || v === '' ? null : Number(v));
+      if (idRef(lote.produto_id) !== idRef(linha.produto_id) || idRef(lote.insumo_id) !== idRef(linha.insumo_id)) {
+        throw new HttpError(409, `O lote #${loteId} não corresponde ao produto/insumo deste item.`);
+      }
+    }
+
     const custoFrete = round2(rateio.get(linha.item_compra_id) ?? 0);
     const custoImpostos = round2(
       impostosPorItem?.get(linha.item_compra_id) ?? Number(itemCompra.custo_impostos ?? 0)
@@ -363,6 +379,7 @@ export async function aplicarEntradaDeCompra(args: AplicarEntradaArgs): Promise<
           recebimento_id: recebimentoId,
           item_compra_id: linha.item_compra_id,
           custo_unitario: custoEfetivo,
+          lote_id: loteId,
           usuario_id: actor.id || null,
         },
         tx
@@ -416,6 +433,7 @@ export async function aplicarEntradaDeCompra(args: AplicarEntradaArgs): Promise<
         compra_id: compraId,
         recebimento_id: recebimentoId,
         item_compra_id: linha.item_compra_id,
+        lote_id: loteId,
         usuario_id: actor.id || null,
       },
       tx
