@@ -16,6 +16,8 @@ type Revision = { id: number; revision: number; created_at: string; reason: stri
 type Unlink = { id: number; bank_transaction_id: number; created_at: string; reason: string };
 type Page<T> = { rows: T[]; total: number; pageSize: number };
 type Detail = { payout: Payout; settlements: Settlement[]; report: Report | null; revisions?: Page<Revision>; unlinks?: Page<Unlink> };
+type AutoConfig = { habilitado: boolean };
+type AutoResultado = { conciliados: number; ambiguos: number; sem_extrato: number; falhas: number };
 const emptyLine = (): Line => ({ provider_reference: '', gross_amount: '', provider_fee: '', gateway_fee: '', installment_fee: '', antifraud_fee: '', refund_amount: '', chargeback_amount: '', net_amount: '' });
 const fields: [keyof Line, string][] = [['provider_reference', 'Referência da transação'], ['gross_amount', 'Bruto (centavos)'], ['provider_fee', 'Taxa do provedor'], ['gateway_fee', 'Taxa de gateway'], ['installment_fee', 'Taxa de parcelas'], ['antifraud_fee', 'Taxa antifraude'], ['refund_amount', 'Reembolso'], ['chargeback_amount', 'Chargeback'], ['net_amount', 'Líquido (centavos)']];
 const base = '/commerce/pagamentos/repasses';
@@ -33,6 +35,7 @@ export default function PaymentPayoutsPage() {
   const [provider, setProvider] = useState('PAGBANK'); const [reference, setReference] = useState(''); const [date, setDate] = useState(''); const [net, setNet] = useState('');
   const [currency, setCurrency] = useState('');
   const [lines, setLines] = useState<Line[]>([emptyLine()]); const [bankId, setBankId] = useState(''); const [reason, setReason] = useState('');
+  const [auto, setAuto] = useState<AutoConfig | null>(null); const [autoResultado, setAutoResultado] = useState<AutoResultado | null>(null); const [autoBusy, setAutoBusy] = useState(false);
   const keyFor = useIdempotencyKey();
   useEffect(() => {
     if (novo || !canManage) return;
@@ -52,6 +55,25 @@ export default function PaymentPayoutsPage() {
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
   }, [id, location.pathname, novo, page, revisionsPage, unlinksPage, canManage, corrigir]);
+  // Configuração da conciliação automática só faz sentido na LISTA (sem id).
+  useEffect(() => {
+    if (novo || id || !canManage) return;
+    let ativo = true;
+    apiFetch<AutoConfig>('/commerce/payments/payouts-auto-reconcile').then((c) => { if (ativo) setAuto(c); }).catch(() => undefined);
+    return () => { ativo = false; };
+  }, [id, novo, canManage]);
+  async function alternarAuto() {
+    if (!auto) return; setError(''); setAutoBusy(true);
+    try {
+      const proximo = await apiFetch<AutoConfig>('/commerce/payments/payouts-auto-reconcile', { method: 'PUT', body: JSON.stringify({ enabled: !auto.habilitado }) });
+      setAuto(proximo);
+    } catch (e) { setError(e instanceof Error ? e.message : 'Falha ao alterar a conciliação automática.'); } finally { setAutoBusy(false); }
+  }
+  async function rodarAuto() {
+    setError(''); setAutoBusy(true);
+    try { setAutoResultado(await apiFetch<AutoResultado>('/commerce/payments/payouts-auto-reconcile/run', { method: 'POST' })); }
+    catch (e) { setError(e instanceof Error ? e.message : 'Falha ao executar a conciliação automática.'); } finally { setAutoBusy(false); }
+  }
   async function submit(e: FormEvent) {
     e.preventDefault(); setError(''); setBusy(true);
     try {
@@ -113,6 +135,22 @@ export default function PaymentPayoutsPage() {
         {unlinks && <section className="space-y-2 rounded-xl border border-line p-4"><h2 className="font-semibold">Desvinculações</h2>{unlinks.rows.map((r) => <p key={r.id}>Extrato #{r.bank_transaction_id} · {dataHora(r.created_at)} · {r.reason}</p>)}{!unlinks.rows.length && <p>Nenhuma desvinculação registrada.</p>}<Pagination label="desvinculações" page={unlinksPage} total={unlinks.total} size={unlinks.pageSize} setPage={setUnlinksPage} /></section>}
       </>}
     </> : !novo && !loading ? <>
+      <section className="space-y-3 rounded-xl border border-line p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="font-semibold">Conciliação automática de repasses</h2>
+            <p className="text-sm text-muted">
+              Quando ligada, a varredura casa cada repasse importado com a <strong>única</strong> linha de extrato de mesmo valor líquido. Casamento ambíguo não é decidido — fica para revisão. Não movimenta caixa.
+            </p>
+          </div>
+          {auto && <span className="rounded bg-surface-alt px-2 py-1 text-xs font-medium">{auto.habilitado ? 'Ligada' : 'Desligada'}</span>}
+        </div>
+        {auto && <div className="flex flex-wrap gap-2">
+          <button className="btn-secondary" type="button" disabled={autoBusy} onClick={() => void alternarAuto()}>{auto.habilitado ? 'Desligar' : 'Ligar'}</button>
+          <button className="btn-secondary" type="button" disabled={autoBusy || !auto.habilitado} onClick={() => void rodarAuto()}>{autoBusy ? 'Processando…' : 'Executar agora'}</button>
+        </div>}
+        {autoResultado && <p className="text-sm">Conciliados: {autoResultado.conciliados} · Ambíguos: {autoResultado.ambiguos} · Sem extrato: {autoResultado.sem_extrato} · Falhas: {autoResultado.falhas}</p>}
+      </section>
       <Link className="btn-primary" to={`${base}/novo`}>Importar relatório</Link><div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead><tr><th>Repasse</th><th>Provedor</th><th>Data</th><th>Líquido</th><th>Situação</th><th>Ação</th></tr></thead><tbody>{rows.map((r) => <tr key={r.id}><td>{r.payout_reference}</td><td>{r.provider}</td><td>{String(r.settlement_date).slice(0, 10)}</td><td>{grana(Number(r.net_amount) / 100)}</td><td>{r.status}</td><td><Link className="text-blue-700 hover:underline" to={`${base}/${r.id}`}>Detalhes</Link></td></tr>)}{!rows.length && <tr><td colSpan={6}>Nenhum repasse encontrado.</td></tr>}</tbody></table></div><Pagination label="repasses" page={page} total={total} size={25} setPage={setPage} />
     </> : null}
   </div>;

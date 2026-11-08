@@ -9,7 +9,7 @@ import { R_EXTRATO } from '../../../server/src/extrato';
 import { HttpError } from '../../../server/src/errors';
 import { getResource } from '../../../server/src/resources';
 import { checkAccess, getStore } from '../../../server/src/services';
-import type { Row, Tx } from '../../../server/src/store';
+import type { Row, Store, Tx } from '../../../server/src/store';
 import { PROVIDERS } from '../domain/payment';
 import { R_PAYOUTS, R_SETTLEMENTS, R_PAYOUT_REVISIONS, R_PAYOUT_UNLINKS } from '../infrastructure/resources';
 import { locked } from '../infrastructure/locking';
@@ -72,10 +72,13 @@ export function normalizePayout(raw: unknown) {
   const report = { provider, payout_reference, settlement_date, currency: 'BRL', net_amount, transactions };
   return { report, hash: createHash('sha256').update(JSON.stringify(report)).digest('hex') };
 }
-async function audit(req: Request, id: number, descricao: string, dados: object, tx: Tx) {
-  const { actor, empresaId } = actorOf(req);
+async function registrarAuditoria(empresaId: number, actor: { id: number | null; name: string }, id: number, descricao: string, dados: object, tx: Tx) {
   await getStore().audit({ empresa_id: empresaId, usuario_id: actor.id || null, usuario: actor.name, acao: 'ajuste',
     recurso: 'payment_payouts', registro_id: id, descricao, dados }, tx);
+}
+async function audit(req: Request, id: number, descricao: string, dados: object, tx: Tx) {
+  const { actor, empresaId } = actorOf(req);
+  await registrarAuditoria(empresaId, actor, id, descricao, dados, tx);
 }
 function page(v: unknown, fallback: number, max: number) {
   if (v === undefined) return fallback;
@@ -147,47 +150,69 @@ export async function importPayout(req: Request, res: Response) {
   }, 'read committed');
   res.status(result.idempotente ? 200 : 201).json(result);
 }
+type Ator = { id: number | null; name: string };
+
+/**
+ * Núcleo da conciliação repasse↔extrato. É a MESMA rotina usada pelo endpoint
+ * manual (`POST /payouts/:id/match`) e pela varredura automática
+ * (`conciliacaoRepasses.ts`): a automação não tem caminho próprio, então não há
+ * como o casamento automático aplicar um efeito que o manual não aplicaria.
+ *
+ * A função NÃO abre transação nem adquire trava — quem chama já está sob
+ * `locked(empresaId, 'payout-bank-match')`, que é o que serializa manual e
+ * automático para a mesma empresa. Não move dinheiro: só vincula evidências e
+ * grava taxas de liquidação pelo `aplicarTaxasSettlement` já existente.
+ */
+export async function conciliarRepasse(
+  s: Store,
+  empresaId: number,
+  actor: Ator,
+  payoutId: number,
+  bankId: number,
+  tx: Tx
+): Promise<{ payout: Row; idempotente: boolean }> {
+  const payout = await s.findOneWhere(R_PAYOUTS, { empresa_id: empresaId, id: payoutId }, tx);
+  if (!payout) throw new HttpError(404, 'Repasse não encontrado.');
+  if (payout.bank_transaction_id) {
+    if (payout.status === 'DIVERGENT') throw new HttpError(409, 'O repasse vinculado tornou-se divergente; requer revisão.');
+    if (Number(payout.bank_transaction_id) !== bankId) throw new HttpError(409, 'Repasse já vinculado a outro lançamento de extrato.');
+    const currentBank = await s.findOneWhere(R_EXTRATO, { empresa_id: empresaId, id: bankId }, tx);
+    const currentSettlements = await s.list(R_SETTLEMENTS, { page: 1, pageSize: 1000, filter: { empresa_id: empresaId, payout_id: payoutId } }, tx);
+    const currentReport = reportFromSettlements(payout, currentSettlements.rows);
+    const lines = new Map(currentReport?.transactions.map((line) => [line.provider_reference, line]) || []);
+    if (!bankMatches(currentBank, Number(payout.net_amount)) || !currentReport || currentSettlements.total !== currentSettlements.rows.length ||
+        currentSettlements.rows.some((row) => row.status !== 'MATCHED' || !lines.has(String(row.provider_reference)) || mismatch(row, lines.get(String(row.provider_reference))!)))
+      throw new HttpError(409, 'Conciliação anterior não corresponde mais às evidências atuais.');
+    for (const settlement of currentSettlements.rows) await aplicarTaxasSettlement(empresaId, settlement, currentBank!, tx);
+    return { payout, idempotente: true };
+  }
+  if (payout.status === 'DIVERGENT') throw new HttpError(409, 'Resolva as divergências do provedor antes de conciliar.');
+  const bank = await s.findOneWhere(R_EXTRATO, { empresa_id: empresaId, id: bankId }, tx);
+  if (!bank) throw new HttpError(404, 'Transação de extrato não encontrada.');
+  if (!bankMatches(bank, Number(payout.net_amount)))
+    throw new HttpError(409, 'Extrato deve ser uma entrada não divergente com o mesmo valor líquido do repasse.');
+  if (await s.findOneWhere(R_PAYOUTS, { empresa_id: empresaId, bank_transaction_id: bankId }, tx)) throw new HttpError(409, 'Transação de extrato já vinculada a outro repasse.');
+  const settlements = await s.list(R_SETTLEMENTS, { page: 1, pageSize: 1000, filter: { empresa_id: empresaId, payout_id: payoutId } }, tx);
+  const statement = reportFromSettlements(payout, settlements.rows);
+  const statementLines = new Map(statement?.transactions.map((line) => [line.provider_reference, line]) || []);
+  if (settlements.total !== settlements.rows.length || !statement || settlements.rows.some((r) => r.status === 'DIVERGENT' ||
+      !statementLines.has(String(r.provider_reference)) || mismatch(r, statementLines.get(String(r.provider_reference))!)))
+    throw new HttpError(409, 'Liquidações incompletas ou divergentes; nenhuma conciliação foi aplicada.');
+  const updated = await s.tryUpdateIf(R_PAYOUTS, payoutId, { empresa_id: empresaId, status: 'IMPORTED', bank_transaction_id: null }, { bank_transaction_id: bankId, status: 'MATCHED', updated_at: new Date().toISOString() }, tx);
+  if (!updated) throw new HttpError(409, 'Repasse mudou durante a conciliação; atualize e tente novamente.');
+  for (const settlement of settlements.rows) {
+    await aplicarTaxasSettlement(empresaId, settlement, bank, tx);
+    const applied = await s.tryUpdateIf(R_SETTLEMENTS, Number(settlement.id), { empresa_id: empresaId, payout_id: payoutId, status: settlement.status, refund_amount: settlement.refund_amount, chargeback_amount: settlement.chargeback_amount, dispute_review_required: settlement.dispute_review_required ?? null }, { status: 'MATCHED', updated_at: new Date().toISOString() }, tx);
+    if (!applied) throw new HttpError(409, 'Liquidação mudou durante a conciliação; atualize e tente novamente.');
+  }
+  await registrarAuditoria(empresaId, actor, payoutId, 'Repasse conciliado com extrato', { antes: { status: payout.status, bank_transaction_id: null }, depois: { status: 'MATCHED', bank_transaction_id: bankId } }, tx);
+  return { payout: updated, idempotente: false };
+}
+
 export async function matchPayout(req: Request, res: Response) {
-  const { empresaId } = actorOf(req); const payoutId = id(req.params.id); const bankId = id(req.body?.bank_transaction_id);
+  const { empresaId, actor } = actorOf(req); const payoutId = id(req.params.id); const bankId = id(req.body?.bank_transaction_id);
   const s = getStore();
-  const result = await locked(empresaId, 'payout-bank-match', async (tx) => {
-    const payout = await s.findOneWhere(R_PAYOUTS, { empresa_id: empresaId, id: payoutId }, tx);
-    if (!payout) throw new HttpError(404, 'Repasse não encontrado.');
-    if (payout.bank_transaction_id) {
-      if (payout.status === 'DIVERGENT') throw new HttpError(409, 'O repasse vinculado tornou-se divergente; requer revisão.');
-      if (Number(payout.bank_transaction_id) !== bankId) throw new HttpError(409, 'Repasse já vinculado a outro lançamento de extrato.');
-      const currentBank = await s.findOneWhere(R_EXTRATO, { empresa_id: empresaId, id: bankId }, tx);
-      const currentSettlements = await s.list(R_SETTLEMENTS, { page: 1, pageSize: 1000, filter: { empresa_id: empresaId, payout_id: payoutId } }, tx);
-      const currentReport = reportFromSettlements(payout, currentSettlements.rows);
-      const lines = new Map(currentReport?.transactions.map((line) => [line.provider_reference, line]) || []);
-      if (!bankMatches(currentBank, Number(payout.net_amount)) || !currentReport || currentSettlements.total !== currentSettlements.rows.length ||
-          currentSettlements.rows.some((row) => row.status !== 'MATCHED' || !lines.has(String(row.provider_reference)) || mismatch(row, lines.get(String(row.provider_reference))!)))
-        throw new HttpError(409, 'Conciliação anterior não corresponde mais às evidências atuais.');
-      for (const settlement of currentSettlements.rows) await aplicarTaxasSettlement(empresaId, settlement, currentBank!, tx);
-      return { payout, idempotente: true };
-    }
-    if (payout.status === 'DIVERGENT') throw new HttpError(409, 'Resolva as divergências do provedor antes de conciliar.');
-    const bank = await s.findOneWhere(R_EXTRATO, { empresa_id: empresaId, id: bankId }, tx);
-    if (!bank) throw new HttpError(404, 'Transação de extrato não encontrada.');
-    if (!bankMatches(bank, Number(payout.net_amount)))
-      throw new HttpError(409, 'Extrato deve ser uma entrada não divergente com o mesmo valor líquido do repasse.');
-    if (await s.findOneWhere(R_PAYOUTS, { empresa_id: empresaId, bank_transaction_id: bankId }, tx)) throw new HttpError(409, 'Transação de extrato já vinculada a outro repasse.');
-    const settlements = await s.list(R_SETTLEMENTS, { page: 1, pageSize: 1000, filter: { empresa_id: empresaId, payout_id: payoutId } }, tx);
-    const statement = reportFromSettlements(payout, settlements.rows);
-    const statementLines = new Map(statement?.transactions.map((line) => [line.provider_reference, line]) || []);
-    if (settlements.total !== settlements.rows.length || !statement || settlements.rows.some((r) => r.status === 'DIVERGENT' ||
-        !statementLines.has(String(r.provider_reference)) || mismatch(r, statementLines.get(String(r.provider_reference))!)))
-      throw new HttpError(409, 'Liquidações incompletas ou divergentes; nenhuma conciliação foi aplicada.');
-    const updated = await s.tryUpdateIf(R_PAYOUTS, payoutId, { empresa_id: empresaId, status: 'IMPORTED', bank_transaction_id: null }, { bank_transaction_id: bankId, status: 'MATCHED', updated_at: new Date().toISOString() }, tx);
-    if (!updated) throw new HttpError(409, 'Repasse mudou durante a conciliação; atualize e tente novamente.');
-    for (const settlement of settlements.rows) {
-      await aplicarTaxasSettlement(empresaId, settlement, bank, tx);
-      const applied = await s.tryUpdateIf(R_SETTLEMENTS, Number(settlement.id), { empresa_id: empresaId, payout_id: payoutId, status: settlement.status, refund_amount: settlement.refund_amount, chargeback_amount: settlement.chargeback_amount, dispute_review_required: settlement.dispute_review_required ?? null }, { status: 'MATCHED', updated_at: new Date().toISOString() }, tx);
-      if (!applied) throw new HttpError(409, 'Liquidação mudou durante a conciliação; atualize e tente novamente.');
-    }
-    await audit(req, payoutId, 'Repasse conciliado com extrato', { antes: { status: payout.status, bank_transaction_id: null }, depois: { status: 'MATCHED', bank_transaction_id: bankId } }, tx);
-    return { payout: updated, idempotente: false };
-  }, 'read committed');
+  const result = await locked(empresaId, 'payout-bank-match', (tx) => conciliarRepasse(s, empresaId, actor, payoutId, bankId, tx), 'read committed');
   res.json(result);
 }
 

@@ -9101,3 +9101,27 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_commerce_promocao_alvo_produto
   ON commerce_promocao_alvos (promocao_id, produto_id) WHERE produto_id IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_commerce_promocao_alvo_categoria
   ON commerce_promocao_alvos (promocao_id, categoria_id) WHERE categoria_id IS NOT NULL;
+
+-- ============================================================================
+-- ESPELHO da migração 0109 — OMS: MÁQUINA DE ESTADOS EXPLÍCITA E AUDITÁVEL
+-- (a autoridade é db/migrations/0109_payments_oms_estado_pedido.sql; este
+--  espelho existe para o parser de schema e o contrato de colunas dos recursos)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS vendas_status_historico (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id),
+  venda_id INTEGER NOT NULL REFERENCES vendas(id) ON DELETE CASCADE,
+  status_anterior TEXT,
+  status_novo TEXT NOT NULL,
+  origem TEXT NOT NULL DEFAULT 'erp',
+  motivo TEXT,
+  referencia_externa TEXT,
+  usuario_id INTEGER REFERENCES usuarios(id),
+  usuario_nome TEXT,
+  dados JSONB,
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS vendas_status_historico_idx
+  ON vendas_status_historico (empresa_id, venda_id, criado_em DESC);
+CREATE INDEX IF NOT EXISTS vendas_status_historico_origem_idx
+  ON vendas_status_historico (empresa_id, origem);

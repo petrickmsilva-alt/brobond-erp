@@ -66,5 +66,22 @@ describe('Repasses de pagamentos — páginas dedicadas', () => {
     expect(payload.expected_hash).toBe('a'.repeat(64)); expect(payload.report.transactions[0].provider_reference).toBe('T1');
     expect(screen.queryByRole('dialog')).toBeNull();
   });
-
+  it('liga, executa e mostra o resultado da conciliação automática na lista', async () => {
+    let ligado = false;
+    api.mockImplementation(async (path, opts) => {
+      if (path === '/commerce/payments/payouts-auto-reconcile/run') return { conciliados: 3, ambiguos: 1, sem_extrato: 0, falhas: 0 };
+      if (path === '/commerce/payments/payouts-auto-reconcile') {
+        if (opts?.method === 'PUT') { ligado = JSON.parse(String(opts.body)).enabled; return { habilitado: ligado }; }
+        return { habilitado: ligado };
+      }
+      return { rows: [], total: 0 };
+    });
+    page('/commerce/pagamentos/repasses');
+    expect(await screen.findByText('Desligada')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Ligar' }));
+    expect(await screen.findByText('Ligada')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Executar agora' }));
+    expect(await screen.findByText(/Conciliados: 3 · Ambíguos: 1/)).toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
 });

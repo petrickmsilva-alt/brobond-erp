@@ -178,9 +178,16 @@ test('dependências em PostgreSQL real: catálogo, FK 23503, 409 com diagnóstic
     assert.equal(diagA.empresaId, A);
     assert.equal(diagB.empresaId, B);
 
-    const idsA = new Set(diagA.vinculos.flatMap((v) => v.ids));
-    const idsB = new Set(diagB.vinculos.flatMap((v) => v.ids));
-    for (const id of idsB) assert.equal(idsA.has(id), false, `id ${id} da empresa B vazou para a A`);
+    // Os ids de chave primária são POR TABELA: comparar o conjunto achatado de
+    // todos os vínculos produziria falso positivo quando duas tabelas distintas
+    // (ex.: movimentacoes e vendas_status_historico) tiverem o mesmo número de
+    // linha. O recorte de empresa é provado tabela a tabela.
+    const idsAporTabela = new Map<string, Set<number>>();
+    for (const v of diagA.vinculos) idsAporTabela.set(v.tabela, new Set(v.ids));
+    for (const v of diagB.vinculos) {
+      const idsA = idsAporTabela.get(v.tabela) ?? new Set<number>();
+      for (const id of v.ids) assert.equal(idsA.has(id), false, `id ${id} de ${v.tabela} da empresa B vazou para a A`);
+    }
 
     // O cliente da B não é acessível pela empresa A — 404, não 403.
     await assert.rejects(

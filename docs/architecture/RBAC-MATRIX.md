@@ -29,7 +29,7 @@ Regras aplicadas por `checkAccess(r, actor, op)`:
 > **O perfil vem sempre da identidade autenticada** — nunca de `role` ou
 > `empresa_id` enviados pelo cliente.
 
-## 2. Matriz por recurso (179 recursos)
+## 2. Matriz por recurso (180 recursos)
 
 Colunas: **Recurso** · **Perfil mínimo** (regra de acesso) · **Ops** (C=incluir,
 U=alterar, D=excluir no CRUD genérico; `-` = somente leitura) · **Tabela** ·
@@ -212,6 +212,7 @@ U=alterar, D=excluir no CRUD genérico; `-` = somente leitura) · **Tabela** ·
 | `usuarios` | admin | CUD | usuarios | - |
 | `venda_atribuicao` | operador+ (leitura) | CUD | venda_atribuicao | sim |
 | `vendas` | operador+ (leitura) | CUD | vendas | sim |
+| `vendas_status_historico` | gerente | - | vendas_status_historico | sim |
 | `woocommerce_product_links` | operador+ (leitura) | - | woocommerce_product_links | sim |
 | `woocommerce_reconciliacao_divergencias` | operador+ (leitura) | - | woocommerce_reconciliacao_divergencias | sim |
 | `woocommerce_sync_state` | operador+ (leitura) | - | woocommerce_sync_state | sim |

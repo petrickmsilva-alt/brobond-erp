@@ -11,6 +11,13 @@ O Engine trabalha em centavos, roteia por empresa/método/capacidade e registra 
 - Refund com valor confirmado menor que baseline + solicitado mantém operação e refund `UNCERTAIN` e lock ativo, sem repetir escrita externa; somente a parte comprovada é projetada. `REFUNDED` sem quantia cumulativa integral é recusado. Stripe e PagBank não confirmam pagamento integral sem prova de captura integral. O fluxo legado não aceita refund parcial, e `charged_back` não é sinônimo de refund.
 - O `REFUNDED` de cobrança legada histórica, sozinho, não fecha a fila tardia. Mercado Pago valida referência, BRL, total e valor devolvido via consulta autorizada antes de fechamento. Outras cobranças legadas sem prova ficam abertas para investigação.
 
+## Conciliação automática de repasses (varredura)
+
+- `GET /api/commerce/payments/payouts-auto-reconcile` lê a configuração da empresa; `PUT` (admin) liga/desliga; `POST .../run` executa a varredura sob demanda.
+- A varredura casa cada repasse `IMPORTED` com a **única** linha de extrato de mesma entrada e mesmo valor líquido. Ela chama o MESMO núcleo do endpoint manual (`conciliarRepasse`), sob a mesma trava `payout-bank-match` — não existe motor paralelo nem caminho de efeito próprio.
+- Casamento **ambíguo** (duas ou mais linhas candidatas) não é decidido: fica pendente para revisão humana e é contado em `ambiguos`. Não move caixa: só vincula evidências e grava taxas pelo `aplicarTaxasSettlement` existente.
+- Desligada por padrão (chave `payments_auto_match:<empresa>`); o cron `pagamentos` a executa apenas para empresas habilitadas.
+
 ## Limitações
 
 Não existem ingestão automática completa de repasses/MDR por provider, envio externo de evidências de disputa, todos os meios por todos os adapters, nem sincronização automática de toda mudança posterior de disputa. A identificação do refund apenas pelo saldo cumulativo pode não atribuir um estorno externo concorrente à operação local. A política de captura integral e pagamentos parciais precisa de evolução de domínio para suportar captura parcial. Reconciliação de timeout e concorrências entre provedor e ERP requer operação supervisionada. Ver `../BROBOND-ENTERPRISE-WAVES-1-2-3-AUDIT.md` para gaps e evidências.

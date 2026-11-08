@@ -971,7 +971,7 @@ export async function venderPdv(req: Request, res: Response) {
       if (faturar) {
         const patch = { status: 'faturada' };
         faturada = (await s.tryUpdateIf(getResource('vendas')!, Number(venda.id), { status: 'aberta' }, patch, tx)) || venda;
-        await aplicarRegrasPedido('venda', venda, faturada, patch, { id: actor.id || null, name: actor.name }, tx, escopo);
+        await aplicarRegrasPedido('venda', venda, faturada, patch, { id: actor.id || null, name: actor.name }, tx, escopo, 'pdv');
         const depois = (await findInTenant(getResource('vendas')!, Number(venda.id), escopo, tx)) || faturada;
         await syncLancamentoVenda(venda, depois, patch, { id: actor.id || null, name: actor.name }, tx);
         faturada = depois;
@@ -1151,7 +1151,7 @@ export async function cancelarVendaPdv(req: Request, res: Response) {
       const cancelada = await s.tryUpdateIf(getResource('vendas')!, id, { status: venda.status }, { status: 'cancelada' }, tx);
       if (!cancelada) throw new HttpError(409, 'A venda mudou durante o cancelamento. Recarregue e tente de novo.');
       // Estorno de estoque + financeiro pelo MESMO caminho do pedido de balcão.
-      await aplicarRegrasPedido('venda', antes, cancelada, { status: 'cancelada' }, { id: actor.id || null, name: actor.name }, tx, escopo);
+      await aplicarRegrasPedido('venda', antes, cancelada, { status: 'cancelada' }, { id: actor.id || null, name: actor.name }, tx, escopo, 'pdv');
       const depois = (await findInTenant(getResource('vendas')!, id, escopo, tx)) || cancelada;
       await syncLancamentoVenda(antes, depois, { status: 'cancelada' }, { id: actor.id || null, name: actor.name }, tx);
       await s.audit(

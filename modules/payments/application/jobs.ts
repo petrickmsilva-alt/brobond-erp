@@ -6,7 +6,7 @@ import { requireJobLease, withCronIdempotency } from '../../../server/src/cronLo
 /** Bounded, scheduled reconciliation. Only reads provider state; never retries a business decline. */
 export async function runPaymentJobs() {
   const r = await requireJobLease('pagamentos', () => executarPaymentJobs(), { busy: 'retry' });
-  return r.result ?? { synchronized: 0, failed: 0 };
+  return r.result ?? { synchronized: 0, failed: 0, reconciliados: 0 };
 }
 
 async function executarPaymentJobs() {
@@ -56,5 +56,15 @@ async function executarPaymentJobs() {
       }
     }
   }
-  return { synchronized, failed };
+  // Conciliação automática de repasses: só para empresas que a ligaram. Um
+  // repasse importado sem vínculo bancário fica pendente até alguém casar à
+  // mão; a varredura faz o casamento inequívoco e sinaliza o ambíguo.
+  let reconciliados = 0;
+  try {
+    const { executarConciliacaoAutomaticaGlobal } = await import('./conciliacaoRepasses');
+    reconciliados = (await executarConciliacaoAutomaticaGlobal()).conciliados;
+  } catch {
+    failed++;
+  }
+  return { synchronized, failed, reconciliados };
 }

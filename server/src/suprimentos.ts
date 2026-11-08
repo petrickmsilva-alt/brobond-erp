@@ -720,7 +720,7 @@ export async function packingCheck(req: Request, res: Response) {
     // estiver aberta. A baixa de estoque e o status estão na mesma transação.
     const updated = await s.tryUpdateIf(getResource('vendas')!, id, { status: venda.status }, { status: 'faturada' }, tx);
     if (!updated) throw new HttpError(409, 'O pedido mudou durante a conferência. Recarregue e tente novamente.');
-    await aplicarRegrasPedido('venda', venda, updated, { status: 'faturada' }, { id: actor.id || null, name: actor.name }, tx, escopo);
+    await aplicarRegrasPedido('venda', venda, updated, { status: 'faturada' }, { id: actor.id || null, name: actor.name }, tx, escopo, 'expedicao');
     const after = (await s.get(getResource('vendas')!, id, tx)) || updated;
     await syncLancamentoVenda(venda, after, { status: 'faturada' }, { id: actor.id || null, name: actor.name }, tx);
     return after;

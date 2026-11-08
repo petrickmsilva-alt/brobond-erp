@@ -22,6 +22,11 @@ import {
 } from '../infrastructure/resources';
 import { locked } from '../infrastructure/locking';
 import { listPayouts, payoutDetail, importPayout, matchPayout, correctPayout, unlinkPayout } from '../application/payouts';
+import {
+  configConciliacaoAutomatica,
+  definirConciliacaoAutomatica,
+  executarConciliacaoAutomatica,
+} from '../application/conciliacaoRepasses';
 import { listDisputes, disputeDetail, registerDispute, addDisputeEvidence, transitionDispute } from '../application/disputes';
 const wrap = (fn: (req: Request, res: Response) => Promise<unknown>) => (req: Request, res: Response, next: NextFunction) => {
   Promise.resolve(fn(req, res)).catch(next);
@@ -33,6 +38,34 @@ paymentsRouter.post('/payouts/import', wrap(importPayout));
 paymentsRouter.post('/payouts/:id/match', wrap(matchPayout));
 paymentsRouter.post('/payouts/:id/correct', wrap(correctPayout));
 paymentsRouter.post('/payouts/:id/unlink', wrap(unlinkPayout));
+// Conciliação automática de repasses (varredura repasse↔extrato).
+paymentsRouter.get(
+  '/payouts-auto-reconcile',
+  wrap(async (req, res) => {
+    const { empresaId } = authorize(req, true);
+    res.json(await configConciliacaoAutomatica(empresaId));
+  })
+);
+paymentsRouter.put(
+  '/payouts-auto-reconcile',
+  wrap(async (req, res) => {
+    const { empresaId, actor } = authorize(req, true);
+    if (actor.perfil !== 'admin') throw new HttpError(403, 'Apenas administradores ligam a conciliação automática de repasses.');
+    if (typeof req.body?.enabled !== 'boolean') throw invalid();
+    const config = await definirConciliacaoAutomatica(empresaId, req.body.enabled, actor.name);
+    await audit(req, `conciliação automática de repasses ${config.habilitado ? 'ligada' : 'desligada'}`);
+    res.json(config);
+  })
+);
+paymentsRouter.post(
+  '/payouts-auto-reconcile/run',
+  wrap(async (req, res) => {
+    const { empresaId } = authorize(req, true);
+    if (!(await configConciliacaoAutomatica(empresaId)).habilitado)
+      throw new HttpError(409, 'A conciliação automática de repasses está desligada para esta empresa.');
+    res.json(await executarConciliacaoAutomatica(empresaId));
+  })
+);
 paymentsRouter.get('/disputes', wrap(listDisputes));
 paymentsRouter.get('/disputes/:id', wrap(disputeDetail));
 paymentsRouter.post('/disputes', wrap(registerDispute));

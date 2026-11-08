@@ -468,7 +468,7 @@ export async function expedirPedido(req: Request, res: Response) {
       if (!efeitosAplicados) {
         const faturada = await s.tryUpdateIf(getResource('vendas')!, vendaId, { status: String(venda.status) }, { status: 'faturada' }, tx);
         if (!faturada) throw new HttpError(409, 'O pedido mudou durante a expedição. Recarregue.');
-        await aplicarRegrasPedido('venda', antes, faturada, { status: 'faturada' }, { id: actor.id || null, name: actor.name }, tx, escopo);
+        await aplicarRegrasPedido('venda', antes, faturada, { status: 'faturada' }, { id: actor.id || null, name: actor.name }, tx, escopo, 'expedicao');
         depois = (await s.get(getResource('vendas')!, vendaId, tx)) || faturada;
         await syncLancamentoVenda(antes, depois, { status: 'faturada' }, { id: actor.id || null, name: actor.name }, tx);
       } else if (!jaFaturado) {
@@ -947,7 +947,7 @@ export async function receberDevolucao(req: Request, res: Response) {
         if (venda && !['cancelada'].includes(String(venda.status))) {
           const cancelada = await s.update(getResource('vendas')!, Number(venda.id), { status: 'cancelada' }, tx);
           if (cancelada) {
-            await aplicarRegrasPedido('venda', venda, cancelada, { status: 'cancelada' }, { id: actor.id || null, name: actor.name }, tx, escopo);
+            await aplicarRegrasPedido('venda', venda, cancelada, { status: 'cancelada' }, { id: actor.id || null, name: actor.name }, tx, escopo, 'devolucao');
             const depois = (await s.get(getResource('vendas')!, Number(venda.id), tx)) || cancelada;
             await syncLancamentoVenda(venda, depois, { status: 'cancelada' }, { id: actor.id || null, name: actor.name }, tx);
             ajusteFinanceiro = { aplicado: true, motivo: `Devolução total: venda #${venda.id} cancelada e financeiro revertido.` };

@@ -23,6 +23,7 @@ import { getResource } from './resources';
 import { checkAccess, getStore, podeComercial, toHttpError } from './services';
 import { assertRegistroDaEmpresa, escopoDoAtor, empresaDoRegistroAudit } from './empresa';
 import { currentUser, requireAuth } from './auth';
+import { registrarTransicaoStatus, validarTransicao } from './omsEstado';
 import type { AuthUser } from './auth';
 import type { Row, Tx } from './store';
 import { parseId } from './validate';
@@ -140,7 +141,20 @@ export async function aprovarPedido(req: Request, res: Response) {
 
   const s2 = getStore();
   await s2.transaction(async (tx) => {
+    validarTransicao(String(pedido.status), 'aberta');
     await s2.update(r, id, { status: 'aberta', atualizado_em: new Date().toISOString() }, tx);
+    if (resourceKey === 'vendas') {
+      await registrarTransicaoStatus(s2, tx, {
+        empresaId: Number(pedido.empresa_id),
+        vendaId: id,
+        anterior: String(pedido.status),
+        novo: 'aberta',
+        origem: 'aprovacao',
+        motivo: `Aprovado por ${actor.name}`,
+        usuarioId: actor.id ?? null,
+        usuarioNome: actor.name,
+      });
+    }
     await s2.audit({
       usuario_id: actor.id,
       usuario: actor.name,
@@ -180,6 +194,7 @@ export async function rejeitarPedido(req: Request, res: Response) {
 
   const statusCancelado = tipo === 'compra' ? 'cancelado' : 'cancelada';
   await s.transaction(async (tx) => {
+    validarTransicao(String(pedido.status), statusCancelado);
     await s.update(r, id, {
       status: statusCancelado,
       observacoes: pedido.observacoes
@@ -187,6 +202,18 @@ export async function rejeitarPedido(req: Request, res: Response) {
         : `[REJEITADO por ${actor.name}: ${motivo}]`,
       atualizado_em: new Date().toISOString(),
     }, tx);
+    if (resourceKey === 'vendas') {
+      await registrarTransicaoStatus(s, tx, {
+        empresaId: Number(pedido.empresa_id),
+        vendaId: id,
+        anterior: String(pedido.status),
+        novo: statusCancelado,
+        origem: 'aprovacao',
+        motivo,
+        usuarioId: actor.id ?? null,
+        usuarioNome: actor.name,
+      });
+    }
     await s.audit({
       usuario_id: actor.id,
       usuario: actor.name,
