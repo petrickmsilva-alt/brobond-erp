@@ -16,7 +16,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { extrairColunasCreateTable } from '../../scripts/arquitetura-sql';
+import { extrairColunasCreateTable, tabelasComEmpresaId } from '../../scripts/arquitetura-sql';
 
 const raiz = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -72,4 +72,20 @@ test('DDL real: toda tabela payment_* declara empresa_id (regressão do falso po
     const cols = extrairColunasCreateTable(blocos.get(tabela)!);
     assert.ok(cols.includes('empresa_id'), `a tabela ${tabela} deveria ter empresa_id (colunas: ${JSON.stringify(cols)})`);
   }
+});
+
+test('a contagem de tabelas com empresa_id bate com o inventário arquitetural', () => {
+  // Trava a divergência 184×192: `audit:menu` e `architecture:audit` leem o MESMO
+  // DDL pela MESMA função (scripts/arquitetura-sql.ts). Uma leitura que perca
+  // colunas inline volta a reportar 184 e quebra aqui — e no inventário.
+  const sqlFontes = [
+    readFileSync(path.join(raiz, 'db', 'schema.sql'), 'utf8'),
+    ...readdirSync(path.join(raiz, 'db', 'migrations'))
+      .filter((f) => f.endsWith('.sql'))
+      .sort()
+      .map((f) => readFileSync(path.join(raiz, 'db', 'migrations', f), 'utf8')),
+  ];
+  const comEmpresa = tabelasComEmpresaId(sqlFontes).size;
+  const inventario = JSON.parse(readFileSync(path.join(raiz, 'docs', 'ERP-3.0-ARCHITECTURE-INVENTORY.json'), 'utf8'));
+  assert.equal(comEmpresa, inventario.tabelas.com_empresa_id, 'contagem de empresa_id divergente do inventário');
 });

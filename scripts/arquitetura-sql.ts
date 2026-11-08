@@ -37,3 +37,26 @@ export function extrairColunasCreateTable(corpo: string): string[] {
   }
   return colunas;
 }
+
+/**
+ * Nomes das tabelas que declaram `empresa_id`, lidos do DDL real.
+ *
+ * ÚNICA implementação da métrica "tabelas com `empresa_id`": `architecture:audit`
+ * e `audit:menu` precisam concordar. Ler `CREATE TABLE` (com colunas inline) e
+ * `ALTER TABLE ... ADD COLUMN`; os comentários de linha são removidos antes.
+ */
+export function tabelasComEmpresaId(sqlFontes: string[]): Set<string> {
+  const tabelas = new Set<string>();
+  for (const sqlBruto of sqlFontes) {
+    const sql = sqlBruto.replace(/--[^\n]*/g, '');
+    for (const m of sql.matchAll(/CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([a-z_][a-z0-9_]*)\s*\(([\s\S]*?)\n\);/gi)) {
+      if (extrairColunasCreateTable(m[2]).includes('empresa_id')) tabelas.add(m[1].toLowerCase());
+    }
+    for (const stmt of sql.matchAll(/ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?([a-z_][a-z0-9_]*)\s+([\s\S]*?);/gi)) {
+      for (const col of stmt[2].matchAll(/ADD\s+COLUMN\s+(?:IF\s+NOT\s+EXISTS\s+)?([a-z_][a-z0-9_]*)/gi)) {
+        if (col[1].toLowerCase() === 'empresa_id') tabelas.add(stmt[1].toLowerCase());
+      }
+    }
+  }
+  return tabelas;
+}

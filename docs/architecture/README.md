@@ -104,7 +104,7 @@ Números lidos de `npm run architecture:audit` na baseline desta fase:
 | Módulos de navegação | 144 (11 áreas, 35 grupos) |
 | Rotas HTTP | 474 |
 | Modelos Prisma | 11 (5 com `empresaId`) |
-| Casos de teste declarados | 3.576 em 427 arquivos |
+| Casos de teste declarados | 3.578 em 427 arquivos |
 
 > Números lidos do código por `npm run architecture:audit` na revisão atual
 > (Fases 0–2). A cobertura de `empresa_id` é **192/212** (a Fase 1 corrigiu um
@@ -129,7 +129,7 @@ Números relidos de `npm run architecture:audit` ao fim da Fase 2:
 | Tabelas sem `empresa_id` (classificadas) | 28¹ | 20 | correção do parser de DDL (Fase 1) |
 | Índices | 570 | **580** | +10 (E4.2 do CRM) |
 | Constraints | 386 | 386 | — |
-| Casos de teste declarados | 3.533 | **3.576** | +43 (Fases 1 e 2; +11 na revisão) |
+| Casos de teste declarados | 3.533 | **3.578** | +45 (Fases 1 e 2; +13 na revisão) |
 
 > ¹ A baseline da Fase 0 reportava 184 tabelas com `empresa_id` e 28 sem. Era um
 > **falso positivo do parser de DDL** (perdia colunas *inline*): as 8 tabelas

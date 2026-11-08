@@ -48,7 +48,7 @@ Saída de `npm run architecture:audit` nesta baseline:
 | Módulos de navegação (`MODULES`) | **144** (áreas: 11, grupos: 35) |
 | Rotas HTTP | **474** |
 | Modelos Prisma | **11** (com `empresaId`: 5) |
-| Casos de teste declarados | **3.576** em 427 arquivos |
+| Casos de teste declarados | **3.578** em 427 arquivos |
 
 > **Reconciliação numérica (Fases 0–2).** A baseline da Fase 0 reportava
 > 103 migrations, 184 tabelas com `empresa_id`, 570 índices e 3.533 casos de

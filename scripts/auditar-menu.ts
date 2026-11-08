@@ -27,6 +27,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { GROUP_META, MODULES, MODULE_GROUPS, PAGES_ESPECIAIS } from '../client/src/modules';
 import { RESOURCES } from '../server/src/resources';
+import { tabelasComEmpresaId } from './arquitetura-sql';
 import { auditarCapacidades, carregarRegistro } from './capacidades-audit';
 
 const raiz = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -200,16 +201,15 @@ for (const m of MODULES) {
 // ---------------------------------------------------------------------------
 // 5. Multiempresa — tabela com empresa_id × escopo declarado no recurso
 // ---------------------------------------------------------------------------
-const tabelasComEmpresaId = new Set<string>();
+// A leitura do DDL é a MESMA do `architecture:audit` (scripts/arquitetura-sql.ts):
+// colunas inline no CREATE TABLE e `ADD COLUMN` via ALTER TABLE. O parser
+// ingênuo anterior (regex por linha) perdia as colunas inline e reportava 184
+// tabelas com empresa_id — falso positivo de 8 tabelas `payment_*`. As duas
+// auditorias TEM de concordar (192).
 const sqlFontes = [ler('db', 'schema.sql'), ...readdirSync(path.join(raiz, 'db', 'migrations')).sort().map((f) => ler('db', 'migrations', f))];
-for (const sql of sqlFontes) {
-  for (const m of sql.matchAll(/ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(\w+)\s+ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS\s+empresa_id/gi)) tabelasComEmpresaId.add(m[1]);
-  for (const m of sql.matchAll(/CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)\s*\(([\s\S]*?)\n\);/gi)) {
-    if (/^\s*empresa_id\b/m.test(m[2])) tabelasComEmpresaId.add(m[1]);
-  }
-}
+const tabelasComEmpresaIdSet = tabelasComEmpresaId(sqlFontes);
 for (const r of Object.values(RESOURCES)) {
-  if (r.empresa && !tabelasComEmpresaId.has(r.table)) {
+  if (r.empresa && !tabelasComEmpresaIdSet.has(r.table)) {
     erro('EMPRESA_SEM_COLUNA', `O recurso "${r.key}" declara empresa: true mas a tabela "${r.table}" não tem coluna empresa_id em db/schema.sql nem em db/migrations — o filtro por empresa falharia.`);
   }
 }
@@ -230,7 +230,7 @@ for (const r of Object.values(RESOURCES)) {
 const EMPRESA_ID_NAO_E_FILTRO = new Set(['usuarios', 'usuario_empresas', 'empresa_fiscal_config', 'empresas']);
 
 const recursosPorTabela = new Map(Object.values(RESOURCES).map((r) => [r.table, r] as const));
-for (const tabela of tabelasComEmpresaId) {
+for (const tabela of tabelasComEmpresaIdSet) {
   const r = recursosPorTabela.get(tabela);
   if (r && !r.empresa && !r.internal && !EMPRESA_ID_NAO_E_FILTRO.has(tabela)) {
     erro('COLUNA_SEM_ESCOPO', `A tabela "${tabela}" tem empresa_id mas o recurso "${r.key}" não declara empresa: true — a listagem não filtraria por empresa.`);
@@ -348,7 +348,7 @@ console.log(`│ módulos no menu ......... ${MODULES.length}`);
 console.log(`│ grupos de navegação ..... ${MODULE_GROUPS.length}`);
 console.log(`│ recursos de API ......... ${Object.keys(RESOURCES).length}`);
 console.log(`│ recursos navegáveis ..... ${recursosNavegaveis.size}`);
-console.log(`│ tabelas com empresa_id .. ${tabelasComEmpresaId.size}`);
+console.log(`│ tabelas com empresa_id .. ${tabelasComEmpresaIdSet.size}`);
 console.log(`│ capacidades declaradas .. ${cap.contadores.capacidades}`);
 console.log(`│ capacidades no menu ..... ${cap.contadores.capacidades_menu}`);
 console.log(`│ capacidades de infra .... ${cap.contadores.capacidades_infra}`);
