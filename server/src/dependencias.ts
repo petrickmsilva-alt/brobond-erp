@@ -284,6 +284,9 @@ export const REGRAS_RELACAO: RegraRelacao[] = [
   { alvo: 'vendas', tabela: 'sales', tipo: 'operacional', politica: 'proteger', motivo: 'pedido multicanal ligado a esta venda' },
   // Composição: itens do pedido são parte do próprio registro.
   { alvo: 'vendas', tabela: 'itens_venda', tipo: 'composicao', politica: 'seguir' },
+  // OMS (0109): a trilha de estado é histórico protegido — apagar o pedido não
+  // pode reescrever por onde ele passou.
+  { alvo: 'vendas', tabela: 'vendas_status_historico', tipo: 'historico', politica: 'proteger', motivo: 'trilha imutável do ciclo de estados do pedido' },
 
   // ---- FUNDAÇÃO COMERCIAL (MASTER MA-02..MA-07) ---------------------------
   // Carteira, atribuição e comissão apurada são HISTÓRICO: apagar o
@@ -503,6 +506,9 @@ export const RELACOES_FK: RelacaoFkDeclarada[] = [
   // Motor de frete (0102): a cotação guarda a venda que a originou (SET NULL —
   // a cotação é histórico de preço e sobrevive ao cancelamento do pedido).
   { alvo: 'vendas', tabela: 'logistics_quotes', colunas: ['venda_id'], acao: 'SET_NULL' },
+  // OMS (0109): a trilha de estado do pedido aponta para a venda. CASCADE no
+  // banco, mas é histórico — a política abaixo protege a exclusão.
+  { alvo: 'vendas', tabela: 'vendas_status_historico', colunas: ['venda_id'], acao: 'CASCADE' },
 
   // compras — todas as FKs de entrada
   { alvo: 'compras', tabela: 'itens_compra', colunas: ['compra_id'], acao: 'CASCADE' },

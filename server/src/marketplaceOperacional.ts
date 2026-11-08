@@ -333,7 +333,7 @@ export async function converterOrdemMarketplaceEmVenda(
       const escopoDaVenda: EscopoEmpresa = { empresaId, consolidado: false, permitidas: [empresaId] };
       const aberta = (await s.get(rVendas, vendaId, tx))!;
       const faturada = (await s.tryUpdateIf(rVendas, vendaId, { status: 'aberta' }, { status: 'faturada' }, tx)) ?? aberta;
-      await aplicarRegrasPedido('venda', aberta, faturada, { status: 'faturada' }, { id: null, name: 'Marketplace' }, tx, escopoDaVenda);
+      await aplicarRegrasPedido('venda', aberta, faturada, { status: 'faturada' }, { id: null, name: 'Marketplace' }, tx, escopoDaVenda, 'marketplace');
 
       // 9) Financeiro canônico (contas a receber), idempotente por referência.
       const depois = (await s.get(rVendas, vendaId, tx)) ?? faturada;

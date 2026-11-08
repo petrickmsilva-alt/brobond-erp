@@ -51,6 +51,7 @@ import {
   type ClienteVendaRegistro,
 } from '../components/venda/ClienteVendaSelector';
 import { FiscalVendaCard } from '../components/venda/FiscalVendaCard';
+import { HistoricoEstadoVenda } from '../components/venda/HistoricoEstadoVenda';
 
 type Tipo = 'venda' | 'compra';
 export type ModoPaginaVenda = 'novo' | 'detalhe' | 'editar';
@@ -2273,6 +2274,9 @@ function VendaOrderEngine({ modo }: { modo?: ModoPaginaVenda }) {
         onNavigate={(rota) => navigate(rota)}
         onFiscalAtualizado={() => (vendaIdAtiva ? recarregarPedido(vendaIdAtiva, true) : undefined)}
       />
+
+      {/* 8. HISTÓRICO DE ESTADOS (máquina de estados do pedido — migration 0109) */}
+      {!ehRotaNovo && vendaIdAtiva && <HistoricoEstadoVenda etapa={8} vendaId={vendaIdAtiva} />}
 
       {/* Confirmação de remoção de item */}
       <ConfirmacaoInline

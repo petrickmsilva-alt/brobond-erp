@@ -395,6 +395,7 @@ async function executarPagamentosCron(): Promise<ResultadoExecutorCron> {
     const { runPaymentJobs } = await import('../../modules/payments/application/jobs');
     const r = await runPaymentJobs();
     itens += Number(r.synchronized) || 0;
+    itens += Number(r.reconciliados) || 0;
     if (r.failed) falhas.push('sincronizacao_pagamentos');
   } catch { falhas.push('sincronizacao_pagamentos'); }
   try {

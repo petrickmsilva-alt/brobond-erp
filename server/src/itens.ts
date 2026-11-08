@@ -33,6 +33,7 @@ import { listarTodos } from './paginacaoCompleta';
 import { locaisDeSaida, saldoCelula, saldoDisponivelCelula } from './estoqueCanonico';
 import { precoDe } from './listasPreco';
 import { descontoUnitarioDe, normalizarPct, normalizarPrecoVenda, precoLiquidoDe } from './precoVenda';
+import { identificacaoDaVenda, registrarTransicaoStatus, validarTransicao, type OrigemTransicao } from './omsEstado';
 
 type TipoPedido = 'venda' | 'compra';
 
@@ -860,6 +861,38 @@ async function estornarCompra(pedido: Row, actor: { id: number | null; name: str
 const FATURADOS = ['faturada', 'entregue'];
 
 /**
+ * Grava a prova de uma transição de estado do pedido na trilha imutável
+ * `vendas_status_historico`. Best-effort: se a linha já mudou de novo (concor-
+ * rência) ou se a trilha não está disponível, o fluxo principal não cai — a
+ * autoridade continua sendo `vendas.status`; a trilha é a PROVA, não o estado.
+ */
+async function registrarTransicaoVenda(
+  after: Row,
+  statusAnterior: string | null,
+  statusNovo: string,
+  actor: { id: number | null; name: string },
+  tx: Tx,
+  origem: OrigemTransicao,
+  contexto: { motivo?: string | null; referenciaExterna?: string | null }
+): Promise<void> {
+  if (statusAnterior === statusNovo) return;
+  const ids = identificacaoDaVenda(after);
+  if (!ids) return;
+  const s = getStore();
+  await registrarTransicaoStatus(s, tx, {
+    empresaId: ids.empresaId,
+    vendaId: ids.vendaId,
+    anterior: statusAnterior,
+    novo: statusNovo,
+    origem,
+    motivo: contexto.motivo ?? null,
+    referenciaExterna: contexto.referenciaExterna ?? null,
+    usuarioId: actor.id ?? null,
+    usuarioNome: actor.name || null,
+  }).catch(() => undefined);
+}
+
+/**
  * Aplica os efeitos de transição de status de uma venda/compra.
  * Deve ser chamado DENTRO da transação do serviço, após o insert/update do
  * cabeçalho. `data` é o payload enviado pelo cliente.
@@ -875,7 +908,11 @@ export async function aplicarRegrasPedido(
   data: Record<string, unknown>,
   actor: { id: number | null; name: string },
   tx: Tx,
-  escopo: EscopoEmpresa
+  escopo: EscopoEmpresa,
+  /** Canal que disparou a transição (default 'erp'). Ver omsEstado.ts. */
+  origem: OrigemTransicao = 'erp',
+  /** Motivo/referência externa opcionais gravados na trilha de estado. */
+  contextoTransicao: { motivo?: string | null; referenciaExterna?: string | null } = {}
 ): Promise<void> {
   const pai = pedidoConfig(tipo).parent;
   assertRegistroDaEmpresa(pai, after, escopo);
@@ -895,23 +932,20 @@ export async function aplicarRegrasPedido(
   if (tipo === 'venda') {
     const eraFaturado = statusAnterior !== null && FATURADOS.includes(statusAnterior);
     const ehFaturado = FATURADOS.includes(statusNovo);
-    // Transições inválidas: pedido cancelado é terminal; faturado não "reabre".
-    if (statusAnterior === 'cancelada' && statusNovo !== 'cancelada') {
-      throw new HttpError(409, 'Pedido cancelado não pode ser reaberto. Duplique o pedido se precisar emitir uma nova venda.');
-    }
-    if (eraFaturado && !ehFaturado && statusNovo !== 'cancelada') {
-      throw new HttpError(409, 'Pedido faturado não pode voltar para aberto. Para desfazer o faturamento, cancele o pedido (o estoque é estornado).');
-    }
+    // Máquina de estados CENTRAL (omsEstado): recusa estado inventado e
+    // transição proibida (ex.: reabrir cancelada, "desfaturar"). Antes essas
+    // duas regras viviam soltas aqui; agora o grafo é a única fonte da verdade
+    // e a transição aceita vira prova em `vendas_status_historico`.
+    validarTransicao(statusAnterior, statusNovo);
     if (!before && ehFaturado) {
       // Criado já como faturado: fatura na hora.
       await faturarVenda(after, actor, tx, escopo);
-      return;
-    }
-    if (!eraFaturado && ehFaturado) {
+    } else if (!eraFaturado && ehFaturado) {
       await faturarVenda(after, actor, tx, escopo);
     } else if (eraFaturado && statusNovo === 'cancelada') {
       await estornarVenda(before!, actor, tx, escopo);
     }
+    await registrarTransicaoVenda(after, statusAnterior, statusNovo, actor, tx, origem, contextoTransicao);
     return;
   }
 

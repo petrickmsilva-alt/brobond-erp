@@ -8,6 +8,7 @@ import { labelOf, type Row } from './store';
 import { attachImages } from './uploads';
 import { normalizarOrigem, urlBasePublicaAsync } from './urlPublica';
 import { diaISO } from './utils';
+import { registrarTransicaoStatus, validarTransicao } from './omsEstado';
 
 const RATE_LIMIT = 60;
 const JANELA_MS = 10 * 60 * 1000;
@@ -132,7 +133,18 @@ export async function decidirCotacao(req: Request, res: Response) {
     const proposta_hash = createHash('sha256').update(JSON.stringify({ venda: { id, total: venda.total, frete: venda.frete, desconto: venda.desconto }, itens: itens.rows.map((i) => ({ produto_id: i.produto_id, tamanho_id: i.tamanho_id, quantidade: i.quantidade, preco_unitario: i.preco_unitario, subtotal: i.subtotal })) })).digest('hex');
     await s.insert(RESOURCES.cotacao_decisoes, { venda_id: id, cliente_id: Number(cliente.id), decisao, responsavel, mensagem: mensagem || null, proposta_hash, ip: String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim(), user_agent: String(req.headers['user-agent'] || '').slice(0, 500) }, tx);
     const status = decisao === 'aceitar' ? 'aberta' : decisao === 'recusar' ? 'cancelada' : 'cotacao';
+    validarTransicao(String(venda.status), status);
     await s.update(RESOURCES.vendas, id, { status, observacoes: [venda.observacoes, `[Portal: ${responsavel} — ${decisao}${mensagem ? `: ${mensagem}` : ''}]`].filter(Boolean).join('\n') }, tx);
+    await registrarTransicaoStatus(s, tx, {
+      empresaId: Number(venda.empresa_id),
+      vendaId: id,
+      anterior: String(venda.status),
+      novo: status,
+      origem: 'portal',
+      motivo: mensagem || `Cliente decidiu: ${decisao}`,
+      usuarioNome: `Portal — ${responsavel}`,
+      dados: { decisao, proposta_hash },
+    });
     await s.audit({ usuario_id: null, usuario: `Portal — ${responsavel}`, acao: 'editar', recurso: 'vendas', registro_id: id, descricao: `Cotação #${id}: cliente decidiu ${decisao}`, dados: { decisao, proposta_hash }, empresa_id: empresaDoRegistroAudit(RESOURCES.clientes, cliente, null) }, tx);
   });
   res.json({ ok: true, mensagem: decisao === 'aceitar' ? 'Cotação aceita e pedido confirmado.' : decisao === 'recusar' ? 'Cotação recusada.' : 'Solicitação de alteração enviada.' });

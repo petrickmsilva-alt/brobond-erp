@@ -1,26 +1,26 @@
 {
-  "gerado_em": "2026-11-08T18:43:54.712Z",
+  "gerado_em": "2026-11-08T20:14:16.555Z",
   "fonte_de_verdade_do_schema": "db/schema.sql + db/migrations/*.sql (PostgreSQL); Prisma = bounded context do commerce",
   "migrations": {
-    "sql": 108,
-    "sql_com_conteudo": 108,
+    "sql": 109,
+    "sql_com_conteudo": 109,
     "prisma": 7
   },
   "tabelas": {
-    "total": 217,
-    "com_empresa_id": 197,
+    "total": 218,
+    "com_empresa_id": 198,
     "sem_empresa_id": 20,
-    "fora_do_prisma": 206
+    "fora_do_prisma": 207
   },
-  "indices": 605,
+  "indices": 607,
   "constraints": 406,
   "recursos": {
-    "total": 179,
-    "com_tabela": 179,
-    "multiempresa": 161,
-    "somente_leitura": 85,
-    "rbac_restrito": 84,
-    "cobertura_tenant_pct": 89.9
+    "total": 180,
+    "com_tabela": 180,
+    "multiempresa": 162,
+    "somente_leitura": 86,
+    "rbac_restrito": 85,
+    "cobertura_tenant_pct": 90
   },
   "crm": [
     {
@@ -87,9 +87,9 @@
     "com_recurso": 109
   },
   "rotas": {
-    "total": 487,
+    "total": 488,
     "por_metodo": {
-      "GET": 217,
+      "GET": 218,
       "POST": 231,
       "PUT": 22,
       "DELETE": 14,
@@ -201,17 +201,17 @@
   },
   "testes": {
     "server": {
-      "arquivos": 302,
-      "casos": 2503
+      "arquivos": 304,
+      "casos": 2516
     },
     "client": {
-      "arquivos": 133,
-      "casos": 1141
+      "arquivos": 134,
+      "casos": 1145
     },
-    "total": 3644
+    "total": 3661
   },
   "integracoes": {
-    "arquivos_modules": 80,
+    "arquivos_modules": 81,
     "arquivos_server_modules": 1
   },
   "achados": [
@@ -659,6 +659,7 @@
     "usuario_empresas",
     "venda_atribuicao",
     "vendas",
+    "vendas_status_historico",
     "webhook_entregas",
     "webhooks",
     "woocommerce_product_links",

@@ -3392,6 +3392,52 @@ export const RESOURCES: Record<string, Resource> = {
     orderBy: { field: 'data', dir: 'desc' },
   },
 
+  // Trilha imutável da máquina de estados do pedido de venda (migration 0109).
+  // Cada mudança de `vendas.status` vira uma linha — quem, quando, de→para, por
+  // qual canal e por quê. A AUTORIDADE do estado continua sendo `vendas.status`.
+  vendas_status_historico: {
+    key: 'vendas_status_historico',
+    empresa: true,
+    internal: true,
+    table: 'vendas_status_historico',
+    label: 'Histórico de estado do pedido',
+    singular: 'Transição de estado',
+    labelFields: ['status_novo'],
+    ops: READ_ONLY,
+    minPerfil: 'gerente',
+    notice: 'Trilha imutável do ciclo do pedido: cada transição de estado com autor, canal e motivo.',
+    fields: [
+      { name: 'venda_id', label: 'Pedido', type: 'ref', ref: 'vendas', required: true, search: true },
+      { name: 'status_anterior', label: 'De', type: 'text' },
+      { name: 'status_novo', label: 'Para', type: 'text', required: true, search: true },
+      {
+        name: 'origem',
+        label: 'Origem',
+        type: 'select',
+        default: 'erp',
+        search: true,
+        options: [
+          { value: 'erp', label: 'ERP (tela)', tone: 'slate' },
+          { value: 'expedicao', label: 'Expedição', tone: 'blue' },
+          { value: 'fiscal', label: 'Fiscal (NF-e)', tone: 'blue' },
+          { value: 'pdv', label: 'PDV', tone: 'green' },
+          { value: 'portal', label: 'Portal do cliente', tone: 'amber' },
+          { value: 'marketplace', label: 'Marketplace', tone: 'red' },
+          { value: 'aprovacao', label: 'Aprovação', tone: 'amber' },
+          { value: 'devolucao', label: 'Devolução', tone: 'red' },
+          { value: 'sistema', label: 'Sistema', tone: 'slate' },
+        ],
+      },
+      { name: 'motivo', label: 'Motivo', type: 'text', maxLength: 500, wide: true },
+      { name: 'referencia_externa', label: 'Referência externa', type: 'text', maxLength: 120 },
+      { name: 'usuario_id', label: 'Usuário', type: 'ref', ref: 'usuarios' },
+      { name: 'usuario_nome', label: 'Autor', type: 'text' },
+      { name: 'criado_em', label: 'Quando', type: 'datetime', readonly: true },
+    ],
+    orderBy: { field: 'criado_em', dir: 'desc' },
+    filterFields: ['venda_id', 'status_novo', 'origem'],
+  },
+
   // ----------------------------------------------------------------
   // Interno — itens de pedidos e estoque de insumos.
   // Manipulados por pedidos.ts (sub-recursos), não pela API genérica.

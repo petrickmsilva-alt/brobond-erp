@@ -375,6 +375,7 @@ import {
   expedirDevolucaoFornecedor,
   obterDevolucaoFornecedor,
 } from './devolucaoFornecedor';
+import { historicoStatusVenda } from './oms';
 import { capacidadeProducao, mrpProducao } from './producaoCapacidade';
 import {
   calendarioFiscal,
@@ -1275,6 +1276,11 @@ app.post('/api/devolucoes-fornecedor/:id/autorizar', wrap(autorizarDevolucaoForn
 app.post('/api/devolucoes-fornecedor/:id/expedir', wrap(expedirDevolucaoFornecedor));
 app.post('/api/devolucoes-fornecedor/:id/encerrar', wrap(encerrarDevolucaoFornecedor));
 app.post('/api/devolucoes-fornecedor/:id/cancelar', wrap(cancelarDevolucaoFornecedor));
+
+// ---- OMS (Fase 5): trilha imutável da máquina de estados do pedido ----
+// A autoridade do estado é `vendas.status`; esta rota devolve a PROVA da
+// transição (quem, quando, de→para, canal, motivo).
+app.get('/api/oms/vendas/:id/status-historico', wrap(historicoStatusVenda));
 
 // ---- Cotação de compra (E3): rascunho → cotando → decidida ----
 // O pedido de compra só nasce em /decidir, e nasce uma única vez

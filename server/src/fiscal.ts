@@ -624,7 +624,7 @@ async function aplicarEfeitosDaAutorizacao(doc: Row, actor: { id: number | null;
     // estoque + comissão (itens.ts) e contas a receber (financeiro.ts).
     // Nenhum motor novo — só a mesma sequência, agora disparada pela
     // autorização da SEFAZ.
-    await aplicarRegrasPedido('venda', venda, atualizada, { status: 'faturada' }, actor, tx, escopo);
+    await aplicarRegrasPedido('venda', venda, atualizada, { status: 'faturada' }, actor, tx, escopo, 'fiscal');
     await syncLancamentoVenda(venda, atualizada, { status: 'faturada' }, actor, tx);
   }
 
