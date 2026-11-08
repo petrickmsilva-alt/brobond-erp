@@ -54,6 +54,9 @@ dependência · próxima fase responsável · critério de encerramento · statu
 | BL-003 | 2 | Integridade cross-tenant de `crm_*` só por FK simples | migração `0104_crm_integridade_multempresa.sql` (FKs compostas E4.2 + `VALIDATE`) + `fase2-integridade-referencial.test.ts` |
 | BL-R-05 | 2 | Defeito no parser de DDL do inventário (falso positivo) | `scripts/arquitetura-sql.ts` + `arquitetura-audit-parser.test.ts` (Fase 1) |
 | BL-R-06 | 2 | Disponibilidade/preço canônicos sem prova explícita | `fase2-nucleo-canonico.test.ts` (8 casos) |
+| BL-R-07 | 2 | Divergência numérica `184 × 192` (tabelas com `empresa_id`) e `174 × 176` (recursos RBAC) | Causa: falso positivo do parser (Fase 1) e contagem de linhas do `RBAC-MATRIX.md` (174 recursos + cabeçalho/separador). Corrigido em `CURRENT-STATE.md`, `README.md`, `ADR-0011`, `DATABASE-MIGRATION-STANDARD.md`; travado por `rbac-matrix.test.ts` (matriz × código) |
+| BL-R-08 | 2 | Documentação tratava a retirada da `/loja` como concluída, mas a superfície segue ativa | Corrigido em `SECURITY-ARCHITECTURE.md`, `TARGET-ARCHITECTURE.md`, `README.md`, `NATIVE-STORE-DECOMMISSION.md`; travado por `fase2-loja-coerencia.test.ts` |
+| BL-R-09 | 2 | Disponibilidade canônica sem prova de "sem dupla dedução" e dos 4 componentes | `fase2-nucleo-canonico.test.ts` (+5 casos: quatro componentes, tipo desconhecido, quantidade ≤ 0, 1× célula × total, `saldoVendavel`) |
 
 ---
 

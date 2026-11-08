@@ -112,7 +112,7 @@ Detalhe formal: [`AUDIT-STANDARD.md`](AUDIT-STANDARD.md) (Fase 1).
 | Risco | Nível | Situação |
 |---|---|---|
 | Integridade cross-tenant de `crm_*` só por FK simples (banco) | P2 | API garante; FK composta na Fase 2 (GAP-P2-04) |
-| Loja nativa `/loja` (superfície pública) | P2 | **descontinuada** (decisão do Diretor) |
+| Loja nativa `/loja` (superfície pública) | P2 | **decisão de descontinuar** (ADR-0007); execução **pendente** (Fase 3 — BL-015). A superfície ainda está ativa. |
 | Homologação externa de integrações pendente | P2 | documentada; não ativada |
 
 Nenhum risco **P0** de segurança foi identificado no escopo auditado

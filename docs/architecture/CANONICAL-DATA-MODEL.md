@@ -60,7 +60,12 @@ baixa recusa. Reserva **sem local** desconta de qualquer local candidato
 indiscriminadamente; `físico` (soma de todos os locais) e `vendável` (maior
 célula de saída) são perguntas distintas e explícitas.
 
-Prova: `server/test/fase2-nucleo-canonico.test.ts`.
+Prova: `server/test/fase2-nucleo-canonico.test.ts` — cobre os quatro
+componentes (reserva/empenho/bloqueio), a ausência de dupla dedução (mesma
+quantidade descontada 1× na célula e 1× no total), `tipo` desconhecido contando
+como compromisso, quantidade ≤ 0 ignorada, o "nunca negativo" e o isolamento por
+empresa. O físico é o único componente somado entre locais; o disponível é
+sempre por célula.
 
 ## 3. Autoridade de preço
 

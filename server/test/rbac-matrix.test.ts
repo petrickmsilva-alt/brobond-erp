@@ -13,6 +13,7 @@
 // ============================================================================
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 process.env.NODE_ENV = 'test';
 delete process.env.DATABASE_URL;
@@ -91,4 +92,26 @@ test('a matriz de RBAC cobre todo recurso (nenhum recurso sem regra declarada)',
   // explicitamente abertos. Nenhum pode estar indefinido por acidente.
   assert.ok(semRegra.length >= 0);
   for (const r of semRegra) assert.doesNotThrow(() => checkAccess(r, ator('operador'), 'read'), `${r.key}: aberto ao operador`);
+});
+
+test('a matriz documental (RBAC-MATRIX.md) bate com o código: 1 linha por recurso', () => {
+  // Trava a divergência numérica recorrente: o total de recursos é o número de
+  // linhas `| \`recurso\`` da seção 2, SEM contar cabeçalho/separador. Um recurso
+  // novo em resources.ts sem entrada na matriz (ou vice-versa) quebra aqui.
+  const caminho = new URL('../../docs/architecture/RBAC-MATRIX.md', import.meta.url);
+  const texto = readFileSync(caminho, 'utf8');
+  const linhas = texto.split('\n');
+  let dentro = false;
+  const daMatriz: string[] = [];
+  for (const linha of linhas) {
+    if (/^## 2\./.test(linha)) { dentro = true; continue; }
+    if (dentro && /^> Matriz gerada/.test(linha)) break;
+    if (dentro && /^\| `/.test(linha)) daMatriz.push(linha.split('|')[1].trim().replace(/`/g, ''));
+  }
+  const doCodigo = Object.keys(RESOURCES);
+  assert.equal(new Set(daMatriz).size, daMatriz.length, 'matriz não pode ter recurso duplicado');
+  assert.deepEqual(daMatriz.slice().sort(), doCodigo.slice().sort(), 'matriz × resources.ts divergem');
+  // O cabeçalho declara o total; ele precisa bater com a contagem real.
+  const declarado = Number((texto.match(/## 2\. Matriz por recurso \((\d+) recursos\)/) ?? [])[1]);
+  assert.equal(declarado, doCodigo.length, 'total declarado no cabeçalho ≠ nº de recursos');
 });

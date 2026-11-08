@@ -94,17 +94,22 @@ Números lidos de `npm run architecture:audit` na baseline desta fase:
 
 | Dimensão | Valor |
 |---|---:|
-| Migrations SQL | 103 |
+| Migrations SQL | 104 |
 | Migrations Prisma | 7 |
-| Tabelas SQL | 212 (184 com `empresa_id`) |
-| Índices / constraints | 570 / 386 |
+| Tabelas SQL | 212 (192 com `empresa_id`) |
+| Índices / constraints | 580 / 386 |
 | Recursos de API | 174 (156 multiempresa) |
 | Cobertura de tenant | 89,7% dos recursos com tabela |
 | Recursos com RBAC restrito | 80 |
 | Módulos de navegação | 144 (11 áreas, 35 grupos) |
 | Rotas HTTP | 474 |
 | Modelos Prisma | 11 (5 com `empresaId`) |
-| Casos de teste declarados | 3.533 em 420 arquivos |
+| Casos de teste declarados | 3.576 em 427 arquivos |
+
+> Números lidos do código por `npm run architecture:audit` na revisão atual
+> (Fases 0–2). A cobertura de `empresa_id` é **192/212** (a Fase 1 corrigiu um
+> falso positivo do parser de DDL que reportava 184). Ver a reconciliação em
+> `CURRENT-STATE.md §2`.
 
 **Veredito da Fase 0:** o ERP já é, na prática, um **Modular Monolith** com
 domínios bem delimitados, multi-tenancy real e fonte de verdade SQL-first. A
@@ -120,11 +125,17 @@ Números relidos de `npm run architecture:audit` ao fim da Fase 2:
 |---|---:|---:|---:|
 | Migrations SQL | 103 | **104** | +1 (`0104_crm_integridade_multempresa.sql`) |
 | Tabelas SQL | 212 | 212 | — |
-| Tabelas com `empresa_id` | 192 | 192 | — |
-| Tabelas sem `empresa_id` (classificadas) | 20 | 20 | — |
+| Tabelas com `empresa_id` | 184¹ | **192** | correção do parser de DDL (Fase 1) |
+| Tabelas sem `empresa_id` (classificadas) | 28¹ | 20 | correção do parser de DDL (Fase 1) |
 | Índices | 570 | **580** | +10 (E4.2 do CRM) |
 | Constraints | 386 | 386 | — |
-| Casos de teste declarados | 3.533 | **3.565** | +32 (Fases 1 e 2) |
+| Casos de teste declarados | 3.533 | **3.576** | +43 (Fases 1 e 2; +11 na revisão) |
+
+> ¹ A baseline da Fase 0 reportava 184 tabelas com `empresa_id` e 28 sem. Era um
+> **falso positivo do parser de DDL** (perdia colunas *inline*): as 8 tabelas
+> `payment_*` **têm** `empresa_id`. A Fase 1 corrigiu o parser e adicionou teste
+> de regressão (`server/test/arquitetura-audit-parser.test.ts`). O banco nunca
+> mudou nesse ponto — só a leitura.
 
 > O `docs/ERP-3.0-ARCHITECTURE-INVENTORY.json` é **regenerado** por
 > `npm run architecture:audit`; quando o número de casos muda, o arquivo é
@@ -138,7 +149,10 @@ Números relidos de `npm run architecture:audit` ao fim da Fase 2:
   funcional e **sem** alteração de banco.
 - **Fase 1** — fundação e governança (padrões + implementação mínima + testes).
 - **Fase 2** — núcleo canônico de dados + descontinuação da loja pública nativa
-  `/loja`.
+  `/loja`. **Status:** o núcleo de dados foi entregue; a **retirada da `/loja`
+  não foi executada** (bloqueada por ambiente/decisão) — ver
+  [`NATIVE-STORE-DECOMMISSION-REPORT.md`](NATIVE-STORE-DECOMMISSION-REPORT.md) e
+  `MASTER-BACKLOG.md` (BL-015). A superfície nativa **ainda está ativa**.
 
 **Fora de escopo (por decisão do Diretor):** microserviços, reescrita do ERP,
 migração integral para Prisma, cutover comercial, ativação de integrações

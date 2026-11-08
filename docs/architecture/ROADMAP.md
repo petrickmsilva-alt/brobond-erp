@@ -13,6 +13,10 @@
 | **Fase 1** | Fundação e governança | Padrões + implementação mínima + testes | `architecture/fase-1-foundation` |
 | **Fase 2** | Núcleo canônico de dados + descontinuação do `/loja` | Dados governados + retirada segura | `architecture/fase-2-canonical-erp-data` |
 
+> **Nota (revisão):** na Fase 2 o núcleo de dados foi entregue; a **retirada da
+> `/loja` NÃO foi executada** (bloqueada por ambiente/decisão — BL-015). A
+> superfície nativa segue **ativa**. Ver `NATIVE-STORE-DECOMMISSION-REPORT.md`.
+
 Cada fase parte da base consolidada da anterior (encadeamento de PRs).
 
 ---

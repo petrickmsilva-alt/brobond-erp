@@ -120,6 +120,8 @@ graph TB
 
 > A loja pública **nativa** `/loja` (vitrine própria) sai de cena por decisão do
 > Diretor; a experiência pública de varejo passa a ser a RETAIL WooCommerce.
+> **Estado:** decisão registrada (ADR-0007); a superfície nativa **ainda está
+> ativa** e a execução da retirada está **pendente** (Fase 3 — BL-015).
 > Ver [`NATIVE-STORE-DECOMMISSION.md`](NATIVE-STORE-DECOMMISSION.md).
 
 ### 3.2 Nível 2 — Containers (C4-L2)
