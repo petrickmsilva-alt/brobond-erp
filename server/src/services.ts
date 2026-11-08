@@ -1,6 +1,7 @@
 import { validarDisponivelInsumo } from './producaoReservas';
 import { validarConfiguracaoFrete, type ConfigFrete } from './commerce/frete';
 import { validarEnderecoWms } from './wmsEnderecamento';
+import { validarLote } from './loteValidacao';
 // Camada de serviço: CRUD genérico + regras de negócio por módulo
 // (estoque, movimentações, ordens, usuários) + auditoria.
 import { randomBytes } from 'node:crypto';
@@ -1275,6 +1276,8 @@ export async function createRecord(r: Resource, body: unknown, actor: Actor, ctx
       // recurso com empresa precisa pertencer à MESMA empresa ativa.
       await validarReferenciasDaEmpresa(r, data, escopo, (alvo, alvoId, empresaId, t) => s.findOneWhere(alvo, { id: alvoId, empresa_id: empresaId }, t), tx);
       if (r.key === 'locais') await validarEnderecoWms(s, escopo.empresaId, data, null, tx);
+      if (r.key === 'lotes') await validarLote(s, escopo.empresaId, data, null, tx);
+      if (r.key === 'lotes') data.criado_por = actor.id || null;
 
       // MASTER (MA-02..MA-07): integridade de domínio comercial — hierarquia sem
       // ciclo, carteira sem sobreposição, meta sem período ambíguo, participações
@@ -1432,6 +1435,7 @@ export async function updateRecord(r: Resource, id: number, body: unknown, actor
       }
       await validarReferenciasDaEmpresa(r, data, escopo, (alvo, alvoId, empresaId, t) => s.findOneWhere(alvo, { id: alvoId, empresa_id: empresaId }, t), tx);
       if (r.key === 'locais') await validarEnderecoWms(s, escopo.empresaId, data, before, tx);
+      if (r.key === 'lotes') await validarLote(s, escopo.empresaId, data, before, tx);
       if (r.key === 'ordens' && data.terceiro_id !== undefined && Number(data.terceiro_id || 0) !== Number(before.terceiro_id || 0)) {
         const eventosCustodia = getResource('terceirizacao_eventos');
         if (eventosCustodia && await s.countWhere(eventosCustodia, { empresa_id: escopo.empresaId, ordem_id: id }, tx) > 0) {

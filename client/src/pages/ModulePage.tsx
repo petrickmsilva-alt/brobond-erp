@@ -135,6 +135,8 @@ const ProducaoCapacidadePage = lazy(() => import('./ProducaoCapacidadePage'));
 const FiscalCalendarioPage = lazy(() => import('./FiscalCalendarioPage'));
 // Financeiro 3.0 — balancete/classificação contábil (leitura do mesmo livro).
 const FinanceiroBalancetePage = lazy(() => import('./FinanceiroBalancetePage'));
+// Supply chain — rastreabilidade ponta a ponta (lote + trilha; leitura do motor canônico).
+const RastreabilidadePage = lazy(() => import('./RastreabilidadePage'));
 
 const PAGE_SIZE = 25;
 /** Tamanhos de página oferecidos na listagem (server-side). */
@@ -164,6 +166,7 @@ export default function ModulePage({ module }: { module: Module }) {
   if (module.id === 'medidas') return <Suspense fallback={<SubPageLoading />}><MedidasPage /></Suspense>;
   if (module.id === 'inventario') return <Suspense fallback={<SubPageLoading />}><InventarioModulePage /></Suspense>;
   if (module.id === 'contagem-ciclica-abc') return <Suspense fallback={<SubPageLoading />}><ContagemCiclicaPage /></Suspense>;
+  if (module.id === 'rastreabilidade') return <Suspense fallback={<SubPageLoading />}><RastreabilidadePage /></Suspense>;
   if (module.id === 'custo') return <Suspense fallback={<SubPageLoading />}><CustoPage /></Suspense>;
   if (module.id === 'planejamento-producao') return <Suspense fallback={<SubPageLoading />}><PlanejamentoProducaoPage /></Suspense>;
   if (module.id === 'relatorios') return <Suspense fallback={<SubPageLoading />}><RelatoriosPage /></Suspense>;

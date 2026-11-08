@@ -124,11 +124,11 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
     //   (/commerce/pagamentos) e Providers (/commerce/pagamentos/provedores) —
     //   páginas que já existiam ou leem dado real; entram no menu, sem rota nova "Em breve".
     // + 1 da Central de Notificações (diagnóstico autenticado, somente leitura).
-    expect(MODULES).toHaveLength(145);
+    expect(MODULES).toHaveLength(146);
     const ids = MODULES.map((m) => m.id);
     const paths = MODULES.map((m) => m.path);
-    expect(new Set(ids).size).toBe(145);
-    expect(new Set(paths).size).toBe(145);
+    expect(new Set(ids).size).toBe(146);
+    expect(new Set(paths).size).toBe(146);
 
     for (const [id, pathEsperado] of Object.entries(ROTAS_CANONICAS_ESPERADAS)) {
       const mod = MODULES.find((m) => m.id === id);
@@ -157,8 +157,8 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
     }
   });
 
-  it('separa ERP CORE (121), Commerce (18), Creators (4) e Utilidades Globais (2)', () => {
-    expect(MODULES.filter((m) => m.space === 'erp')).toHaveLength(121);
+  it('separa ERP CORE (122), Commerce (18), Creators (4) e Utilidades Globais (2)', () => {
+    expect(MODULES.filter((m) => m.space === 'erp')).toHaveLength(122);
     // 4 conectores de canal + 9 módulos do BROBOND COMMERCE OS
     expect(MODULES.filter((m) => m.space === 'commerce')).toHaveLength(18);
     expect(MODULES.filter((m) => m.space === 'creators')).toHaveLength(4);
@@ -254,6 +254,8 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
       'estoque',
       'movimentacoes',
       'inventario',
+      // SUPPLY CHAIN — rastreabilidade ponta a ponta (lote + trilha).
+      'rastreabilidade',
       // CONTAGEM CÍCLICA ABC (P2-16) — capacidade própria sob Estoque.
       'contagem-ciclica-abc',
       'locais',
@@ -357,7 +359,7 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
     );
     expect(modulosNaArvore).toEqual(MODULES.map((m) => m.id));
     // 24 legadas + 13 páginas Commerce (inclui notificações) + 4 páginas Creators.
-    expect(PAGES_ESPECIAIS).toHaveLength(41);
+    expect(PAGES_ESPECIAIS).toHaveLength(42);
   });
 });
 

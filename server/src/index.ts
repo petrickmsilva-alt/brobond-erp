@@ -63,6 +63,7 @@ import { smtpConfigurado } from './mail';
 import { carregarOrigemDoBanco, revisarConfiguracaoOrigem, statusOrigemAsync } from './urlPublica';
 import { obterEnderecoPublico, removerEnderecoPublico, salvarEnderecoPublico } from './configSistema';
 import { estoqueDisponivel, estoqueGrade, estornarMovimentacao, fecharInventario, getInventarioDetalhe, listItensInventario, updateItensInventario, conferirContagemCiclica, aprovarContagemCiclica, cancelarContagemCiclica } from './estoque';
+import { obterLote, lotePorCodigo, trilhaMovimentacao, trilhaProduto, trilhaDocumento, painelRastreabilidade } from './rastreabilidade';
 import { criarContagemCiclica, listarPlanosContagemCiclica } from './contagemCiclica';
 import { getMedidasGrade, resumoMedidasGrades, saveMedidasGrade } from './medidas';
 import { listarEventosTerceirizacao, registrarEventoTerceirizacao } from './terceirizacao';
@@ -1390,6 +1391,14 @@ app.post('/api/inventarios/:id/ciclica/aprovar', wrap(aprovarContagemCiclica));
 app.post('/api/inventarios/:id/ciclica/cancelar', wrap(cancelarContagemCiclica));
 app.post('/api/inventarios/:id/fechar', wrap(fecharInventario));
 app.post('/api/movimentacoes/:id/estornar', wrap(estornarMovimentacao));
+
+// Supply chain — rastreabilidade ponta a ponta (lote + cadeia de origem)
+app.get('/api/rastreabilidade/painel', wrap(painelRastreabilidade));
+app.get('/api/rastreabilidade/lotes/:id', wrap(obterLote));
+app.get('/api/rastreabilidade/lote-por-codigo', wrap(lotePorCodigo));
+app.get('/api/rastreabilidade/movimentacao/:id', wrap(trilhaMovimentacao));
+app.get('/api/rastreabilidade/produto/:id', wrap(trilhaProduto));
+app.get('/api/rastreabilidade/documento', wrap(trilhaDocumento));
 
 // Fase 5 — relatórios, importação e exportação
 app.get('/api/relatorios/:nome', wrap(async (req, res) => relatorio(req, res, req.params.nome)));
