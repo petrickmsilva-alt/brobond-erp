@@ -31,3 +31,34 @@ Monorepo: Next.js 15 / React 19 / TypeScript (client) + Node/Express/TS (server)
 Desacoplado, reusa `ShippingProvider`/`envios`/`envio_eventos`/outbox/config cifrada.
 Sem `LOGISTICS_ENABLED`, opera em modo seguro. Documentação: `docs/LOGISTICA-MOTOR-MULTICANAL.md`.
 Transportadoras sem contrato nascem **desabilitadas** e nenhum endpoint é presumido.
+
+## Rastreabilidade por lote (migration 0106)
+
+- **Saldo do lote é DERIVADO** das movimentações (`saldoDoLoteMov`/`saldoDoLoteInsumo` em
+  `server/src/rastreabilidade.ts`) — nunca uma coluna de saldo. Não criar uma segunda
+  fonte de verdade de estoque.
+- `lote_id` é **opcional** em `movimentacoes`, `movimentacoes_insumos`,
+  `compra_recebimento_itens` e `devolucao_fornecedor_itens`; FK composta
+  `(empresa_id, lote_id)` recusa lote de outra empresa.
+- Um lote é de **um produto OU de um insumo** (nunca ambos/nenhum) — `CHECK` no banco e
+  `validarLote` em `server/src/loteValidacao.ts`.
+- A cadeia usa os vínculos FORMAIS já existentes (compra → recebimento → item →
+  movimentação → expedição → envio) + `lote_id`; consulta em
+  `/api/rastreabilidade/{painel,lotes/:id,lote-por-codigo,movimentacao/:id,produto/:id,documento}`.
+- Recurso `lotes`: `ops.delete = false` (histórico aponta para o lote; desativa-se, não se exclui).
+
+## Gate PostgreSQL local (sandbox)
+
+Há um container `postgres:16.14` rodando (`sudo docker ps` → `brobond-pg`, porta 5433).
+Para rodar `npm run test:pg` (exige banco **vazio** e PG 16.14):
+
+```
+sudo docker exec brobond-pg psql -U brobond -d postgres \
+  -c "DROP DATABASE IF EXISTS brobond_gate WITH (FORCE);" -c "CREATE DATABASE brobond_gate;"
+export DATABASE_URL="postgresql://brobond:brobond@127.0.0.1:5433/brobond_gate"
+export ADMIN_PASSWORD="$(node -e "process.stdout.write('A!'+require('crypto').randomBytes(24).toString('hex'))")"
+export JWT_SECRET="$(node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))")"
+npm run test:pg
+```
+
+O script `test-pg-gate.mjs` recusa banco reutilizado (`relações públicas != 0`).
