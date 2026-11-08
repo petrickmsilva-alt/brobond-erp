@@ -277,6 +277,7 @@ test('compras: a fórmula da sugestão considera min/máx, vendas em aberto e co
   // Acima do mínimo → não sugere.
   assert.deepEqual(sugerirQuantidade({ estoqueAtual: 50, estoqueMin: 10, estoqueMax: 100, consumoMensal: 20, emPedidosVenda: 0, emComprasTransito: 0 }), {
     sugerido: 0,
+    sugeridoBruto: 0,
     disponivelProjetado: 50,
     motivo: 'Estoque projetado acima do mínimo.',
   });
@@ -307,6 +308,38 @@ test('compras: a fórmula da sugestão considera min/máx, vendas em aberto e co
   assert.equal(semTeto.sugerido, 33, '(10 + ceil(25)) − 2');
 });
 
+test('compras: MRP evoluído — estoque de segurança, lote mínimo, múltiplo e comprometido', () => {
+  // ESTOQUE DE SEGURANÇA eleva o piso de reposição acima do mínimo.
+  const comSeguranca = sugerirQuantidade({ estoqueAtual: 8, estoqueMin: 10, estoqueMax: 0, consumoMensal: 0, emPedidosVenda: 0, emComprasTransito: 0, estoqueSeguranca: 30 });
+  assert.equal(comSeguranca.sugerido, 22, 'piso 30 − 8');
+  assert.match(comSeguranca.motivo, /segurança 30/);
+  // Projetado 8 já ≥ mínimo 10? Não — 8 < 10. Mas com segurança o piso é 30.
+  const acimaDoMinMasAbaixoDaSeguranca = sugerirQuantidade({ estoqueAtual: 15, estoqueMin: 10, estoqueMax: 0, consumoMensal: 0, emPedidosVenda: 0, emComprasTransito: 0, estoqueSeguranca: 40 });
+  assert.equal(acimaDoMinMasAbaixoDaSeguranca.sugerido, 25, '15 < 40 (segurança): repõe até 40');
+
+  // LOTE MÍNIMO: a sugestão nunca fica abaixo dele.
+  const loteMinimo = sugerirQuantidade({ estoqueAtual: 9, estoqueMin: 10, estoqueMax: 0, consumoMensal: 0, emPedidosVenda: 0, emComprasTransito: 0, loteMinimo: 12 });
+  assert.equal(loteMinimo.sugeridoBruto, 1);
+  assert.equal(loteMinimo.sugerido, 12, 'bruto 1 sobe para o lote mínimo 12');
+  assert.match(loteMinimo.motivo, /caixa do fornecedor/);
+
+  // MÚLTIPLO: arredonda para cima na caixa fechada.
+  const multiplo = sugerirQuantidade({ estoqueAtual: 4, estoqueMin: 10, estoqueMax: 100, consumoMensal: 0, emPedidosVenda: 0, emComprasTransito: 0, multiplo: 6 });
+  assert.equal(multiplo.sugeridoBruto, 96);
+  assert.equal(multiplo.sugerido, 96, '96 já é múltiplo de 6');
+  const multiploArredonda = sugerirQuantidade({ estoqueAtual: 4, estoqueMin: 10, estoqueMax: 100, consumoMensal: 0, emPedidosVenda: 0, emComprasTransito: 0, multiplo: 7 });
+  assert.equal(multiploArredonda.sugerido, 98, 'ceil(96/7)=14 → 98');
+  // Múltiplo + lote mínimo: o resultado respeita os dois.
+  const ambos = sugerirQuantidade({ estoqueAtual: 9, estoqueMin: 10, estoqueMax: 0, consumoMensal: 0, emPedidosVenda: 0, emComprasTransito: 0, loteMinimo: 12, multiplo: 5 });
+  assert.equal(ambos.sugerido, 15, 'lote 12 → ceil(12/5)=3 → 15');
+
+  // COMPROMETIDO (empenho/bloqueio) reduz o disponível projetado.
+  const comprometido = sugerirQuantidade({ estoqueAtual: 50, estoqueMin: 10, estoqueMax: 100, consumoMensal: 0, emPedidosVenda: 0, emComprasTransito: 0, emComprometido: 45 });
+  assert.equal(comprometido.disponivelProjetado, 5, '50 − 45');
+  assert.equal(comprometido.sugerido, 95, '100 − 5');
+  assert.match(comprometido.motivo, /45 comprometido/);
+});
+
 test('compras: a sugestão é um cálculo — nunca cria pedido', async () => {
   const s = getStore();
   const produto = await novoProduto({ preco_venda: 100, custo: 40, estoque_min: 20, estoque_max: 100 });
@@ -327,6 +360,29 @@ test('compras: a sugestão é um cálculo — nunca cria pedido', async () => {
 
   const depois = await s.list(RESOURCES.compras, { page: 1, pageSize: 500, filter: { empresa_id: 1 } });
   assert.equal(depois.total, antes.total, 'nenhum pedido de compra foi criado pela sugestão');
+});
+
+test('compras: a sugestão aplica lote mínimo/múltiplo e desconta empenho/bloqueio', async () => {
+  const s = getStore();
+  // Produto em caixa fechada (múltiplo 6) com estoque de segurança.
+  const produto = await novoProduto({ preco_venda: 100, custo: 40, estoque_min: 10, estoque_max: 0, estoque_seguranca: 30, multiplo_compra: 6, lote_minimo_compra: 6, lead_time_dias: 7 });
+  await s.insert(RESOURCES.estoques, { produto_id: Number(produto.id), tamanho_id: null, local: 'loja', quantidade: 8, custo_medio: 40 });
+  // Empenho de OP de 10 peças — não conta como disponível.
+  await s.insert(RESOURCES.estoque_reservas, { empresa_id: 1, produto_id: Number(produto.id), tamanho_id: null, local_id: null, tipo: 'empenho', quantidade: 10, status: 'ativa' });
+
+  const sug = await chamar(compras.sugestaoCompra, reqDe({}, { query: { dias: 90 } }));
+  const linha = sug.itens.find((l: any) => Number(l.produto_id) === Number(produto.id));
+  assert.ok(linha, 'o produto aparece na sugestão');
+  assert.equal(linha.estoque_seguranca, 30);
+  assert.equal(linha.multiplo_compra, 6);
+  assert.equal(linha.lote_minimo_compra, 6);
+  assert.equal(linha.lead_time_dias, 7, 'lead time próprio do produto');
+  assert.equal(linha.em_comprometido, 10, 'empenho descontado');
+  // disponível projetado = 8 (físico) − 10 (empenho) = −2 → piso 30 → bruto 32
+  assert.equal(linha.disponivel_projetado, -2);
+  assert.equal(linha.sugerido_bruto, 32);
+  assert.equal(linha.sugerido, 36, 'ceil(32/6)=6 → 36 (múltiplo da caixa)');
+  assert.ok(linha.ponto_pedido !== null, 'ponto de pedido calculado com lead time');
 });
 
 test('compras: produto sem estoque mínimo não entra na sugestão', async () => {

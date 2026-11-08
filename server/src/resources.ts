@@ -2577,6 +2577,15 @@ export const RESOURCES: Record<string, Resource> = {
       // ---------------- Estoque e suprimento ----------------
       { name: 'estoque_min', label: 'Estoque mínimo', type: 'integer', min: 0, default: 0, list: false, section: 'Estoque e suprimento', hint: 'Dispara alerta e alimenta a sugestão de compra.' },
       { name: 'estoque_max', label: 'Estoque máximo', type: 'integer', min: 0, list: false, section: 'Estoque e suprimento', hint: 'Teto de reposição. Precisa ser maior ou igual ao mínimo.' },
+      // REPOSIÇÃO (0107): o mínimo é ALERTA; a segurança é o PISO que a sugestão
+      // usa para repor. Lote mínimo/múltiplo respeitam a caixa fechada do
+      // fornecedor. Lead time próprio cobre o produto cujo fornecedor não tem
+      // prazo cadastrado. Todos nascem neutros — a sugestão só muda se o gestor
+      // configurar.
+      { name: 'estoque_seguranca', label: 'Estoque de segurança', type: 'integer', min: 0, default: 0, list: false, section: 'Estoque e suprimento', hint: 'Piso de reposição (colchão). Diferente do mínimo, que é só alerta.' },
+      { name: 'lote_minimo_compra', label: 'Lote mínimo de compra', type: 'integer', min: 1, default: 1, list: false, section: 'Estoque e suprimento', hint: 'Menor quantidade que o fornecedor despacha. A sugestão nunca fica abaixo disso.' },
+      { name: 'multiplo_compra', label: 'Múltiplo de compra', type: 'integer', min: 1, default: 1, list: false, section: 'Estoque e suprimento', hint: 'A sugestão é arredondada para cima neste múltiplo (caixa fechada).' },
+      { name: 'lead_time_dias', label: 'Lead time (dias)', type: 'integer', min: 0, list: false, section: 'Estoque e suprimento', hint: 'Prazo de entrega do fornecedor principal. Vazio = herda o prazo do fornecedor da última compra.' },
       { name: 'localizacao', label: 'Localização física', type: 'text', maxLength: 60, list: false, section: 'Estoque e suprimento', placeholder: 'Corredor B, prateleira 3' },
       { name: 'fornecedor_id', label: 'Fornecedor principal', type: 'ref', ref: 'fornecedores', list: false, search: true, section: 'Estoque e suprimento' },
       { name: 'codigo_fornecedor', label: 'Código no fornecedor', type: 'text', maxLength: 60, list: false, search: true, section: 'Estoque e suprimento', hint: 'Usado no de-para da NF-e de entrada.' },
