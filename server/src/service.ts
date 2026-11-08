@@ -406,3 +406,85 @@ export async function avaliarSegmento(req: Request, res: Response) {
     gerado_em: new Date().toISOString(),
   });
 }
+
+/**
+ * Análise RFM (Recência, Frequência, Valor monetário) da base de clientes.
+ *
+ * Cada dimensão é dividida em quintis (1..5) sobre os clientes COM compra
+ * faturada — a nota 5 é o quintil melhor. O segmento textual é derivado do
+ * cruzamento das três notas, com rótulos de ação. Nada é inventado: os cortes
+ * saem da distribuição real; clientes sem compra ficam de fora (não há RFM sem
+ * histórico) e são contados à parte.
+ */
+export async function analiseRfm(req: Request, res: Response) {
+  const actor = currentUser(req);
+  checkAccess(getResource('clientes')!, actor, 'read');
+  const escopo = escopoDe(req);
+  const s = getStore();
+  const metricas = await metricasPorCliente(escopo.empresaId);
+  const clientes = await s.list(getResource('clientes')!, { page: 1, pageSize: 20000, filter: { empresa_id: escopo.empresaId } });
+  const nomePorId = new Map(clientes.rows.map((c) => [Number(c.id), String(c.nome)]));
+
+  const comCompra = [...metricas.values()].filter((m) => m.pedidos > 0 && m.ultima_compra);
+  if (!comCompra.length) {
+    res.json({ base: 0, sem_compra: clientes.rows.length, cortes: null, clientes: [], resumo: [], gerado_em: new Date().toISOString() });
+    return;
+  }
+
+  // Cortes por quintil sobre valores ordenados (usa o menor valor de cada faixa).
+  const quintil = (valores: number[], q: number): number => {
+    const ord = [...valores].sort((a, b) => a - b);
+    const idx = Math.min(ord.length - 1, Math.max(0, Math.ceil((q / 5) * ord.length) - 1));
+    return ord[idx];
+  };
+  // Recência: MENOR é melhor, então a nota é invertida.
+  const recencias = comCompra.map((m) => m.recencia_dias ?? 0);
+  const frequencias = comCompra.map((m) => m.frequencia);
+  const valores = comCompra.map((m) => m.receita_total);
+  const cortes = {
+    recencia: [1, 2, 3, 4, 5].map((q) => quintil(recencias, q)),
+    frequencia: [1, 2, 3, 4, 5].map((q) => quintil(frequencias, q)),
+    valor: [1, 2, 3, 4, 5].map((q) => quintil(valores, q)),
+  };
+  const nota = (v: number, cortesDim: number[], inverter = false): number => {
+    let n = 1;
+    for (let i = 0; i < cortesDim.length; i++) if (v >= cortesDim[i]) n = i + 1;
+    return inverter ? 6 - n : n;
+  };
+  const classificar = (r: number, f: number, m: number): string => {
+    if (r >= 4 && f >= 4 && m >= 4) return 'campeoes';
+    if (r >= 3 && f >= 3 && m >= 3) return 'leais';
+    if (r >= 4 && f <= 2) return 'novos_promissores';
+    if (r <= 2 && f >= 4 && m >= 4) return 'em_risco_alto_valor';
+    if (r <= 2 && f >= 3) return 'em_risco';
+    if (r <= 2 && f <= 2 && m <= 2) return 'hibernando';
+    if (r <= 3 && f <= 2 && m <= 2) return 'precisa_atencao';
+    return 'potenciais_leais';
+  };
+  const linhas = comCompra.map((m) => {
+    const R = nota(m.recencia_dias ?? 0, cortes.recencia, true);
+    const F = nota(m.frequencia, cortes.frequencia);
+    const M = nota(m.receita_total, cortes.valor);
+    return {
+      cliente_id: m.cliente_id, nome: nomePorId.get(m.cliente_id) ?? `#${m.cliente_id}`,
+      recencia_dias: m.recencia_dias, frequencia: m.frequencia, receita_total: m.receita_total,
+      r: R, f: F, m: M, segmento: classificar(R, F, M),
+    };
+  });
+  const resumo = new Map<string, { segmento: string; clientes: number; receita: number }>();
+  for (const l of linhas) {
+    const acc = resumo.get(l.segmento) || { segmento: l.segmento, clientes: 0, receita: 0 };
+    acc.clientes += 1;
+    acc.receita = round2(acc.receita + l.receita_total);
+    resumo.set(l.segmento, acc);
+  }
+  linhas.sort((a, b) => b.m * 100 + b.f * 10 + b.r - (a.m * 100 + a.f * 10 + a.r));
+  res.json({
+    base: comCompra.length,
+    sem_compra: clientes.rows.length - comCompra.length,
+    cortes,
+    resumo: [...resumo.values()].sort((a, b) => b.clientes - a.clientes),
+    clientes: linhas.slice(0, 500),
+    gerado_em: new Date().toISOString(),
+  });
+}

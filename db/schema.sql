@@ -7990,6 +7990,8 @@ CREATE TABLE IF NOT EXISTS marketing_automations (
   acao_tipo TEXT NOT NULL,
   canal TEXT NOT NULL DEFAULT 'interno',
   template_id INTEGER REFERENCES crm_campanhas(id),
+  -- FASE 7: janela anti-spam (dias). NULL/0 = sem limite.
+  limite_frequencia_dias INTEGER,
   ativo BOOLEAN NOT NULL DEFAULT true,
   criado_por INTEGER REFERENCES usuarios(id),
   criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -8001,6 +8003,7 @@ CREATE TABLE IF NOT EXISTS marketing_automations (
     'enviar_mensagem','aplicar_cupom','creditar_pontos','criar_tarefa','notificar_equipe'
   )),
   CONSTRAINT marketing_automations_canal_valido CHECK (canal IN ('interno','email','whatsapp','sms','push','portal')),
+  CONSTRAINT marketing_automations_limite_frequencia_ck CHECK (limite_frequencia_dias IS NULL OR limite_frequencia_dias >= 0),
   CONSTRAINT marketing_automations_nome_obrigatorio CHECK (TRIM(COALESCE(nome,'')) <> '')
 );
 CREATE UNIQUE INDEX IF NOT EXISTS marketing_automations_empresa_nome_uq
@@ -8025,6 +8028,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS marketing_runs_empresa_chave_uq
   ON marketing_automation_runs (empresa_id, chave_idempotencia);
 CREATE INDEX IF NOT EXISTS marketing_runs_automacao_idx
   ON marketing_automation_runs (empresa_id, automacao_id, criado_em DESC);
+-- FASE 7: recorte da checagem de limite de frequência (empresa+automação+cliente).
+CREATE INDEX IF NOT EXISTS marketing_automation_runs_frequencia_idx
+  ON marketing_automation_runs (empresa_id, automacao_id, cliente_id, criado_em DESC)
+  WHERE cliente_id IS NOT NULL;
 
 -- ----------------------------------------------------------------------------
 -- D2 — LOYALTY: programa, níveis, movimentos (saldo = soma dos movimentos)

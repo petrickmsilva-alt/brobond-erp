@@ -272,10 +272,10 @@ describe('TopNavigation — Master Top Navigation (UX-05)', () => {
       .filter((a) => a !== '__mais__');
     expect(areasRenderizadas.sort()).toEqual([...MODULE_AREAS].sort());
     // Cada módulo da fonte única aparece exatamente uma vez no menu superior.
-    // 146 módulos existentes + o painel Omnichannel do Commerce.
+    // 146 módulos existentes + painel Omnichannel (Fase 6) + Análise RFM (Fase 7).
     // `modules.test.ts` trava o mesmo número e a lista canônica — aqui só se
     // confirma que o menu não perde nem duplica a fonte única.
-    expect(MODULES).toHaveLength(147);
+    expect(MODULES).toHaveLength(148);
     unmount();
   });
 
