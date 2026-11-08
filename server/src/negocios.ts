@@ -40,7 +40,7 @@
 // ============================================================
 import type { Request, Response } from 'express';
 import type { PoolClient } from 'pg';
-import { hasDatabaseUrl, query, withTransaction } from './db';
+import { hasDatabaseUrl, isDbConnected, query, withTransaction } from './db';
 import { empresaExplicitaAudit, escopoDoAtor, exigirEmpresaPermitida } from './empresa';
 import { RESOURCES, type Resource } from './resources';
 import { checkAccess, getStore } from './services';
@@ -1965,7 +1965,7 @@ let timerCiclo: ReturnType<typeof setInterval> | null = null;
 export const AUTO_REFRESH_MS_PADRAO = 15 * 60_000;
 
 async function cicloDoMotor(): Promise<{ margens: number; abc: number } | null> {
-  if (!hasDatabaseUrl() || cicloRodando) return null;
+  if (!isDbConnected() || cicloRodando) return null;
   cicloRodando = true;
   try {
     const repo = repoNegocios();
@@ -1991,7 +1991,7 @@ export async function atualizarMotorNegocios(): Promise<{ margens: number; abc: 
 
 /** Enfileira vendas ingeridas: recálculo coalescido (debounce) margem+ABC. */
 export function agendarRecalculo(ids: string[], empresaId: number): void {
-  if (!hasDatabaseUrl()) return;
+  if (!isDbConnected()) return;
   if (!Number.isSafeInteger(empresaId) || empresaId <= 0) return;
   const doTenant = vendasPendentes.get(empresaId) ?? new Set<string>();
   for (const id of ids) doTenant.add(id);
@@ -2020,14 +2020,14 @@ export function agendarRecalculo(ids: string[], empresaId: number): void {
 /**
  * Liga o motor no boot: escuta a ingestão de marketplaces (margem da venda
  * nova em segundos), roda um ciclo inicial e mantém a classificação ABC
- * contínua por intervalo. Só existe com Postgres — o modo demonstração não
- * tem `sales` ingeridas e nada é fabricado.
+ * contínua por intervalo. Só existe com Postgres pronto — nunca inicia antes
+ * da prontidão do banco.
  */
 export function initNegociosEngine(): void {
   // O gancho da venda do ERP vale nos DOIS modos (o modo demonstração também
   // tem venda do ERP — e o BI dele precisa refletir a operação, como o de PG).
   setOnVendaErpAlterada((evento) => agendarProjecaoVendasErp(evento.vendaId));
-  if (!hasDatabaseUrl()) return;
+  if (!hasDatabaseUrl() || !isDbConnected()) return;
   setOnSaleIngested(({ empresaId, saleId }) => {
     agendarRecalculo([saleId], empresaId);
   });

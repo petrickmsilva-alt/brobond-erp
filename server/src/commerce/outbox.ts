@@ -12,7 +12,7 @@
 // mesma entrada duas vezes; entrada presa há 10min volta para a fila.
 // ============================================================================
 import { getStore, checkAccess } from '../services';
-import { query } from '../db';
+import { hasDatabaseUrl, isDbConnected, query } from '../db';
 import { currentUser } from '../auth';
 import { escopoDoAtor } from '../empresa';
 import { HttpError } from '../errors';
@@ -457,6 +457,14 @@ export async function processarComercioAgendado(): Promise<{
   expirados: number;
   falhas: string[];
 }> {
+  if (hasDatabaseUrl() && !isDbConnected()) {
+    return {
+      publicacoes: { processadas: 0, falhas: 0 },
+      outbox: { processados: 0, erros: 0 },
+      expirados: 0,
+      falhas: ['banco_indisponivel'],
+    };
+  }
   const falhas: string[] = [];
   const { runPaymentJobs } = await import('../../../modules/payments/application/jobs');
   const { processarFilaPublicacoes } = await import('./catalogo');

@@ -22,7 +22,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { coletarFalhasEntrega, htmlSecaoFalhasEntrega } from './alertasFalhas';
 import { enviarEmail, smtpConfigurado } from './mail';
-import { hasDatabaseUrl } from './db';
+import { hasDatabaseUrl, isDbConnected } from './db';
 import { instagramConnectorService, saleIngestionService } from '../../modules/connectors/index';
 import { getStore } from './services';
 import { getResource } from './resources';
@@ -649,6 +649,11 @@ export async function executarProcessoCron(
   if (!hasDatabaseUrl() && process.env.NODE_ENV === 'production') {
     emExecucao.delete(processo);
     console.error(JSON.stringify({ evento: 'cron_operacao_bloqueada_sem_postgres', processo }));
+    return { processo, ok: false, status: 503, itens: 0, detalhes: [], falhas: [processo], inicio: inicio.toISOString(), fim: new Date().toISOString(), motivo: 'erro' };
+  }
+  if (hasDatabaseUrl() && !isDbConnected()) {
+    emExecucao.delete(processo);
+    console.error(JSON.stringify({ evento: 'cron_operacao_bloqueada_banco_indisponivel', processo }));
     return { processo, ok: false, status: 503, itens: 0, detalhes: [], falhas: [processo], inicio: inicio.toISOString(), fim: new Date().toISOString(), motivo: 'erro' };
   }
 

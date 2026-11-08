@@ -65,7 +65,13 @@ export async function conectar(banco: BancoDescartavel): Promise<Client> {
 export interface EstadoDoBoot {
   status: 'demo' | 'ready' | 'degraded';
   degraded: boolean;
-  falha: { fase: 'bootstrap' | 'migrations'; mensagem: string } | null;
+  falha: {
+    fase: 'conexao' | 'bootstrap' | 'migrations';
+    mensagem: string;
+    tipo?: 'transitoria' | 'permanente' | 'timeout';
+    tentativas?: number;
+    duracaoMs?: number;
+  } | null;
   erro: string | null;
 }
 

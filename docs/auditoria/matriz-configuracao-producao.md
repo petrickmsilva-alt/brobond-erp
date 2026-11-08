@@ -20,8 +20,9 @@ Versão auditada: branch `arena/c0104925-brobond-erp`, commit `34bc655` (+ docs 
 | `NODE_ENV` | Todos | vários (28 usos; ex.: `server/src/security.ts`) | Sim em produção | Trata como desenvolvimento: CORS aberto (`true`), JWT com literal de desenvolvimento | produção | Altera CORS, segredos e cookies | declarada (`production`) |
 | `PORT` | Servidor | `server/src/index.ts:1476` | Não | Padrão `3001` | Todos | Usada na URL de desenvolvimento (`urlPublica.ts:156`) | declarada (`10000`) |
 | `DATABASE_URL` | Banco | `server/src/db.ts:28`, `services.ts` (`getStore`) | **Sim em produção** | **Usa `MemStore` (memória), com aviso no log.** Não há trava que recuse subir em produção | produção | `PGSSL`, `PG_*` | declarada (ver nota R-3) |
-| `PGSSL` | Banco | `server/src/db.ts:65` | Não | SSL só se `NODE_ENV=production` | Todos | Com `DATABASE_URL` | ausente |
-| `PG_POOL_MAX`, `PG_IDLE_TIMEOUT`, `PG_CONNECT_TIMEOUT` | Banco | `server/src/db.ts:68-70` | Não | Padrões do código | Todos | — | ausente |
+| `PGSSL` | Banco | `server/src/db.ts` | Não | SSL ativo se `NODE_ENV=production` (exceto quando `PGSSL=false` ou `sslmode=disable`) | Todos | Com `DATABASE_URL` | ausente |
+| `PG_POOL_MAX`, `PG_IDLE_TIMEOUT`, `PG_CONNECT_TIMEOUT` | Banco | `server/src/db.ts` | Não | Padrões do código (`PG_CONNECT_TIMEOUT` = 10 000 ms) | Todos | — | ausente |
+| `PG_STARTUP_TIMEOUT_MS`, `PG_STARTUP_RETRY_BASE_MS`, `PG_STARTUP_RETRY_MAX_MS`, `PG_STARTUP_MAX_ATTEMPTS` | Banco (resiliência de boot) | `server/src/db.ts` (`lerConfigBootBanco`) | Não | Padrões do código (`60000` ms, `500` ms, `8000` ms, `20` tentativas) | Todos | Com `DATABASE_URL` | ausente |
 | `TRUST_PROXY` | HTTP | `server/src/security.ts:38` | Condicional (atrás de proxy) | Sem confiança em proxy | produção | IP real para rate limit | declarada (`"1"`) |
 | `CORS_ORIGINS` | HTTP e WebSocket | `server/src/security.ts:69` (HTTP); `server/src/websocket.ts:27` (WS) | Condicional | HTTP: produção bloqueia origens externas (`[]`). **WS: reflete qualquer origem com `credentials: true`** (ver R-6) | produção | — | ausente |
 | `CLIENT_DIST_DIR` | Front | `server/src/commerce/storefront-seo.ts:76` | Não | Usa `client/dist` relativo | Todos | — | ausente |
