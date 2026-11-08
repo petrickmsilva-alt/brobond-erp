@@ -8883,3 +8883,143 @@ CREATE INDEX IF NOT EXISTS ix_logistics_evento_status
   ON envio_eventos (empresa_id, envio_id, status_normalizado);
 CREATE INDEX IF NOT EXISTS ix_envios_store
   ON envios (empresa_id, store_key, status) WHERE store_key IS NOT NULL;
+
+-- ============================================================================
+-- SUPPLY CHAIN — DEVOLUÇÃO AO FORNECEDOR
+-- Espelha db/migrations/0105_supply_chain_devolucao_fornecedor.sql
+-- (instalação limpa: bootstrap + cadeia versionada). Regras: só se devolve o
+-- que foi recebido; o saldo só muda pela movimentação oficial na expedição.
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS devolucoes_fornecedor (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id),
+  compra_id INTEGER NOT NULL REFERENCES compras(id),
+  fornecedor_id INTEGER NOT NULL REFERENCES fornecedores(id),
+  numero TEXT,
+  status TEXT NOT NULL DEFAULT 'solicitada',
+  motivo TEXT NOT NULL,
+  observacoes TEXT,
+  local_origem_id INTEGER REFERENCES locais(id),
+  local TEXT,
+  documento_origem TEXT,
+  solicitante_id INTEGER REFERENCES usuarios(id),
+  autorizador_id INTEGER REFERENCES usuarios(id),
+  solicitada_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  autorizada_em TIMESTAMPTZ,
+  expedida_em TIMESTAMPTZ,
+  encerrada_em TIMESTAMPTZ,
+  cancelada_em TIMESTAMPTZ,
+  motivo_cancelamento TEXT,
+  idempotency_key TEXT,
+  criado_por INTEGER REFERENCES usuarios(id),
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  atualizado_em TIMESTAMPTZ,
+  CONSTRAINT devolucoes_fornecedor_status_valido CHECK (status IN (
+    'solicitada', 'autorizada', 'expedida', 'encerrada', 'cancelada'
+  )),
+  CONSTRAINT devolucoes_fornecedor_motivo_obrigatorio CHECK (TRIM(COALESCE(motivo, '')) <> ''),
+  CONSTRAINT devolucoes_fornecedor_status_coerente CHECK (
+    (status <> 'autorizada' OR autorizada_em IS NOT NULL)
+    AND (status NOT IN ('expedida', 'encerrada') OR (autorizada_em IS NOT NULL AND expedida_em IS NOT NULL))
+  )
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_devolucoes_fornecedor_numero
+  ON devolucoes_fornecedor (empresa_id, numero) WHERE numero IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_devolucoes_fornecedor_idempotency
+  ON devolucoes_fornecedor (empresa_id, idempotency_key) WHERE idempotency_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS devolucoes_fornecedor_empresa_status_idx
+  ON devolucoes_fornecedor (empresa_id, status);
+CREATE INDEX IF NOT EXISTS devolucoes_fornecedor_compra_idx
+  ON devolucoes_fornecedor (empresa_id, compra_id);
+CREATE INDEX IF NOT EXISTS devolucoes_fornecedor_fornecedor_idx
+  ON devolucoes_fornecedor (empresa_id, fornecedor_id);
+
+CREATE TABLE IF NOT EXISTS devolucao_fornecedor_itens (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id),
+  devolucao_id INTEGER NOT NULL REFERENCES devolucoes_fornecedor(id) ON DELETE CASCADE,
+  item_compra_id INTEGER NOT NULL REFERENCES itens_compra(id),
+  insumo_id INTEGER REFERENCES insumos(id),
+  produto_id INTEGER REFERENCES produtos(id),
+  tamanho_id INTEGER REFERENCES tamanhos(id),
+  quantidade NUMERIC(12,3) NOT NULL,
+  custo_unitario NUMERIC(12,2) NOT NULL DEFAULT 0,
+  estoque_baixado BOOLEAN NOT NULL DEFAULT FALSE,
+  movimentacao_id INTEGER,
+  movimentacao_insumo_id INTEGER,
+  CONSTRAINT devolucao_fornecedor_itens_qtd_positiva CHECK (quantidade > 0),
+  CONSTRAINT devolucao_fornecedor_itens_origem_check CHECK (insumo_id IS NOT NULL OR produto_id IS NOT NULL),
+  CONSTRAINT devolucao_fornecedor_itens_custo_valido CHECK (custo_unitario >= 0)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_devolucao_fornecedor_item
+  ON devolucao_fornecedor_itens (devolucao_id, item_compra_id);
+CREATE INDEX IF NOT EXISTS devolucao_fornecedor_itens_idx
+  ON devolucao_fornecedor_itens (empresa_id, devolucao_id);
+CREATE INDEX IF NOT EXISTS devolucao_fornecedor_itens_item_idx
+  ON devolucao_fornecedor_itens (item_compra_id);
+
+CREATE OR REPLACE FUNCTION brobond_qtd_devolvida_fornecedor_item(item_id INTEGER)
+RETURNS NUMERIC AS $$
+  SELECT COALESCE(SUM(dfi.quantidade), 0)
+  FROM devolucao_fornecedor_itens dfi
+  JOIN devolucoes_fornecedor df ON df.id = dfi.devolucao_id
+  WHERE dfi.item_compra_id = item_id AND df.status <> 'cancelada';
+$$ LANGUAGE sql STABLE;
+
+CREATE OR REPLACE FUNCTION brobond_recebido_item_compra(item_id INTEGER)
+RETURNS NUMERIC AS $$
+  SELECT COALESCE((SELECT quantidade_recebida FROM itens_compra WHERE id = item_id), 0);
+$$ LANGUAGE sql STABLE;
+
+-- Backstop da regra "só se devolve o recebido". É um TRIGGER, não um CHECK: um
+-- CHECK com agregado não enxerga a linha que está sendo inserida.
+CREATE OR REPLACE FUNCTION brobond_validar_devolucao_fornecedor_item()
+RETURNS TRIGGER AS $$
+DECLARE
+  recebido NUMERIC;
+  ja_devolvido NUMERIC;
+BEGIN
+  SELECT COALESCE(quantidade_recebida, 0) INTO recebido FROM itens_compra WHERE id = NEW.item_compra_id;
+  SELECT COALESCE(SUM(dfi.quantidade), 0) INTO ja_devolvido
+    FROM devolucao_fornecedor_itens dfi
+    JOIN devolucoes_fornecedor df ON df.id = dfi.devolucao_id
+   WHERE dfi.item_compra_id = NEW.item_compra_id
+     AND df.status <> 'cancelada'
+     AND dfi.id <> COALESCE(NEW.id, -1);
+  IF ja_devolvido + NEW.quantidade > recebido THEN
+    RAISE EXCEPTION 'Devolução ao fornecedor excede o recebido do item % (recebido %, já devolvido %)',
+      NEW.item_compra_id, recebido, ja_devolvido USING ERRCODE = '23514';
+  END IF;
+  RETURN NEW;
+END $$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS devolucao_fornecedor_itens_limite ON devolucao_fornecedor_itens;
+CREATE TRIGGER devolucao_fornecedor_itens_limite
+  BEFORE INSERT OR UPDATE OF item_compra_id, quantidade, devolucao_id ON devolucao_fornecedor_itens
+  FOR EACH ROW EXECUTE FUNCTION brobond_validar_devolucao_fornecedor_item();
+
+ALTER TABLE devolucao_fornecedor_itens DROP CONSTRAINT IF EXISTS devolucao_fornecedor_itens_nao_excede_recebido;
+
+CREATE TABLE IF NOT EXISTS devolucao_fornecedor_eventos (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL DEFAULT 1 REFERENCES empresas(id),
+  devolucao_id INTEGER NOT NULL REFERENCES devolucoes_fornecedor(id) ON DELETE CASCADE,
+  status_anterior TEXT,
+  status_novo TEXT NOT NULL,
+  usuario_id INTEGER REFERENCES usuarios(id),
+  observacao TEXT,
+  dados JSONB,
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS devolucao_fornecedor_eventos_idx
+  ON devolucao_fornecedor_eventos (empresa_id, devolucao_id, criado_em DESC);
+
+ALTER TABLE movimentacoes ADD COLUMN IF NOT EXISTS devolucao_fornecedor_id INTEGER;
+ALTER TABLE movimentacoes_insumos ADD COLUMN IF NOT EXISTS devolucao_fornecedor_id INTEGER;
+CREATE INDEX IF NOT EXISTS idx_movimentacoes_devolucao_fornecedor
+  ON movimentacoes (devolucao_fornecedor_id);
+CREATE INDEX IF NOT EXISTS idx_movimentacoes_insumos_devolucao_fornecedor
+  ON movimentacoes_insumos (devolucao_fornecedor_id);

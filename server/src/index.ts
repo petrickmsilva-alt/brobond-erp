@@ -365,6 +365,14 @@ import {
   receberParcial,
   sugestaoCompra,
 } from './compras';
+import {
+  autorizarDevolucaoFornecedor,
+  cancelarDevolucaoFornecedor,
+  criarDevolucaoFornecedor,
+  encerrarDevolucaoFornecedor,
+  expedirDevolucaoFornecedor,
+  obterDevolucaoFornecedor,
+} from './devolucaoFornecedor';
 import { capacidadeProducao, mrpProducao } from './producaoCapacidade';
 import {
   calendarioFiscal,
@@ -1254,6 +1262,16 @@ app.get('/api/compras/fornecedores/:id/desempenho', wrap(desempenhoDoFornecedor)
 app.post('/api/compras/:id/aprovar', wrap(aprovarCompra));
 app.get('/api/compras/:id/recebimentos', wrap(listarRecebimentos));
 app.post('/api/compras/:id/receber', wrap(receberParcial));
+
+// ---- Devolução ao fornecedor (SUPPLY CHAIN, migration 0105) ----
+// Operação inversa do recebimento: só se devolve o que foi recebido; o saldo
+// só muda na EXPEDIÇÃO, pela movimentação oficial de saída.
+app.post('/api/compras/:id/devolucoes', wrap(criarDevolucaoFornecedor));
+app.get('/api/devolucoes-fornecedor/:id', wrap(obterDevolucaoFornecedor));
+app.post('/api/devolucoes-fornecedor/:id/autorizar', wrap(autorizarDevolucaoFornecedor));
+app.post('/api/devolucoes-fornecedor/:id/expedir', wrap(expedirDevolucaoFornecedor));
+app.post('/api/devolucoes-fornecedor/:id/encerrar', wrap(encerrarDevolucaoFornecedor));
+app.post('/api/devolucoes-fornecedor/:id/cancelar', wrap(cancelarDevolucaoFornecedor));
 
 // ---- Cotação de compra (E3): rascunho → cotando → decidida ----
 // O pedido de compra só nasce em /decidir, e nasce uma única vez

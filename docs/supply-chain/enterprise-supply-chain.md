@@ -6,6 +6,10 @@ Pedidos, cotação de compra e recebimentos parciais/integrais reutilizam fornec
 
 A transação atualiza as quantidades recebidas, estoque/movimentos, custos e contas a pagar quando aplicável. Lock PostgreSQL por empresa/compra, isolamento serializável, retry local e índices protegem os cenários testados; três processos com a mesma chave produziram uma única entrada. Não assumir isso como prova de todas as combinações entre rotinas antigas e mudanças cadastrais.
 
+## Devolução ao fornecedor
+
+Operação inversa do recebimento, sobre o que foi EFETIVAMENTE recebido. O documento (`devolucoes_fornecedor`) nasce SOLICITADA e não toca o saldo; a baixa de estoque só acontece na EXPEDIÇÃO, pela movimentação oficial de saída (`movimentacoes.tipo = 'saida'`, com `devolucao_fornecedor_id`), lançada uma única vez com compare-and-swap por item. O limite por item é `itens_compra.quantidade_recebida` menos o já devolvido em devoluções não canceladas — cancelar libera a cota. Estados: SOLICITADA → AUTORIZADA → EXPEDIDA → ENCERRADA, ou CANCELADA antes de expedir (depois disso exige estorno). Rotas: `POST /api/compras/:id/devolucoes` e as ações de estado em `/api/devolucoes-fornecedor/:id/{autorizar,expedir,encerrar,cancelar}`; leitura por `/api/devolucoes-fornecedor/:id`. Autorização e expedição são de gerente/admin. Idempotência por `idempotency_key` na criação. O backstop do limite no PostgreSQL é um trigger (`devolucao_fornecedor_itens_limite`), não um CHECK: um CHECK com função agregada não enxerga a própria linha que está sendo inserida, então nunca dispararia. Testes de memória provam as regras; os de PostgreSQL provam o trigger, o CHECK de coerência de estado e o índice único de idempotência.
+
 ## WMS, MRP e logística
 
 Hierarquia armazém → zona → endereço é metadata dos locais canônicos, com FK de empresa. Separação, conferência, embalagem, expedição, divergência e inventário existentes são fluxos parciais; putaway dirigido, waves, slotting e replenishment empresariais não estão completos. Não existe segundo saldo WMS.

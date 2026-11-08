@@ -2589,8 +2589,8 @@ async function validarReferenciasMovimentacaoManual(r: Resource, data: Payload, 
     }
   }
   const internos = r.key === 'movimentacoes'
-    ? ['compra_id', 'recebimento_id', 'item_compra_id', 'ordem_id', 'venda_id', 'movimentacao_estorno_id', 'estornado_em', 'estornado_por']
-    : ['compra_id', 'recebimento_id', 'item_compra_id', 'ordem_id'];
+    ? ['compra_id', 'recebimento_id', 'item_compra_id', 'ordem_id', 'venda_id', 'movimentacao_estorno_id', 'estornado_em', 'estornado_por', 'devolucao_fornecedor_id']
+    : ['compra_id', 'recebimento_id', 'item_compra_id', 'ordem_id', 'devolucao_fornecedor_id'];
   if (internos.some((campo) => data[campo] !== undefined && data[campo] !== null && data[campo] !== '')) {
     throw new HttpError(400, 'Vínculos de compra, produção e estorno são definidos pelo fluxo de origem e não podem ser informados em lançamento manual.');
   }
@@ -2600,10 +2600,10 @@ async function validarReferenciasMovimentacaoManual(r: Resource, data: Payload, 
 }
 
 /** Movimentação de produtos acabados (entrada/saída/ajuste/transferência). */
-async function createMovimentacao(data: Payload, actor: Actor, tx: Tx, escopo: EscopoEmpresa): Promise<Row> {
+async function createMovimentacao(data: Payload, actor: Actor, tx: Tx, escopo: EscopoEmpresa, manual = true): Promise<Row> {
   const s = getStore();
   const mov = getResource('movimentacoes')!;
-  await validarReferenciasMovimentacaoManual(mov, data, escopo, tx);
+  if (manual) await validarReferenciasMovimentacaoManual(mov, data, escopo, tx);
   const qtd = Number(data.quantidade);
   const tipo = String(data.tipo);
 
@@ -2694,6 +2694,15 @@ async function produtoTamanhoLabel(produtoId: number, tamanhoId: number | null, 
  */
 export async function lancarMovimentacaoDentro(data: Payload, actor: Actor, tx: Tx, escopo: EscopoEmpresa): Promise<Row> {
   return createMovimentacao(data, actor, tx, escopo);
+}
+
+/**
+ * Saída/estorno de produto acabado vinculada a um fluxo de negócio validado
+ * (devolução ao fornecedor). Não é lançamento manual: os vínculos de origem
+ * (compra, item da compra, devolução) são definidos pelo documento que a chama.
+ */
+export async function lancarMovimentacaoInterna(data: Payload, actor: Actor, tx: Tx, escopo: EscopoEmpresa): Promise<Row> {
+  return createMovimentacao(data, actor, tx, escopo, false);
 }
 
 /** Baixa/estorno de insumo vinculada a OP, chamada só por fluxos internos validados. */

@@ -1143,6 +1143,42 @@
       "justificativa": "Ação dentro do recebimento."
     },
     {
+      "id": "devolucoes-fornecedor",
+      "label": "Devoluções ao fornecedor",
+      "tipo": "modulo",
+      "recurso": "devolucoes_fornecedor",
+      "tabela": "devolucoes_fornecedor",
+      "rota": "/devolucoes-fornecedor",
+      "menu": true,
+      "rbac": "gerente"
+    },
+    {
+      "id": "cap-devolucao_fornecedor_itens",
+      "label": "Itens da devolução ao fornecedor",
+      "tipo": "submodulo",
+      "recurso": "devolucao_fornecedor_itens",
+      "tabela": "devolucao_fornecedor_itens",
+      "menu": false,
+      "justificativa": "Recurso operacional sem superfície de produto própria (consumido internamente pelo documento pai)."
+    },
+    {
+      "id": "cap-devolucao_fornecedor_eventos",
+      "label": "Eventos da devolução ao fornecedor",
+      "tipo": "submodulo",
+      "recurso": "devolucao_fornecedor_eventos",
+      "tabela": "devolucao_fornecedor_eventos",
+      "menu": false,
+      "justificativa": "Trilha imutável do documento; sem superfície própria."
+    },
+    {
+      "id": "devolucoes-fornecedor-solicitar",
+      "label": "Solicitar devolução ao fornecedor",
+      "tipo": "acao",
+      "parente": "devolucoes-fornecedor",
+      "menu": false,
+      "justificativa": "Ação dentro do documento de devolução (criação)."
+    },
+    {
       "id": "compras-homologacao",
       "label": "Homologar fornecedor",
       "tipo": "acao",

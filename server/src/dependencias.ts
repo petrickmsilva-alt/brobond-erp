@@ -515,6 +515,9 @@ export const RELACOES_FK: RelacaoFkDeclarada[] = [
   { alvo: 'compras', tabela: 'movimentacoes', colunas: ['compra_id', 'empresa_id'], acao: 'NO_ACTION' },
   { alvo: 'compras', tabela: 'movimentacoes_insumos', colunas: ['compra_id'], acao: 'NO_ACTION' },
   { alvo: 'compras', tabela: 'movimentacoes_insumos', colunas: ['empresa_id', 'compra_id'], acao: 'NO_ACTION' },
+  // Devolução ao fornecedor (0105): o documento aponta para a compra de origem.
+  // NO_ACTION — o histórico de devolução não apaga junto com a compra.
+  { alvo: 'compras', tabela: 'devolucoes_fornecedor', colunas: ['compra_id'], acao: 'NO_ACTION' },
 
   // clientes
   { alvo: 'clientes', tabela: 'cotacao_decisoes', colunas: ['cliente_id'], acao: 'CASCADE' },

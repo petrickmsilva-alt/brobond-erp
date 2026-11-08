@@ -125,6 +125,8 @@ const CrmAgendaPage = lazy(() => import('./CrmAgendaPage'));
 const ServicePainelPage = lazy(() => import('./ServicePainelPage'));
 // Estoque 3.0 — transferência formal (documento + estados) e reservas.
 const EstoqueTransferenciasPage = lazy(() => import('./EstoqueTransferenciasPage'));
+// Supply chain — devolução ao fornecedor (documento com estados; baixa na expedição).
+const DevolucoesFornecedorPage = lazy(() => import('./DevolucoesFornecedorPage'));
 // Compras 3.0 — homologação de fornecedor (processo, não cadastro paralelo).
 const ComprasFornecedoresPage = lazy(() => import('./ComprasFornecedoresPage'));
 // Produção 3.0 — capacidade/carga/gargalo e MRP (somente leitura).
@@ -196,6 +198,7 @@ export default function ModulePage({ module }: { module: Module }) {
   if (module.id === 'crm-agenda') return <Suspense fallback={<SubPageLoading />}><CrmAgendaPage /></Suspense>;
   if (module.id === 'service-painel') return <Suspense fallback={<SubPageLoading />}><ServicePainelPage /></Suspense>;
   if (module.id === 'transferencias-estoque') return <Suspense fallback={<SubPageLoading />}><EstoqueTransferenciasPage /></Suspense>;
+  if (module.id === 'devolucoes-fornecedor') return <Suspense fallback={<SubPageLoading />}><DevolucoesFornecedorPage /></Suspense>;
   if (module.id === 'homologacao-fornecedores') return <Suspense fallback={<SubPageLoading />}><ComprasFornecedoresPage /></Suspense>;
   if (module.id === 'producao-capacidade') return <Suspense fallback={<SubPageLoading />}><ProducaoCapacidadePage /></Suspense>;
   if (module.id === 'fiscal-calendario') return <Suspense fallback={<SubPageLoading />}><FiscalCalendarioPage /></Suspense>;
