@@ -150,6 +150,7 @@ async function waitHealth(
   timeoutMs = 60_000
 ): Promise<{ status: number; body: any }> {
   const deadline = Date.now() + timeoutMs;
+  let last: { status: number; body: any } | null = null;
   while (Date.now() < deadline) {
     if (child.exitCode !== null || child.signalCode !== null) {
       throw new Error(`processo encerrou prematuramente com code=${child.exitCode}`);
@@ -157,13 +158,14 @@ async function waitHealth(
     try {
       const res = await fetch(`${baseUrl}/api/health`, { signal: AbortSignal.timeout(2_000) });
       const body = await res.json();
-      if (predicate({ status: res.status, body })) return { status: res.status, body };
+      last = { status: res.status, body };
+      if (predicate(last)) return last;
     } catch {
       /* porta ainda abrindo */
     }
     await delay(50);
   }
-  throw new Error(`timeout esperando /api/health em ${baseUrl}`);
+  throw new Error(`timeout esperando /api/health em ${baseUrl} (ultimo=${JSON.stringify(last)})`);
 }
 
 test('PROD-DB-03 (1, 9, 10) PostgreSQL real disponivel na 1a tentativa em modo production', { timeout: 120_000 }, async (t) => {
@@ -354,8 +356,8 @@ test('PROD-DB-03 (6, 7, 8, 9, 10) Idempotencia de migrations e falha de migratio
     await aplicarCadeia(c, '0029_estoque_reservas_transferencias.sql');
     const emp = await c.query(`INSERT INTO empresas (nome) VALUES ('Empresa Legada') RETURNING id`);
     const empId = Number(emp.rows[0].id);
-    await c.query(`INSERT INTO locais (empresa_id, nome, tipo) VALUES ($1, 'Deposito Sem Acento', 'armazem')`, [empId]);
-    await c.query(`INSERT INTO locais (empresa_id, nome, tipo) VALUES ($1, 'Depósito Sem Acento', 'armazem')`, [empId]);
+    await c.query(`INSERT INTO locais (empresa_id, nome, tipo, padrao) VALUES ($1, 'Deposito Duplicado', 'armazem', false)`, [empId]);
+    await c.query(`INSERT INTO locais (empresa_id, nome, tipo, padrao) VALUES ($1, 'Deposito Duplicado', 'armazem', false)`, [empId]);
   } finally {
     await c.end();
   }
