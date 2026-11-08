@@ -1,6 +1,6 @@
 # MASTER-BACKLOG — pendências entre fases
 
-**Data:** 2026-11-07 · **Branch:** `architecture/fase-0-blueprint`
+**Data:** 2026-11-07 · **Branch:** `architecture/fase-2-canonical-erp-data`
 **Regra:** nenhuma pendência desaparece sem evidência de resolução.
 
 Cada item: **ID · fase de origem · descrição · evidência · severidade · impacto ·
@@ -12,20 +12,16 @@ dependência · próxima fase responsável · critério de encerramento · statu
 
 | ID | Fase origem | Descrição | Evidência | Sev. | Impacto | Dependência | Próx. fase | Critério de encerramento | Status |
 |---|---|---|---|---|---|---|---|---|---|
-| BL-001 | 0 | Loja pública nativa `/loja` ainda ativa | `App.tsx:162-166`, `index.ts:602-613` | P2 | duplicidade de varejo | decisão DNS (Diretor) | Fase 2 | rotas públicas removidas + URLs 301/410 + RETAIL intacto | **todo** |
-| BL-002 | 0 | Dois caminhos de ingestão Woo (legado × multi-store) | `loja.ts` + `commerce/woocommerce/` | P2 | divergência de canal | runbook Agente 07 | Fase 1/2 | cutover concluído e legado desativado | **todo** |
-| BL-003 | 0 | Integridade cross-tenant de `crm_*` só por FK simples | GAP-P2-04 | P2 | SQL manual poderia cruzar empresa | validação de dados legados | Fase 2 | FK composta E4.2 + `VALIDATE CONSTRAINT` | **todo** |
-| BL-004 | 0 | Padrões de fundação implícitos no código (não formalizados) | ausência de `docs/architecture/FOUNDATION-STANDARDS.md` | P1 | inconsistência entre módulos | — | Fase 1 | padrões escritos + aplicados a 1–2 módulos | **todo** |
-| BL-005 | 0 | Matriz RBAC por domínio não formalizada | RBAC só em `resources.ts` | P1 | auditoria manual | — | Fase 1 | `RBAC-MATRIX.md` + testes permitido/negado | **todo** |
-| BL-006 | 0 | Padrão de evento/outbox não formalizado | `commerce/outbox.ts` | P1 | onboarding/consistência | — | Fase 1 | `EVENT-STANDARDS.md` + testes idempotência | **todo** |
-| BL-007 | 0 | Padrão de migration não formalizado | `db/migrations/*` | P1 | risco de migração destrutiva | — | Fase 1 | `DATABASE-MIGRATION-STANDARD.md` | **todo** |
-| BL-008 | 0 | Tabelas sem `empresa_id` sem classificação formal | 28 tabelas | P1 | risco de isolamento | — | Fase 1 | `TENANT-GOVERNANCE.md` classifica todas | **todo** |
+| BL-001 | 0 | Loja pública nativa `/loja` ainda ativa | `App.tsx:162-166`, `index.ts:602-613` | P2 | duplicidade de varejo | decisão DNS (Diretor) + PG/credenciais | Fase 3 | rotas públicas removidas + URLs 301/410 + RETAIL intacto | **aberto — impedimento registrado (DEC-001)** |
+| BL-002 | 0 | Dois caminhos de ingestão Woo (legado × multi-store) | `loja.ts` + `commerce/woocommerce/` | P2 | divergência de canal | runbook Agente 07 | Fase 3 | cutover concluído e legado desativado | **aberto** |
 | BL-009 | 0 | `test:pg`/`prisma validate` bloqueados no sandbox | GAP-P2-17 | P2 | evidência só no CI | CI | contínuo | CI verde nos jobs PG | **bloqueado (ambiente)** |
-| BL-010 | 0 | Fiscal sem SPED/EFD | GAP-P2-11/12 | P2 | obrigação acessória | contador | pós-Fase 2 | layout oficial validado | **todo (externo)** |
-| BL-011 | 0 | Plano de contas sem importação | GAP-P2-13 | P2 | trabalho manual | formato acordado | pós-Fase 2 | importação CSV/SPED | **todo** |
-| BL-012 | 0 | CRM sem notificação ativa de lembrete | GAP-P2-14 | P2 | follow-up | canal | Fase 2 | notificação disparada por `scheduled.ts` | **todo** |
-| BL-013 | 0 | `insumos.unidade` texto livre | GAP-P3-04 | P3 | padronização | migração de dados | pós-Fase 2 | catálogo de unidades | **todo** |
-| BL-014 | 0 | Painéis de fluxo de módulo residuais (11) | `RELATORIO-PR95` §4.2 | P2/P3 | UX | reescrita por módulo | pós-Fase 2 | LISTA→PÁGINA em cada | **todo** |
+| BL-010 | 0 | Fiscal sem SPED/EFD | GAP-P2-11/12 | P2 | obrigação acessória | contador | pós-Fase 2 | layout oficial validado | **aberto (externo)** |
+| BL-011 | 0 | Plano de contas sem importação | GAP-P2-13 | P2 | trabalho manual | formato acordado | pós-Fase 2 | importação CSV/SPED | **aberto** |
+| BL-012 | 0 | CRM sem notificação ativa de lembrete | GAP-P2-14 | P2 | follow-up | canal | Fase 3 | notificação disparada por `scheduled.ts` | **aberto** |
+| BL-013 | 0 | `insumos.unidade` texto livre | GAP-P3-04 | P3 | padronização | migração de dados | pós-Fase 2 | catálogo de unidades | **aberto** |
+| BL-014 | 0 | Painéis de fluxo de módulo residuais (11) | `RELATORIO-PR95` §4.2 | P2/P3 | UX | reescrita por módulo | pós-Fase 2 | LISTA→PÁGINA em cada | **aberto** |
+| BL-015 | 2 | Descontinuação da loja nativa não executada | `NATIVE-STORE-DECOMMISSION-REPORT.md` §4 | P2 | duplicidade de varejo | PG + credenciais Woo + decisão DNS | Fase 3 | remoção executada e RETAIL validado | **aberto — impedimento externo** |
+| BL-016 | 2 | `sale_items` (projeção) sem `empresa_id`; leitura sem recorte no SQL | `commerce/analytics.ts` lê `sale_items` com `filter: {}` e recorta por `sale_id` em memória | P3 | over-fetch (não há vazamento: o item é filtrado pelo conjunto de `sales` da empresa) | migração aditiva + `test:pg` | Fase 3 | `empresa_id` na projeção + recorte no SQL | **aberto — performance** |
 
 ---
 
@@ -36,19 +32,31 @@ dependência · próxima fase responsável · critério de encerramento · statu
 | DEC-001 | Destino de SEO das URLs antigas de `/loja` (301 vs 410) | (a) 301 para RETAIL; (b) 410 | SEO / link equity | (a) quando `STOREFRONT_REDIRECT_URL` definida; senão (b). **Não bloqueia** — fallback 410 |
 | DEC-002 | Destino administrativo de `LojaConfigPage`/`estadoLoja` | (a) repurpor como config de canal; (b) remover | UX admin / config de frete | (a) para o que for compartilhado |
 | DEC-003 | Ativar homologação externa das integrações | (a) agora; (b) depois | operação | (b) — fora do escopo desta missão |
+| DEC-004 | Executar a descontinuação de `/loja` em ambiente com PostgreSQL + credenciais Woo | (a) Fase 3 com CI/banco real; (b) adiar | duplicidade de varejo | (a) — só com os gates de §6.8 satisfeitos |
 
 > Nenhuma dessas decisões foi tomada unilateralmente.
 
 ---
 
-## 3. Pendências resolvidas nesta Fase 0
+## 3. Pendências resolvidas
 
-| ID | Descrição | Evidência de resolução |
-|---|---|---|
-| BL-R-01 | Ausência de blueprint arquitetural unificado | este diretório `docs/architecture/` |
-| BL-R-02 | Decisão sobre `/loja` × RETAIL em aberto (ADR-008 §6) | ADR-0007 + `NATIVE-STORE-DECOMMISSION.md` |
-| BL-R-03 | Fontes oficiais não inventariadas | `SOURCE-OF-TRUTH.md` |
-| BL-R-04 | Fronteiras de contexto não documentadas | `CONTEXT-MAP.md` |
+| ID | Fase | Descrição | Evidência de resolução |
+|---|---|---|---|
+| BL-R-01 | 0 | Ausência de blueprint arquitetural unificado | `docs/architecture/` (Fase 0) |
+| BL-R-02 | 0 | Decisão sobre `/loja` × RETAIL em aberto | ADR-0007 + `NATIVE-STORE-DECOMMISSION.md` |
+| BL-R-03 | 0 | Fontes oficiais não inventariadas | `SOURCE-OF-TRUTH.md` |
+| BL-R-04 | 0 | Fronteiras de contexto não documentadas | `CONTEXT-MAP.md` |
+| BL-004 | 1 | Padrões de fundação implícitos | `FOUNDATION-STANDARDS.md` |
+| BL-005 | 1 | Matriz RBAC não formalizada | `RBAC-MATRIX.md` + `rbac-matrix.test.ts` (9 casos) |
+| BL-006 | 1 | Padrão de evento/outbox não formalizado | `EVENT-STANDARDS.md` |
+| BL-007 | 1 | Padrão de migration não formalizado | `DATABASE-MIGRATION-STANDARD.md` |
+| BL-008 | 1 | Tabelas sem `empresa_id` sem classificação | `TENANT-GOVERNANCE.md` + `tenant-tables.ts` + gate `tenant-tables-classificacao.test.ts` |
+| BL-003 | 2 | Integridade cross-tenant de `crm_*` só por FK simples | migração `0104_crm_integridade_multempresa.sql` (FKs compostas E4.2 + `VALIDATE`) + `fase2-integridade-referencial.test.ts` |
+| BL-R-05 | 2 | Defeito no parser de DDL do inventário (falso positivo) | `scripts/arquitetura-sql.ts` + `arquitetura-audit-parser.test.ts` (Fase 1) |
+| BL-R-06 | 2 | Disponibilidade/preço canônicos sem prova explícita | `fase2-nucleo-canonico.test.ts` (8 casos) |
+| BL-R-07 | 2 | Divergência numérica `184 × 192` (tabelas com `empresa_id`) e `174 × 176` (recursos RBAC) | Causa: falso positivo do parser (Fase 1) e contagem de linhas do `RBAC-MATRIX.md` (174 recursos + cabeçalho/separador). Corrigido em `CURRENT-STATE.md`, `README.md`, `ADR-0011`, `DATABASE-MIGRATION-STANDARD.md`; travado por `rbac-matrix.test.ts` (matriz × código) |
+| BL-R-08 | 2 | Documentação tratava a retirada da `/loja` como concluída, mas a superfície segue ativa | Corrigido em `SECURITY-ARCHITECTURE.md`, `TARGET-ARCHITECTURE.md`, `README.md`, `NATIVE-STORE-DECOMMISSION.md`; travado por `fase2-loja-coerencia.test.ts` |
+| BL-R-09 | 2 | Disponibilidade canônica sem prova de "sem dupla dedução" e dos 4 componentes | `fase2-nucleo-canonico.test.ts` (+5 casos: quatro componentes, tipo desconhecido, quantidade ≤ 0, 1× célula × total, `saldoVendavel`) |
 
 ---
 

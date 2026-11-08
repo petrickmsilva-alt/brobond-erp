@@ -37,10 +37,10 @@ Saída de `npm run architecture:audit` nesta baseline:
 
 | Dimensão | Valor |
 |---|---:|
-| Migrations SQL (`db/migrations/*.sql`) | **103** |
+| Migrations SQL (`db/migrations/*.sql`) | **104** |
 | Migrations Prisma (`prisma/migrations/`) | **7** |
-| Tabelas no SQL do ERP | **212** (com `empresa_id`: **184**) |
-| Índices nomeados | **570** |
+| Tabelas no SQL do ERP | **212** (com `empresa_id`: **192**) |
+| Índices nomeados | **580** |
 | Constraints nomeadas | **386** |
 | Recursos de API (`RESOURCES`) | **174** (multiempresa: **156**) |
 | Cobertura de tenant | **89,7%** dos recursos com tabela |
@@ -48,7 +48,18 @@ Saída de `npm run architecture:audit` nesta baseline:
 | Módulos de navegação (`MODULES`) | **144** (áreas: 11, grupos: 35) |
 | Rotas HTTP | **474** |
 | Modelos Prisma | **11** (com `empresaId`: 5) |
-| Casos de teste declarados | **3.533** em 420 arquivos |
+| Casos de teste declarados | **3.576** em 427 arquivos |
+
+> **Reconciliação numérica (Fases 0–2).** A baseline da Fase 0 reportava
+> 103 migrations, 184 tabelas com `empresa_id`, 570 índices e 3.533 casos de
+> teste. As diferenças são todas explicadas: a Fase 1 **corrigiu um defeito do
+> parser de DDL** que perdia colunas *inline* (8 tabelas `payment_*` apareciam
+> sem `empresa_id` — falso positivo), elevando a cobertura real para **192/212**;
+> a Fase 2 adicionou a migration aditiva `0104_crm_integridade_multempresa.sql`
+> (104 migrations, +10 índices) e 3 arquivos de teste. **Recursos = 174** em
+> ambas as fases (nenhum recurso foi criado ou removido). O número **176** que
+> já circulou em revisões é o total de linhas da tabela do `RBAC-MATRIX.md`
+> (174 recursos + cabeçalho + separador) — não é a contagem de recursos.
 
 Código (linhas): `server/src` + `modules` + `packages` ≈ **254 mil linhas**
 de TypeScript; `client/src` com **344** arquivos `.ts/.tsx`; `server/src` com

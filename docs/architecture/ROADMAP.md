@@ -13,6 +13,10 @@
 | **Fase 1** | Fundação e governança | Padrões + implementação mínima + testes | `architecture/fase-1-foundation` |
 | **Fase 2** | Núcleo canônico de dados + descontinuação do `/loja` | Dados governados + retirada segura | `architecture/fase-2-canonical-erp-data` |
 
+> **Nota (revisão):** na Fase 2 o núcleo de dados foi entregue; a **retirada da
+> `/loja` NÃO foi executada** (bloqueada por ambiente/decisão — BL-015). A
+> superfície nativa segue **ativa**. Ver `NATIVE-STORE-DECOMMISSION-REPORT.md`.
+
 Cada fase parte da base consolidada da anterior (encadeamento de PRs).
 
 ---
@@ -88,6 +92,21 @@ governados; migrations governadas; testes automatizados; sem regressão crítica
 integridade validada; implementação testada; PR independente.
 
 **Dependência:** Fase 1 (fundação consolidada).
+
+### 4.1 Status da Fase 2 (esta rodada)
+
+| # | Entrega | Status |
+|---|---|---|
+| 1–8 | Documentos canônicos de dados (itens 1–8) | ✅ entregues |
+| 9 | `NATIVE-STORE-DECOMMISSION-REPORT.md` | ✅ entregue — **execução BLOQUEADA** (impedimentos I-1..I-4) |
+| 10 | FK composta cross-tenant de `crm_*` (GAP-P2-04) | ✅ migração `0104` + espelho + teste |
+| 11 | Descontinuação segura da loja nativa `/loja` | ⛔ **não executada** — sem PG real, sem credenciais Woo, sem decisão DNS |
+| 12 | Testes do núcleo (preço, disponibilidade, identidade, integridade) | ✅ `fase2-nucleo-canonico` (8), `fase2-identidade-comercial` (4), `fase2-integridade-referencial` (4) |
+| 13 | Gates PostgreSQL reais | ⛔ bloqueado no sandbox (BL-009) — roda no CI |
+
+> A retirada da loja nativa foi **conscientemente** deixada para a Fase 3: o §6.8
+> do PROMPT MASTER manda entregar o plano e registrar o impedimento quando a
+> remoção não puder ser feita com segurança. Ver BL-015 / DEC-004.
 
 ---
 

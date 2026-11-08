@@ -43,3 +43,22 @@ Os ADRs abaixo foram escritos antes deste programa e continuam válidos; são
 
 **Convenção de ID:** os ADRs deste programa usam o prefixo `ADR-0000` para não
 colidir com os históricos `ADR-001..008`.
+
+## Atualização — Fase 2 (2026-11-07)
+
+Nenhuma decisão arquitetural foi revista nesta fase. O que mudou foi a
+**evidência de implementação** das decisões já aceitas:
+
+| ADR | Decisão | Evidência nova (Fase 2) |
+|---|---|---|
+| ADR-0003 | Fonte canônica SQL-first | disponibilidade/preço canônicos provados em `fase2-nucleo-canonico.test.ts` |
+| ADR-0004 | Multi-tenant por `empresa_id` | FKs compostas E4.2 do CRM (`0104`) + `fase2-integridade-referencial.test.ts` |
+| ADR-0005 | Identidade comercial | `fase2-identidade-comercial.test.ts` (lojas não colidem) |
+| ADR-0006 | RETAIL/WHOLESALE independentes | idem (preço-fonte por loja) |
+| ADR-0007 | Descontinuação de `/loja` | **plano confirmado; execução bloqueada** — `NATIVE-STORE-DECOMMISSION-REPORT.md` |
+| ADR-0008 | Operacional × analítico | `OPERATIONAL-ANALYTICAL-SEPARATION.md` |
+| ADR-0011 | Padrão de migrations | `DATA-MIGRATION-PLAN.md` (E4.2 com `NOT VALID` + `VALIDATE`) |
+
+> A decisão ADR-0007 permanece **aceita**; o que está bloqueado é a **execução**,
+> por impedimento de ambiente (PG real + credenciais Woo) e por decisão de SEO
+> pendente (DEC-001). Isso está registrado, não silenciado.

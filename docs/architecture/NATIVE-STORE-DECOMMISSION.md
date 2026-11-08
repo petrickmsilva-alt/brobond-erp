@@ -167,5 +167,8 @@ pública. A retirada é **executada na Fase 2**; esta é a auditoria e o plano.
 
 ---
 
-*Status:* **plano entregue (Fase 0)** · execução na **Fase 2**
-(`NATIVE-STORE-DECOMMISSION-REPORT.md`).
+*Status:* **plano entregue (Fase 0)** · execução **tentada na Fase 2 e
+bloqueada** por ambiente/decisão (impedimentos I-1..I-4) — ver
+[`NATIVE-STORE-DECOMMISSION-REPORT.md`](NATIVE-STORE-DECOMMISSION-REPORT.md).
+A retirada está **pendente para a Fase 3** (BL-015 / DEC-004); a superfície
+nativa **ainda está ativa**.

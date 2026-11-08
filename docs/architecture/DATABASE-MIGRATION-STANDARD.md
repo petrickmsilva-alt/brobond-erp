@@ -17,7 +17,7 @@
 - `db/migrations/NNNN_descricao.sql` — cadeia versionada, ordem **léxica**.
 - `prisma/migrations/` — migrações do bounded context commerce (dual-track).
 
-**103** migrações SQL + **7** Prisma (contagem do `architecture:audit`).
+**104** migrações SQL + **7** Prisma (contagem do `architecture:audit`).
 
 ## 2. Regras
 

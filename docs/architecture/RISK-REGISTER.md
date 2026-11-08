@@ -17,7 +17,10 @@
 | **P2** | **9** | evolução planejada / evidência dependente de CI |
 | **P3** | **5** | desejável / produto futuro |
 
-Herdados de `docs/ERP-3.0-GAP-MATRIX.md` + achados desta Fase 0.
+Herdados de `docs/ERP-3.0-GAP-MATRIX.md` + achados da Fase 0.
+**Atualização Fase 2:** R-P2-07 **fechado** (FK composta E4.2 do CRM); R-P2-09
+passa a **Fase 3** (descontinuação bloqueada por ambiente); R-P2-10 registrado
+(`sale_items` sem `empresa_id`). Nenhum risco novo P0/P1.
 
 ---
 
@@ -46,9 +49,10 @@ absoluta — é o resultado das verificações de §4 e dos gates executados.
 | R-P2-04 | CRM | Lembrete sem notificação ativa | GAP-P2-14 | follow-up depende de abrir tela | Fase 2 |
 | R-P2-05 | Produção | Sem sequenciamento/feriados | GAP-P2-15 | ocupação otimista | Fase 2/3 |
 | R-P2-06 | Estoque | Sem contagem cíclica automatizada | GAP-P2-16 | retrabalho de contagem | Fase 2/3 |
-| R-P2-07 | CRM (banco) | Integridade cross-tenant só por FK simples | GAP-P2-04 | SQL manual poderia cruzar empresa | **Fase 2** — FK composta E4.2 |
+| R-P2-07 | CRM (banco) | Integridade cross-tenant só por FK simples | GAP-P2-04 | SQL manual poderia cruzar empresa | **FECHADO na Fase 2** — FK composta E4.2 (`0104`) + `fase2-integridade-referencial.test.ts` |
 | R-P2-08 | Commerce | Dois caminhos de ingestão Woo (legado × multi-store) | `loja.ts` + `commerce/woocommerce/` | divergência de canal | runbook Agente 07 |
-| R-P2-09 | Loja nativa | Superfície pública `/loja` | ADR-0007 | duplicidade de varejo | **Fase 2** — descontinuação |
+| R-P2-09 | Loja nativa | Superfície pública `/loja` | ADR-0007 | duplicidade de varejo | **Fase 3** — descontinuação bloqueada por ambiente (BL-015) |
+| R-P2-10 | Projeção | `sale_items` sem `empresa_id` (over-fetch no analytics) | `commerce/analytics.ts` | custo de leitura; sem vazamento (recorte por `sale_id`) | **Fase 3** — migração aditiva (BL-016) |
 
 ## 5. Riscos P3
 
@@ -77,16 +81,16 @@ absoluta — é o resultado das verificações de §4 e dos gates executados.
 
 ## 7. O que foi verificado (evidência)
 
-| Verificação | Resultado |
-|---|---|
-| Typecheck (domain+server+client) | ✅ OK |
-| Testes server | ✅ 2.183 pass / 0 fail / 88 skip |
-| Testes client | ✅ 1.165 pass / 0 fail |
-| Lint | ✅ 0 errors |
-| `architecture:audit` | ✅ 0 erros (34 avisos classificados) |
-| `audit:menu` | ✅ 0 erros (21 avisos classificados) |
-| `audit:ux` | ✅ 0 sobreposição nova |
-| PostgreSQL real | ⏳ BLOQUEADO no sandbox (CI cobre) |
+| Verificação | Resultado (Fase 0) | Resultado (Fase 2) |
+|---|---|---|
+| Typecheck (domain+server+client) | ✅ OK | ✅ OK |
+| Testes server | ✅ 2.183 pass / 0 fail / 88 skip | ✅ **2.215 pass / 0 fail / 88 skip** |
+| Testes client | ✅ 1.165 pass / 0 fail | ✅ 1.165 pass / 0 fail |
+| Lint | ✅ 0 errors | ✅ 0 errors (615 warnings baseline) |
+| `architecture:audit` | ✅ 0 erros | ✅ 0 erros |
+| `audit:menu` | ✅ 0 erros | ✅ 0 erros |
+| `bootstrap` sync | — | ✅ sincronizado |
+| PostgreSQL real | ⏳ BLOQUEADO no sandbox (CI cobre) | ⏳ BLOQUEADO no sandbox (CI cobre) |
 
 ---
 

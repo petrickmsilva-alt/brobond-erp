@@ -8,7 +8,7 @@
 
 ## Contexto
 
-Existem 103 migrations SQL (`db/migrations/*.sql`, ordem léxica) e 7 Prisma. O
+Existem 104 migrations SQL (`db/migrations/*.sql`, ordem léxica) e 7 Prisma. O
 `schema.sql` espelha a estrutura; `bootstrap.sql` é gerado.
 
 ## Problema
