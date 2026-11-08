@@ -792,6 +792,7 @@ export async function listarProdutosCommerce(req: Request, res: Response) {
       exibir_site: p.exibir_site === true,
       destaque: p.destaque === true,
       preco_base: Number(p.preco_venda ?? 0),
+      categoria_id: p.categoria_id != null ? Number(p.categoria_id) : null,
       fisico: fisicoDoProduto(ctx, pid),
       reservado: reservadoDoProduto(ctx.reservas, pid),
       disponivel: disponivelDoProduto(ctx, pid),

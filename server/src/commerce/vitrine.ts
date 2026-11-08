@@ -43,9 +43,10 @@ import {
   consumirUsoCupom,
   descontoFinalDoCheckout,
   liberarUsoCupom,
-  melhorPromocaoAtiva,
+  melhorPromocaoDoCarrinho,
   normalizarCodigo,
 } from './promocoes';
+import type { ItemElegivel } from './regras';
 import type { Row } from '../store';
 import { calcularTotaisCheckout, paraCentavos, precoEfetivo, round2 } from './regras';
 
@@ -110,6 +111,21 @@ export function precoPublico(produto: Row, precos: Map<string, Row>): { preco: n
   });
   const unidade = eff.promo ?? eff.preco;
   return { preco: round2(unidade), preco_original: eff.promo != null ? eff.preco : null, promocional: eff.promo != null };
+}
+
+/**
+ * Converte as linhas RESOLVIDAS do carrinho na visão da avaliação de promoção
+ * (subtotal da linha + produto + categoria). Linhas com problema ficam de fora:
+ * não geram desconto porque não geram receita.
+ */
+function itensElegiveis(itens: ItemResolvido[]): ItemElegivel[] {
+  return itens
+    .filter((i) => !i.problema)
+    .map((i) => ({
+      subtotal: round2(i.preco_unitario * i.quantidade),
+      produtoId: i.produto_id,
+      categoriaId: i.categoriaId,
+    }));
 }
 
 // ----------------------------------------------------------------------------
@@ -468,6 +484,8 @@ type ItemResolvido = {
   foto_url: string | null;
   /** Rótulo da variante (tamanho) quando o item tem grade. */
   variante: string | null;
+  /** Categoria do produto (elegibilidade de promoção por categoria — 0108). */
+  categoriaId: number | null;
   /** Só no modo tolerante (preview): item que saiu da vitrine / precisa de ajuste. */
   problema?: string;
 };
@@ -527,6 +545,7 @@ async function resolverItensCarrinho(
       disponivel: 0,
       foto_url: null,
       variante: null,
+      categoriaId: null,
       problema,
       ...parcial,
     });
@@ -586,6 +605,7 @@ async function resolverItensCarrinho(
       disponivel,
       foto_url: null,
       variante: tamanhoId != null ? grade.find((g) => g.tamanho_id === tamanhoId)?.codigo ?? null : null,
+      categoriaId: produto.categoria_id != null ? Number(produto.categoria_id) : null,
     });
   }
   // Imagem vigente vem do cadastro (uma consulta para o carrinho inteiro).
@@ -666,7 +686,7 @@ export async function cotarCarrinho(empresaId: number, corpo: Record<string, unk
   const codigoCupom = corpo.cupom ? normalizarCodigo(corpo.cupom) : '';
   let cupom: Awaited<ReturnType<typeof avaliarCupomCodigo>> | null = null;
   if (codigoCupom) cupom = await avaliarCupomCodigo(empresaId, codigoCupom, subtotal);
-  const promocao = await melhorPromocaoAtiva(empresaId, subtotal);
+  const { promocao } = await melhorPromocaoDoCarrinho(empresaId, itensElegiveis(vendaveis), subtotal, 'varejo');
   const desconto = descontoFinalDoCheckout(subtotal, promocao, cupom);
   const frete = await cotarFrete(freteDaConfig(config), {
     subtotal,
@@ -799,7 +819,7 @@ export async function lojaCriarCheckout(req: Request, res: Response) {
   const codigoCupom = corpo.cupom ? normalizarCodigo(corpo.cupom) : '';
   const cupom = codigoCupom ? await avaliarCupomCodigo(empresaId, codigoCupom, subtotal) : null;
   if (cupom && !cupom.ok) throw new HttpError(400, cupom.erro, { cupom: cupom.erro });
-  const promocao = await melhorPromocaoAtiva(empresaId, subtotal);
+  const promocao = (await melhorPromocaoDoCarrinho(empresaId, itensElegiveis(itens), subtotal, 'varejo')).promocao;
   const desconto = descontoFinalDoCheckout(subtotal, promocao, cupom);
   const usarCupom = desconto.origem === 'cupom' && cupom && cupom.ok;
 

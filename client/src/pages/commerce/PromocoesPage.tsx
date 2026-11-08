@@ -5,7 +5,7 @@
 // ============================================================================
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { BadgePercent, Pencil, Percent, Plus } from 'lucide-react';
+import { BadgePercent, Pencil, Percent, Plus, Wand2 } from 'lucide-react';
 import { apiFetch, ApiError } from '../../lib/api';
 import { Alert, Badge, ConfirmacaoInline, EmptyState, PageHeader, Spinner, useToast } from '../../components/ui';
 import { DataTable, FilterBar, type DataTableColumn } from '../../components/ui-kit-negocios';
@@ -17,11 +17,17 @@ type Promocao = {
   nome: string;
   tipo: string;
   valor: number;
+  escopo?: string;
+  canal?: string;
+  prioridade?: number;
   minimo_pedido: number;
   data_inicio: string;
   data_fim: string | null;
   ativo: boolean;
 };
+
+const ROTULO_ESCOPO: Record<string, string> = { pedido: 'Pedido inteiro', produto: 'Produtos', categoria: 'Categorias' };
+const ROTULO_CANAL: Record<string, string> = { todos: 'Todos os canais', varejo: 'Varejo', atacado: 'Atacado' };
 
 export default function CommercePromocoesPage() {
   const toast = useToast();
@@ -87,6 +93,17 @@ export default function CommercePromocoesPage() {
       ),
     },
     {
+      key: 'escopo',
+      header: 'Escopo',
+      render: (p) => (
+        <span className="text-sm">
+          {ROTULO_ESCOPO[String(p.escopo || 'pedido')] ?? 'Pedido inteiro'}
+          {Number(p.prioridade ?? 0) > 0 && <span className="text-muted"> · prio {p.prioridade}</span>}
+        </span>
+      ),
+    },
+    { key: 'canal', header: 'Canal', render: (p) => <span className="text-sm">{ROTULO_CANAL[String(p.canal || 'todos')] ?? 'Todos os canais'}</span> },
+    {
       key: 'vigencia',
       header: 'Vigência',
       render: (p) => (
@@ -125,6 +142,9 @@ export default function CommercePromocoesPage() {
           <>
             <button type="button" className="btn-ghost" onClick={() => navigate('/commerce/ofertas')}>
               <Percent className="h-4 w-4" aria-hidden="true" /> Ofertas por canal
+            </button>
+            <button type="button" className="btn-ghost" onClick={() => navigate('/commerce/promocoes/simulador')}>
+              <Wand2 className="h-4 w-4" aria-hidden="true" /> Simulador
             </button>
             {podeGerir && (
               <button type="button" className="btn-primary" onClick={() => navigate('/commerce/promocoes/nova')}>

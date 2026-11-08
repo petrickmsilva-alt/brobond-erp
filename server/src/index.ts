@@ -144,6 +144,7 @@ import {
   atualizarPromocao,
   listarCupons,
   listarPromocoes,
+  simularPromocao,
 } from './commerce/promocoes';
 import { estadoLoja } from './commerce/estado-loja';
 import { capacidadesCreators, listCreatorsEntity, detailCreatorsEntity, createCreatorsEntity, updateCreatorsEntity, listCreatorAttributions } from './creators';
@@ -1141,6 +1142,7 @@ app.get('/api/commerce/eventos', wrap(listarEventosCommerce));
 app.post('/api/commerce/outbox/:id/reprocessar', wrap(reprocessarOutbox));
 app.get('/api/commerce/erros', wrap(listarErrosCommerce));
 app.get('/api/commerce/promocoes', wrap(listarPromocoes));
+app.post('/api/commerce/promocoes/simular', wrap(simularPromocao));
 app.post('/api/commerce/promocoes', wrap(criarPromocao));
 app.put('/api/commerce/promocoes/:id', wrap(atualizarPromocao));
 app.delete('/api/commerce/promocoes/:id', wrap(excluirPromocao));
