@@ -40,7 +40,7 @@
 // ============================================================
 import type { Request, Response } from 'express';
 import type { PoolClient } from 'pg';
-import { hasDatabaseUrl, query, withTransaction } from './db';
+import { hasDatabaseUrl, isDbConnected, query, withTransaction } from './db';
 import { empresaExplicitaAudit, escopoDoAtor, exigirEmpresaPermitida } from './empresa';
 import { RESOURCES, type Resource } from './resources';
 import { checkAccess, getStore } from './services';
@@ -1936,6 +1936,7 @@ const vendasErpPendentes = new Set<number>();
 
 /** Agenda a projeção de uma venda (chamado pelo gancho de faturamento/estorno). */
 export function agendarProjecaoVendasErp(vendaId: number): void {
+  if (hasDatabaseUrl() && !isDbConnected()) return;
   if (!Number.isInteger(vendaId) || vendaId <= 0) return;
   vendasErpPendentes.add(vendaId);
   if (timerProjecaoErp) return;
@@ -1965,7 +1966,7 @@ let timerCiclo: ReturnType<typeof setInterval> | null = null;
 export const AUTO_REFRESH_MS_PADRAO = 15 * 60_000;
 
 async function cicloDoMotor(): Promise<{ margens: number; abc: number } | null> {
-  if (!hasDatabaseUrl() || cicloRodando) return null;
+  if (!isDbConnected() || cicloRodando) return null;
   cicloRodando = true;
   try {
     const repo = repoNegocios();
@@ -1991,7 +1992,7 @@ export async function atualizarMotorNegocios(): Promise<{ margens: number; abc: 
 
 /** Enfileira vendas ingeridas: recálculo coalescido (debounce) margem+ABC. */
 export function agendarRecalculo(ids: string[], empresaId: number): void {
-  if (!hasDatabaseUrl()) return;
+  if (!isDbConnected()) return;
   if (!Number.isSafeInteger(empresaId) || empresaId <= 0) return;
   const doTenant = vendasPendentes.get(empresaId) ?? new Set<string>();
   for (const id of ids) doTenant.add(id);
@@ -2027,7 +2028,7 @@ export function initNegociosEngine(): void {
   // O gancho da venda do ERP vale nos DOIS modos (o modo demonstração também
   // tem venda do ERP — e o BI dele precisa refletir a operação, como o de PG).
   setOnVendaErpAlterada((evento) => agendarProjecaoVendasErp(evento.vendaId));
-  if (!hasDatabaseUrl()) return;
+  if (!isDbConnected()) return;
   setOnSaleIngested(({ empresaId, saleId }) => {
     agendarRecalculo([saleId], empresaId);
   });
