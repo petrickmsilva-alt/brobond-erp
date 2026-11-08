@@ -1936,6 +1936,7 @@ const vendasErpPendentes = new Set<number>();
 
 /** Agenda a projeção de uma venda (chamado pelo gancho de faturamento/estorno). */
 export function agendarProjecaoVendasErp(vendaId: number): void {
+  if (hasDatabaseUrl() && !isDbConnected()) return;
   if (!Number.isInteger(vendaId) || vendaId <= 0) return;
   vendasErpPendentes.add(vendaId);
   if (timerProjecaoErp) return;
@@ -2020,14 +2021,14 @@ export function agendarRecalculo(ids: string[], empresaId: number): void {
 /**
  * Liga o motor no boot: escuta a ingestão de marketplaces (margem da venda
  * nova em segundos), roda um ciclo inicial e mantém a classificação ABC
- * contínua por intervalo. Só existe com Postgres pronto — nunca inicia antes
- * da prontidão do banco.
+ * contínua por intervalo. Só existe com Postgres — o modo demonstração não
+ * tem `sales` ingeridas e nada é fabricado.
  */
 export function initNegociosEngine(): void {
   // O gancho da venda do ERP vale nos DOIS modos (o modo demonstração também
   // tem venda do ERP — e o BI dele precisa refletir a operação, como o de PG).
   setOnVendaErpAlterada((evento) => agendarProjecaoVendasErp(evento.vendaId));
-  if (!hasDatabaseUrl() || !isDbConnected()) return;
+  if (!isDbConnected()) return;
   setOnSaleIngested(({ empresaId, saleId }) => {
     agendarRecalculo([saleId], empresaId);
   });

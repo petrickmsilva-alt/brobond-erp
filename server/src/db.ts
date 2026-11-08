@@ -30,31 +30,6 @@ const databaseUrl = (process.env.DATABASE_URL || '').replace(
   'sslmode=verify-full$2'
 );
 
-function parseEnvInt(name: string, fallback: number, min: number, max: number): number {
-  const raw = process.env[name];
-  if (raw === undefined || raw.trim() === '') return fallback;
-  const n = Number(raw);
-  if (!Number.isFinite(n) || n < min) return fallback;
-  return Math.min(max, Math.floor(n));
-}
-
-export interface StartupConfig {
-  connectTimeoutMs: number;
-  startupTimeoutMs: number;
-  retryBaseMs: number;
-  retryMaxMs: number;
-  maxAttempts: number;
-}
-
-export function lerConfigBootBanco(overrides: Partial<StartupConfig> = {}): StartupConfig {
-  const connectTimeoutMs = overrides.connectTimeoutMs ?? parseEnvInt('PG_CONNECT_TIMEOUT', 10_000, 100, 120_000);
-  const startupTimeoutMs = overrides.startupTimeoutMs ?? parseEnvInt('PG_STARTUP_TIMEOUT_MS', 60_000, 200, 600_000);
-  const retryBaseMs = overrides.retryBaseMs ?? parseEnvInt('PG_STARTUP_RETRY_BASE_MS', 500, 10, 30_000);
-  const retryMaxMs = overrides.retryMaxMs ?? parseEnvInt('PG_STARTUP_RETRY_MAX_MS', 8_000, retryBaseMs, 60_000);
-  const maxAttempts = overrides.maxAttempts ?? parseEnvInt('PG_STARTUP_MAX_ATTEMPTS', 20, 1, 100);
-  return { connectTimeoutMs, startupTimeoutMs, retryBaseMs, retryMaxMs, maxAttempts };
-}
-
 // ---------------------------------------------------------------------------
 // DATE como dia civil "YYYY-MM-DD" — não como `Date` JavaScript.
 //
@@ -79,22 +54,29 @@ export function lerConfigBootBanco(overrides: Partial<StartupConfig> = {}): Star
 const tiposPg = new TypeOverrides();
 tiposPg.setTypeParser(1082, (valor: string) => valor); // DATE → "YYYY-MM-DD"
 
+const parseEnvInt = (name: string, fallback: number, min: number, max: number): number => {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === '') return fallback;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < min) return fallback;
+  return Math.min(max, Math.floor(parsed));
+};
+
 // Se DATABASE_URL não existir (ex.: dev local sem Postgres), o pool fica nulo
 // e a API funciona em MODO DEMONSTRAÇÃO com um banco em memória (memdb.ts):
 // tudo cadastra/edita/exclui normalmente, mas os dados somem ao reiniciar.
-const sslDesabilitado =
-  process.env.PGSSL === 'false' || /(?:^|[?&])sslmode=disable(?:&|$)/i.test(databaseUrl);
-
 export const pool: Pool | null = databaseUrl
   ? new Pool({
       connectionString: databaseUrl,
       types: tiposPg,
       ssl:
-        !sslDesabilitado && (process.env.NODE_ENV === 'production' || process.env.PGSSL === 'true')
-          ? { rejectUnauthorized: false }
-          : undefined,
+        process.env.PGSSL === 'false' || /(?:^|[?&])sslmode=disable(?:&|$)/i.test(databaseUrl)
+          ? undefined
+          : process.env.NODE_ENV === 'production' || process.env.PGSSL === 'true'
+            ? { rejectUnauthorized: false }
+            : undefined,
       max: Number(process.env.PG_POOL_MAX) || 10,
-      connectionTimeoutMillis: parseEnvInt('PG_CONNECT_TIMEOUT', 10_000, 100, 120_000),
+      connectionTimeoutMillis: parseEnvInt('PG_CONNECT_TIMEOUT', 10_000, 50, 120_000),
       idleTimeoutMillis: Number(process.env.PG_IDLE_TIMEOUT) || 30000,
     })
   : null;
@@ -107,18 +89,18 @@ if (pool) {
 }
 
 // ---------------------------------------------------------------------------
-// PROD-DB-02 + RESILIÊNCIA DE CONEXÃO — estado do boot em FASES explícitas.
+// PROD-DB-02 / BOOT RESILIENCE — estado do boot e migração em FASES explícitas.
 //
-//   'conexao'    — pool/socket/autenticação falhou antes da aplicação do schema;
+// Cada fase do boot é registrada explicitamente (nunca `fase=desconhecida`):
+//
+//   'conexao'    — falha ao conectar / validar SELECT 1 / obter lock após
+//                  retentativas controladas (ou imediatamente se permanente);
 //   'bootstrap'  — DDL estrutural (db/bootstrap.sql) não pôde ser aplicado;
 //   'migrations' — a cadeia versionada (db/migrations/*.sql) falhou.
-//
-// Separar 'conexao' de 'bootstrap' e 'migrations' garante que nenhuma falha de
-// conexão/autenticação volte a aparecer como `[fase=desconhecida] (null)`.
 // ---------------------------------------------------------------------------
 export type FaseDeBoot = 'conexao' | 'bootstrap' | 'migrations';
-export type TipoFalhaConexao = 'transitoria' | 'permanente' | 'timeout';
-export type EstagioBootBanco = 'idle' | 'connecting' | 'migrating' | 'ready' | 'degraded';
+export type TipoFalhaConexao = 'permanente' | 'timeout';
+export type BootStage = 'idle' | 'connecting' | 'migrating' | 'ready' | 'degraded';
 
 export interface FalhaDeBoot {
   fase: FaseDeBoot;
@@ -128,18 +110,195 @@ export interface FalhaDeBoot {
   duracaoMs?: number;
 }
 
-export interface EstadoBootBanco {
+export interface DbBootState {
   configured: boolean;
   connected: boolean;
   ready: boolean;
-  stage: EstagioBootBanco;
+  stage: BootStage;
   failure: FalhaDeBoot | null;
 }
 
-let connected = false;
+export interface StartupConfig {
+  connectTimeoutMs: number;
+  startupTimeoutMs: number;
+  retryBaseMs: number;
+  retryMaxMs: number;
+  maxAttempts: number;
+}
+
+export interface ClassificacaoErroConexao {
+  transitorio: boolean;
+  codigo: string | null;
+  motivo: string;
+}
+
+export interface MigrateOptions {
+  clientFactory?: () => Promise<PoolClient>;
+  startupConfig?: Partial<StartupConfig>;
+  sleep?: (ms: number) => Promise<void>;
+  now?: () => number;
+  bootstrapFn?: (client: PoolClient) => Promise<void>;
+  migrationsFn?: (client: PoolClient) => Promise<void>;
+  logger?: Pick<Console, 'log' | 'warn' | 'error'>;
+}
+
 let ready = false;
-let bootStage: EstagioBootBanco = 'idle';
+let connected = false;
+let bootStage: BootStage = 'idle';
 let falhaDeBoot: FalhaDeBoot | null = null;
+let bootUsaPoolExterno = false;
+
+export function lerConfigBootBanco(overrides: Partial<StartupConfig> = {}): StartupConfig {
+  const connectTimeoutMs = overrides.connectTimeoutMs ?? parseEnvInt('PG_CONNECT_TIMEOUT', 10_000, 50, 120_000);
+  const startupTimeoutMs = overrides.startupTimeoutMs ?? parseEnvInt('PG_STARTUP_TIMEOUT_MS', 60_000, 100, 600_000);
+  const retryBaseMs = overrides.retryBaseMs ?? parseEnvInt('PG_STARTUP_RETRY_BASE_MS', 500, 10, 30_000);
+  const retryMaxMs = overrides.retryMaxMs ?? parseEnvInt('PG_STARTUP_RETRY_MAX_MS', 8_000, retryBaseMs, 60_000);
+  const maxAttempts = overrides.maxAttempts ?? parseEnvInt('PG_STARTUP_MAX_ATTEMPTS', 20, 1, 100);
+  return { connectTimeoutMs, startupTimeoutMs, retryBaseMs, retryMaxMs, maxAttempts };
+}
+
+export function calcularBackoffMs(tentativa: number, baseMs: number, maxMs: number): number {
+  const exp = Math.max(0, tentativa - 1);
+  return Math.min(maxMs, Math.max(1, Math.round(baseMs * Math.pow(2, exp))));
+}
+
+function extrairDetalhesErro(err: unknown): { codigos: string[]; mensagens: string[] } {
+  const codigos: string[] = [];
+  const mensagens: string[] = [];
+  const visitados = new Set<unknown>();
+
+  const visitar = (atual: unknown, profundidade: number) => {
+    if (!atual || profundidade > 6 || visitados.has(atual)) return;
+    if (typeof atual === 'string') {
+      const limpo = atual.trim();
+      if (limpo) mensagens.push(limpo);
+      return;
+    }
+    if (typeof atual !== 'object') return;
+    visitados.add(atual);
+    const rec = atual as { code?: unknown; message?: unknown; cause?: unknown; errors?: unknown; name?: unknown };
+    if (typeof rec.code === 'string' && rec.code.trim()) codigos.push(rec.code.trim());
+    if (typeof rec.message === 'string' && rec.message.trim()) mensagens.push(rec.message.trim());
+    if (Array.isArray(rec.errors)) {
+      for (const item of rec.errors) visitar(item, profundidade + 1);
+    }
+    if (rec.cause !== undefined) visitar(rec.cause, profundidade + 1);
+    if (!mensagens.length && typeof rec.name === 'string' && rec.name.trim()) mensagens.push(rec.name.trim());
+  };
+
+  visitar(err, 0);
+  return { codigos: [...new Set(codigos)], mensagens: [...new Set(mensagens)] };
+}
+
+export function sanitizarMensagemErro(err: unknown): string {
+  const { codigos, mensagens } = extrairDetalhesErro(err);
+  const bruto = mensagens.join('; ') || (codigos.length ? codigos.join(', ') : String(err || 'Erro desconhecido ao conectar ao PostgreSQL'));
+  const mascarado = bruto
+    .replace(/\b(postgres(?:ql)?:\/\/)([^:@\s]+):([^@\s]+)@/gi, '$1***:***@')
+    .replace(/\b(postgres(?:ql)?:\/\/)([^@\s]+)@/gi, '$1***@')
+    .replace(/password=[^\s&;]+/gi, 'password=***')
+    .trim();
+  return mascarado || 'Erro desconhecido ao conectar ao PostgreSQL';
+}
+
+const CODIGOS_PERMANENTES = new Set([
+  '28P01', // invalid_password
+  '28000', // invalid_authorization_specification
+  '3D000', // invalid_catalog_name (database does not exist)
+  '3F000', // invalid_schema_name
+  '42501', // insufficient_privilege
+  '08P01', // protocol_violation
+  'ERR_INVALID_URL',
+  'ERR_TLS_CERT_ALTNAME_INVALID',
+  'DEPTH_ZERO_SELF_SIGNED_CERT',
+  'SELF_SIGNED_CERT_IN_CHAIN',
+  'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+  'CERT_HAS_EXPIRED',
+  'CERT_NOT_YET_VALID',
+]);
+
+const CODIGOS_TRANSITORIOS = new Set([
+  '57P01', // admin_shutdown
+  '57P02', // crash_shutdown
+  '57P03', // cannot_connect_now (starting up / recovery)
+  '53300', // too_many_connections
+  '53400', // configuration_limit_exceeded
+  '08000', // connection_exception
+  '08001', // sqlclient_unable_to_establish_sqlconnection
+  '08003', // connection_does_not_exist
+  '08004', // sqlserver_rejected_establishment_of_sqlconnection
+  '08006', // connection_failure
+  '08007', // transaction_resolution_unknown
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'ETIMEDOUT',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+  'EPIPE',
+  'EAI_AGAIN',
+  'ENOTFOUND',
+  'ECONNABORTED',
+  'ENETDOWN',
+  'EHOSTDOWN',
+  'UND_ERR_CONNECT_TIMEOUT',
+]);
+
+const REGEX_PERMANENTE = /password authentication failed|role .* does not exist|database .* does not exist|no pg_hba\.conf entry|does not support ssl|invalid url|invalid connection string/i;
+const REGEX_TRANSITORIO = /timeout|timed out|connection terminated|terminating connection|server closed the connection|the database system is starting up|the database system is shutting down|the database system is in recovery mode|remaining connection slots|too many clients|socket hang up|client has encountered a connection error|endpoint is (?:disabled|currently)|compute is (?:starting|waking)|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|EHOSTUNREACH|ENETUNREACH|EPIPE/i;
+
+export function classificarErroConexao(err: unknown): ClassificacaoErroConexao {
+  const { codigos, mensagens } = extrairDetalhesErro(err);
+  const texto = mensagens.join(' | ');
+
+  const codigoPerm = codigos.find((c) => CODIGOS_PERMANENTES.has(c));
+  if (codigoPerm || REGEX_PERMANENTE.test(texto)) {
+    return { transitorio: false, codigo: codigoPerm ?? codigos[0] ?? 'erro_permanente', motivo: 'erro_permanente' };
+  }
+
+  const codigoTrans = codigos.find((c) => CODIGOS_TRANSITORIOS.has(c));
+  if (codigoTrans || REGEX_TRANSITORIO.test(texto)) {
+    return { transitorio: true, codigo: codigoTrans ?? codigos[0] ?? 'erro_transitorio', motivo: 'erro_transitorio' };
+  }
+
+  return { transitorio: false, codigo: codigos[0] ?? 'erro_desconhecido', motivo: 'erro_nao_transitorio' };
+}
+
+function releaseClientSafe(client: PoolClient | null | undefined, destroy: boolean): void {
+  if (!client) return;
+  try {
+    client.release(destroy);
+  } catch {
+    try {
+      client.release();
+    } catch {
+      /* cliente já encerrado */
+    }
+  }
+}
+
+async function conectarComTimeout(connectFn: () => Promise<PoolClient>, timeoutMs: number): Promise<PoolClient> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let expirou = false;
+  const tentativaPromise = Promise.resolve().then(() => connectFn());
+
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      expirou = true;
+      tentativaPromise.then((lateClient) => releaseClientSafe(lateClient, true), () => undefined);
+      const err = Object.assign(new Error(`Timeout de conexão com PostgreSQL após ${timeoutMs}ms`), { code: 'ETIMEDOUT' });
+      reject(err);
+    }, timeoutMs);
+  });
+
+  try {
+    return await Promise.race([tentativaPromise, timeoutPromise]);
+  } finally {
+    if (timer) clearTimeout(timer);
+    if (!expirou) {
+      tentativaPromise.catch(() => undefined);
+    }
+  }
+}
 
 /** Falha de boot (fase + causa). Null quando o banco está pronto ou é demo. */
 export function bootFailure(): FalhaDeBoot | null {
@@ -155,22 +314,19 @@ export function migrationError(): string | null {
 }
 
 /**
- * Verdadeiro quando o banco respondeu ao handshake (`SELECT 1` + lock), mesmo
- * que bootstrap/migrations ainda estejam rodando ou tenham falhado por dado/DDL.
+ * Verdadeiro quando o driver conseguiu abrir sessão e validar `SELECT 1`
+ * (pode estar ainda em fase de migração ou ter falhado em bootstrap/migrations).
  */
 export function dbConnectionEstablished(): boolean {
-  return !!pool && connected;
+  return (!!pool || bootUsaPoolExterno) && connected;
 }
 
-export function dbBootStage(): EstagioBootBanco {
-  return bootStage;
-}
-
-export function dbBootState(): EstadoBootBanco {
+/** Estado completo do ciclo de inicialização do banco para `/api/health` e testes. */
+export function dbBootState(): DbBootState {
   return {
-    configured: !!pool,
-    connected,
-    ready,
+    configured: !!pool || bootUsaPoolExterno,
+    connected: (!!pool || bootUsaPoolExterno) && connected,
+    ready: (!!pool || bootUsaPoolExterno) && ready,
     stage: bootStage,
     failure: falhaDeBoot,
   };
@@ -190,9 +346,9 @@ export function isDbConnected(): boolean {
 }
 
 /**
- * Falso quando DATABASE_URL existe mas o banco NÃO está pronto (conexão,
- * migração falhou, bootstrap incompleto). É o sinal canônico de degradação:
- * nunca deixar o PgStore operar nem cair silenciosamente para memória.
+ * Falso quando DATABASE_URL existe mas o banco NÃO está pronto (migração falhou,
+ * bootstrap incompleto). É o sinal canônico de degradação: nunca deixar o
+ * PgStore operar nem cair silenciosamente para memória.
  */
 export function isDbDegraded(): boolean {
   return !!pool && !ready;
@@ -250,209 +406,10 @@ export async function withTransaction<T>(fn: (client: PoolClient) => Promise<T>,
 }
 
 // ---------------------------------------------------------------------------
-// Classificação e saneamento de erros de conexão PostgreSQL
-// ---------------------------------------------------------------------------
-const CODIGOS_PERMANENTES = new Set([
-  '28P01', // invalid_password
-  '28000', // invalid_authorization_specification
-  '3D000', // invalid_catalog_name (database does not exist)
-  '3F000', // invalid_schema_name
-  '42501', // insufficient_privilege
-  '08P01', // protocol_violation
-  'ERR_INVALID_URL',
-  'ERR_TLS_CERT_ALTNAME_INVALID',
-  'DEPTH_ZERO_SELF_SIGNED_CERT',
-  'SELF_SIGNED_CERT_IN_CHAIN',
-  'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
-  'CERT_HAS_EXPIRED',
-  'CERT_NOT_YET_VALID',
-]);
-
-const CODIGOS_TRANSITORIOS = new Set([
-  'ECONNREFUSED',
-  'ECONNRESET',
-  'ETIMEDOUT',
-  'EHOSTUNREACH',
-  'ENETUNREACH',
-  'EPIPE',
-  'EAI_AGAIN',
-  'ENOTFOUND',
-  'ECONNABORTED',
-  'ENETDOWN',
-  'EHOSTDOWN',
-  'UND_ERR_CONNECT_TIMEOUT',
-  '57P01', // admin_shutdown
-  '57P02', // crash_shutdown
-  '57P03', // cannot_connect_now (starting up / recovery)
-  '53300', // too_many_connections
-  '53400', // configuration_limit_exceeded
-  '08000', // connection_exception
-  '08001', // sqlclient_unable_to_establish_sqlconnection
-  '08003', // connection_does_not_exist
-  '08004', // rejected_establishment_of_sqlconnection
-  '08006', // connection_failure
-  '08007', // transaction_resolution_unknown
-]);
-
-const PADROES_PERMANENTES: RegExp[] = [
-  /password authentication failed/i,
-  /role\s+"?[^"]+"?\s+does not exist/i,
-  /database\s+"?[^"]+"?\s+does not exist/i,
-  /no pg_hba\.conf entry/i,
-  /server does not support ssl/i,
-  /invalid url/i,
-  /invalid connection string/i,
-  /self[- ]signed certificate/i,
-];
-
-const PADROES_TRANSITORIOS: RegExp[] = [
-  /timeout|timed out/i,
-  /connection terminated|terminating connection|server closed the connection|socket hang up/i,
-  /the database system is (starting up|shutting down|in recovery mode)/i,
-  /remaining connection slots|too many clients/i,
-  /endpoint is (disabled|currently)|compute is (starting|waking)/i,
-  /\b(ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|EHOSTUNREACH|ENETUNREACH|EPIPE|ECONNABORTED)\b/i,
-];
-
-function extrairDetalhesErro(err: unknown): { codigos: string[]; mensagens: string[] } {
-  const codigos: string[] = [];
-  const mensagens: string[] = [];
-  const vistos = new Set<unknown>();
-
-  const visitar = (item: unknown) => {
-    if (item == null || vistos.has(item)) return;
-    if (typeof item === 'object') {
-      vistos.add(item);
-      const anyItem = item as Record<string, unknown>;
-      if (typeof anyItem.code === 'string' && anyItem.code.trim()) {
-        codigos.push(anyItem.code.trim());
-      }
-      if (typeof anyItem.message === 'string' && anyItem.message.trim()) {
-        mensagens.push(anyItem.message.trim());
-      }
-      if (Array.isArray(anyItem.errors)) {
-        for (const sub of anyItem.errors) visitar(sub);
-      }
-      if (anyItem.cause !== undefined) {
-        visitar(anyItem.cause);
-      }
-      return;
-    }
-    const texto = String(item).trim();
-    if (texto) mensagens.push(texto);
-  };
-
-  visitar(err);
-  return {
-    codigos: Array.from(new Set(codigos)),
-    mensagens: Array.from(new Set(mensagens)),
-  };
-}
-
-export function sanitizarMensagemErro(err: unknown): string {
-  const { codigos, mensagens } = extrairDetalhesErro(err);
-  const bruto = mensagens.join('; ') || codigos.join(', ') || 'erro desconhecido';
-  return bruto
-    .replace(/postgres(?:ql)?:\/\/[^\s@]+@/gi, 'postgres://***@')
-    .replace(/password=[^\s&;]+/gi, 'password=***');
-}
-
-export interface ClassificacaoErroConexao {
-  transitorio: boolean;
-  codigo: string | null;
-  motivo: string;
-}
-
-export function classificarErroConexao(err: unknown): ClassificacaoErroConexao {
-  const { codigos, mensagens } = extrairDetalhesErro(err);
-  const texto = mensagens.join('; ');
-  const primeiroCodigo = codigos[0] ?? null;
-
-  for (const cod of codigos) {
-    if (CODIGOS_PERMANENTES.has(cod)) {
-      return { transitorio: false, codigo: cod, motivo: cod };
-    }
-  }
-  for (const re of PADROES_PERMANENTES) {
-    if (re.test(texto)) {
-      return { transitorio: false, codigo: primeiroCodigo, motivo: primeiroCodigo || 'erro_permanente' };
-    }
-  }
-  for (const cod of codigos) {
-    if (CODIGOS_TRANSITORIOS.has(cod)) {
-      return { transitorio: true, codigo: cod, motivo: cod };
-    }
-  }
-  for (const re of PADROES_TRANSITORIOS) {
-    if (re.test(texto)) {
-      return { transitorio: true, codigo: primeiroCodigo, motivo: primeiroCodigo || 'erro_transitorio' };
-    }
-  }
-  return {
-    transitorio: false,
-    codigo: primeiroCodigo,
-    motivo: primeiroCodigo || 'erro_nao_transitorio',
-  };
-}
-
-export function calcularBackoffMs(tentativa: number, baseMs: number, maxMs: number): number {
-  const exp = Math.max(0, tentativa - 1);
-  return Math.min(maxMs, Math.round(baseMs * Math.pow(2, exp)));
-}
-
-function releaseClientSafe(client: PoolClient | null | undefined, destroy = false): void {
-  if (!client) return;
-  try {
-    client.release(destroy);
-  } catch {
-    // ignora falha ao liberar cliente já fechado
-  }
-}
-
-async function conectarComTimeout(
-  connectFn: () => Promise<PoolClient>,
-  timeoutMs: number
-): Promise<PoolClient> {
-  const connectPromise = Promise.resolve().then(() => connectFn());
-  return await new Promise<PoolClient>((resolve, reject) => {
-    let timedOut = false;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      reject(
-        Object.assign(new Error(`Timeout ao conectar ao PostgreSQL (${timeoutMs}ms)`), {
-          code: 'ETIMEDOUT',
-        })
-      );
-    }, timeoutMs);
-
-    connectPromise.then(
-      (client) => {
-        if (timedOut) {
-          releaseClientSafe(client, true);
-          return;
-        }
-        clearTimeout(timer);
-        resolve(client);
-      },
-      (err) => {
-        if (timedOut) return;
-        clearTimeout(timer);
-        reject(err);
-      }
-    );
-  });
-}
-
-// ---------------------------------------------------------------------------
 // PROD-DB-02 — ciclo de vida do boot, em FASES separadas.
 //
 // O boot tem quatro responsabilidades distintas, e cada uma falha de forma
 // própria:
-//
-//   0. CONEXÃO INICIAL COM BACKOFF (fase = 'conexao')
-//      Conecta no PostgreSQL com retentativas progressivas até PG_STARTUP_TIMEOUT_MS
-//      quando há erro transitório (cold start / recovery / rede). Erros
-//      permanentes (ex.: 28P01, 3D000, ERR_INVALID_URL) falham rápido sem loop.
 //
 //   1. BOOTSTRAP ESTRUTURAL (db/bootstrap.sql)
 //      Só DDL idempotente (CREATE/ALTER aditivo). Nunca é bloqueado por dado
@@ -471,9 +428,12 @@ async function conectarComTimeout(
 //      corretivo é executado.
 //
 //   4. READINESS / DEGRADED
-//      `ready = true` exige as fases 0, 1 e 3 concluídas. Qualquer falha
-//      registra a FASE em `bootFailure()`; a aplicação responde 503 no
-//      /api/health e bloqueia rotas de negócio, workers e cron.
+//      `ready = true` exige as fases 1 e 3 concluídas. Qualquer falha registra
+//      a FASE em `bootFailure()`; a aplicação sobe com o pool real, responde
+//      503 no /api/health e bloqueia as rotas de negócio.
+//
+// A separação é o que impede a confusão central do PROD-DB-02: uma falha de
+// migration versionada nunca pode ser lida como sucesso de bootstrap.
 // ---------------------------------------------------------------------------
 
 /**
@@ -492,101 +452,107 @@ export async function aplicarBootstrapEstrutural(client: PoolClient): Promise<vo
   await client.query(readFileSync(file, 'utf8'));
 }
 
-export interface MigrateOptions {
-  clientFactory?: () => Promise<PoolClient>;
-  startupConfig?: Partial<StartupConfig>;
-  sleep?: (ms: number) => Promise<void>;
-  now?: () => number;
-  bootstrapFn?: (client: PoolClient) => Promise<void>;
-  migrationsFn?: (client: PoolClient) => Promise<void>;
-  logger?: Pick<Console, 'log' | 'warn' | 'error'>;
-}
-
 /**
- * Boot do banco: conexão resiliente + advisory lock + bootstrap estrutural +
- * cadeia versionada. Idempotente: reexecutar num banco pronto não altera nada.
+ * Boot do banco: conexão com retry + backoff progressivo, lock de sessão,
+ * bootstrap estrutural e cadeia versionada. Idempotente: reexecutar num banco
+ * pronto não altera nada.
  *
- * Nunca deixa `falhaDeBoot` nulo quando entra em estado degradado: registra
- * sempre a FASE ('conexao' | 'bootstrap' | 'migrations') e a mensagem segura.
+ * Nunca lança por falha de conexão/bootstrap/migration: registra a FASE e a
+ * causa em `bootFailure()` e deixa `ready = false` (degradado).
  */
 export async function migrate(opts: MigrateOptions = {}): Promise<void> {
-  if (!pool && !opts.clientFactory) return;
+  const usandoFactoryExterna = typeof opts.clientFactory === 'function';
+  if (!pool && !usandoFactoryExterna) return;
 
-  // Enquanto o boot roda, o banco não está pronto. Se algo falhar daqui pra
-  // frente, `ready` fica falso e a instância segue degradada — inclusive quando
-  // migrate() é chamado de novo depois de um estado pronto.
+  bootUsaPoolExterno = !pool && usandoFactoryExterna;
   ready = false;
   connected = false;
-  falhaDeBoot = null;
   bootStage = 'connecting';
+  falhaDeBoot = null;
 
   const cfg = lerConfigBootBanco(opts.startupConfig);
-  const connectFn = opts.clientFactory ?? (() => pool!.connect());
   const sleepFn = opts.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const nowFn = opts.now ?? (() => Date.now());
-  const bootstrapFn = opts.bootstrapFn ?? aplicarBootstrapEstrutural;
-  const migrationsFn = opts.migrationsFn ?? aplicarMigrationsVersionadas;
   const logger = opts.logger ?? console;
+  const connectFn = opts.clientFactory ?? (() => pool!.connect());
+  const bootstrapFn = opts.bootstrapFn ?? aplicarBootstrapEstrutural;
+  const migrationsFn = opts.migrationsFn ?? ((c: PoolClient) => aplicarMigrationsVersionadas(c, { logger }));
 
   const bootStart = nowFn();
   let lockClient: PoolClient | null = null;
   let onClientError: ((err: Error) => void) | null = null;
 
+  const limparCliente = (client: PoolClient | null, destroy: boolean) => {
+    if (!client) return;
+    if (onClientError) {
+      const target = client as unknown as {
+        off?: (e: string, fn: (err: Error) => void) => void;
+        removeListener?: (e: string, fn: (err: Error) => void) => void;
+      };
+      if (typeof target.off === 'function') target.off('error', onClientError);
+      else if (typeof target.removeListener === 'function') target.removeListener('error', onClientError);
+      onClientError = null;
+    }
+    releaseClientSafe(client, destroy);
+  };
+
   for (let attempt = 1; attempt <= cfg.maxAttempts; attempt++) {
     const attemptStart = nowFn();
-    const elapsedBefore = Math.max(0, attemptStart - bootStart);
+    const elapsedBefore = attemptStart - bootStart;
     const remainingBefore = cfg.startupTimeoutMs - elapsedBefore;
     if (attempt > 1 && remainingBefore <= 0) {
+      const duracao = nowFn() - bootStart;
       falhaDeBoot = {
         fase: 'conexao',
         tipo: 'timeout',
         tentativas: attempt - 1,
-        duracaoMs: elapsedBefore,
-        mensagem: `Timeout ao conectar ao PostgreSQL após ${attempt - 1} tentativa(s) e ${elapsedBefore}ms (limite ${cfg.startupTimeoutMs}ms).`,
+        duracaoMs: duracao,
+        mensagem: `Tempo máximo de inicialização (${cfg.startupTimeoutMs}ms) esgotado após ${attempt - 1} tentativa(s).`,
       };
       bootStage = 'degraded';
-      logger.error(`❌ ${falhaDeBoot.mensagem}`);
+      logger.error(`❌ Timeout ao conectar ao PostgreSQL após ${attempt - 1} tentativa(s) e ${duracao}ms.`);
       return;
     }
 
-    const perAttemptTimeout = Math.max(50, Math.min(cfg.connectTimeoutMs, Math.max(50, remainingBefore)));
-    let candidate: PoolClient | null = null;
-    let candidateOnError: ((err: Error) => void) | null = null;
+    const perAttemptTimeout = Math.max(
+      50,
+      Math.min(cfg.connectTimeoutMs, remainingBefore > 0 ? remainingBefore : cfg.connectTimeoutMs)
+    );
 
+    let candidate: PoolClient | null = null;
     try {
       candidate = await conectarComTimeout(connectFn, perAttemptTimeout);
-      candidateOnError = (err: Error) => {
-        logger.warn(`⚠️  Erro em cliente PostgreSQL durante boot: ${sanitizarMensagemErro(err)}`);
-      };
-      if (typeof (candidate as unknown as { on?: unknown }).on === 'function') {
-        (candidate as unknown as { on: (ev: string, fn: (err: Error) => void) => void }).on('error', candidateOnError);
+      const emitter = candidate as unknown as { on?: (e: string, fn: (err: Error) => void) => void };
+      if (typeof emitter.on === 'function') {
+        onClientError = (clientErr: Error) => {
+          logger.warn('⚠️  Erro assíncrono em cliente PostgreSQL durante o boot:', sanitizarMensagemErro(clientErr));
+        };
+        emitter.on('error', onClientError);
       }
 
       await candidate.query('SELECT 1');
       await candidate.query(`SELECT pg_advisory_lock(hashtext('brobond_schema_bootstrap'))`);
 
       lockClient = candidate;
-      onClientError = candidateOnError;
       connected = true;
       bootStage = 'migrating';
-
-      const attemptMs = Math.max(0, nowFn() - attemptStart);
-      const totalMs = Math.max(0, nowFn() - bootStart);
+      const attemptMs = nowFn() - attemptStart;
+      const totalMs = nowFn() - bootStart;
       if (attempt > 1) {
-        logger.log(`🗄️  Conexão com PostgreSQL recuperada na tentativa ${attempt} após ${totalMs}ms (${attemptMs}ms na tentativa).`);
+        logger.log(
+          `🗄️  Conexão com PostgreSQL recuperada na tentativa ${attempt}/${cfg.maxAttempts} após ${totalMs}ms (${attemptMs}ms nesta tentativa).`
+        );
       } else {
         logger.log(`🗄️  PostgreSQL conectado na tentativa 1 (${attemptMs}ms).`);
       }
       break;
     } catch (err) {
-      if (candidate && candidateOnError && typeof (candidate as unknown as { off?: unknown }).off === 'function') {
-        (candidate as unknown as { off: (ev: string, fn: (err: Error) => void) => void }).off('error', candidateOnError);
-      }
-      releaseClientSafe(candidate, true);
+      limparCliente(candidate, true);
       candidate = null;
+      connected = false;
 
-      const attemptMs = Math.max(0, nowFn() - attemptStart);
-      const elapsedMs = Math.max(0, nowFn() - bootStart);
+      const attemptMs = nowFn() - attemptStart;
+      const elapsedMs = nowFn() - bootStart;
       const classif = classificarErroConexao(err);
       const msgSegura = sanitizarMensagemErro(err);
 
@@ -596,10 +562,9 @@ export async function migrate(opts: MigrateOptions = {}): Promise<void> {
           tipo: 'permanente',
           tentativas: attempt,
           duracaoMs: elapsedMs,
-          mensagem: `Falha permanente de conexão com PostgreSQL [${classif.codigo ?? classif.motivo}]: ${msgSegura}`,
+          mensagem: `Falha permanente ao conectar ao PostgreSQL [${classif.codigo ?? classif.motivo}]: ${msgSegura}`,
         };
         bootStage = 'degraded';
-        connected = false;
         logger.error(
           `❌ Falha permanente ao conectar ao PostgreSQL na tentativa ${attempt} [${classif.codigo ?? classif.motivo}] (${attemptMs}ms): ${msgSegura}`
         );
@@ -607,37 +572,32 @@ export async function migrate(opts: MigrateOptions = {}): Promise<void> {
       }
 
       const remainingAfter = cfg.startupTimeoutMs - elapsedMs;
-      const minNextWindowMs = 50;
-      if (attempt >= cfg.maxAttempts || remainingAfter <= minNextWindowMs) {
+      const backoffMs = calcularBackoffMs(attempt, cfg.retryBaseMs, cfg.retryMaxMs);
+      if (attempt >= cfg.maxAttempts || remainingAfter <= 50) {
         falhaDeBoot = {
           fase: 'conexao',
           tipo: 'timeout',
           tentativas: attempt,
           duracaoMs: elapsedMs,
-          mensagem: `PostgreSQL indisponível após ${attempt} tentativa(s) e ${elapsedMs}ms [${classif.codigo ?? classif.motivo}]: ${msgSegura}`,
+          mensagem: `PostgreSQL indisponível após ${attempt} tentativa(s) em ${elapsedMs}ms [${classif.codigo ?? classif.motivo}]: ${msgSegura}`,
         };
         bootStage = 'degraded';
-        connected = false;
         logger.error(
           `❌ Timeout ao conectar ao PostgreSQL após ${attempt} tentativa(s) e ${elapsedMs}ms (limite ${cfg.startupTimeoutMs}ms). Último erro [${classif.codigo ?? classif.motivo}]: ${msgSegura}`
         );
         return;
       }
 
-      const backoffBruto = calcularBackoffMs(attempt, cfg.retryBaseMs, cfg.retryMaxMs);
-      const esperaMs = Math.min(backoffBruto, Math.max(0, remainingAfter - minNextWindowMs));
+      const esperaMs = Math.min(backoffMs, Math.max(10, remainingAfter - 50));
       logger.warn(
         `⚠️  PostgreSQL indisponível na tentativa ${attempt}/${cfg.maxAttempts} [${classif.codigo ?? classif.motivo}] (${attemptMs}ms, decorrido ${elapsedMs}ms/${cfg.startupTimeoutMs}ms): ${msgSegura} — nova tentativa em ${esperaMs}ms.`
       );
-      if (esperaMs > 0) {
-        await sleepFn(esperaMs);
-      }
+      await sleepFn(esperaMs);
     }
   }
 
   if (!lockClient) {
-    // Garantia defensiva para nunca sair da fase de conexão sem falhaDeBoot preenchida.
-    const elapsedMs = Math.max(0, nowFn() - bootStart);
+    const elapsedMs = nowFn() - bootStart;
     falhaDeBoot = {
       fase: 'conexao',
       tipo: 'timeout',
@@ -646,20 +606,16 @@ export async function migrate(opts: MigrateOptions = {}): Promise<void> {
       mensagem: `PostgreSQL indisponível após ${cfg.maxAttempts} tentativa(s) em ${elapsedMs}ms.`,
     };
     bootStage = 'degraded';
-    connected = false;
-    logger.error(`❌ ${falhaDeBoot.mensagem}`);
     return;
   }
 
   let erroDeBootstrap: unknown = null;
   let erroDeMigracao: unknown = null;
-  let erroDeConexaoPosLock = false;
   try {
     try {
       await bootstrapFn(lockClient);
     } catch (e) {
       erroDeBootstrap = e;
-      if (classificarErroConexao(e).transitorio) erroDeConexaoPosLock = true;
     }
     // A cadeia versionada roda MESMO com o bootstrap tendo falhado: ela é a
     // autoridade para bancos que já existem e não pode ser bloqueada por um
@@ -669,27 +625,24 @@ export async function migrate(opts: MigrateOptions = {}): Promise<void> {
       await migrationsFn(lockClient);
     } catch (e) {
       erroDeMigracao = e;
-      if (classificarErroConexao(e).transitorio) erroDeConexaoPosLock = true;
     }
   } finally {
-    if (!erroDeConexaoPosLock) {
-      await lockClient.query(`SELECT pg_advisory_unlock(hashtext('brobond_schema_bootstrap'))`).catch(() => undefined);
-    }
-    if (onClientError && typeof (lockClient as unknown as { off?: unknown }).off === 'function') {
-      (lockClient as unknown as { off: (ev: string, fn: (err: Error) => void) => void }).off('error', onClientError);
-    }
-    releaseClientSafe(lockClient, erroDeConexaoPosLock);
+    await lockClient.query(`SELECT pg_advisory_unlock(hashtext('brobond_schema_bootstrap'))`).catch(() => undefined);
+    const dropConexao = Boolean(
+      (erroDeMigracao && classificarErroConexao(erroDeMigracao).transitorio) ||
+        (erroDeBootstrap && classificarErroConexao(erroDeBootstrap).transitorio)
+    );
+    limparCliente(lockClient, dropConexao);
   }
 
   // Falha da cadeia versionada é a mais grave: o schema realmente não
   // corresponde ao código. Degradado, sem tráfego de negócio.
   if (erroDeMigracao) {
-    if (erroDeConexaoPosLock) connected = false;
+    bootStage = 'degraded';
     falhaDeBoot = {
       fase: 'migrations',
       mensagem: `Migração versionada falhou: ${sanitizarMensagemErro(erroDeMigracao)}`,
     };
-    bootStage = 'degraded';
     logger.error(
       `❌ ${falhaDeBoot.mensagem} — a aplicação NÃO vai atender negócio até o banco estar pronto ` +
         '(corrija a causa e reinicie).'
@@ -697,12 +650,11 @@ export async function migrate(opts: MigrateOptions = {}): Promise<void> {
     return;
   }
   if (erroDeBootstrap) {
-    if (erroDeConexaoPosLock) connected = false;
+    bootStage = 'degraded';
     falhaDeBoot = {
       fase: 'bootstrap',
       mensagem: `db/bootstrap.sql incompleto: ${sanitizarMensagemErro(erroDeBootstrap)}`,
     };
-    bootStage = 'degraded';
     logger.error(
       '⚠️  db/bootstrap.sql não pôde ser aplicado por inteiro (estrutura). ' +
         'As migrações versionadas foram aplicadas mesmo assim; corrija a causa e reinicie para ' +
@@ -734,11 +686,6 @@ function existe(caminho: string): boolean {
   }
 }
 
-export interface MigrationsOptions {
-  migrationsDir?: string;
-  logger?: Pick<Console, 'log' | 'warn' | 'error'>;
-}
-
 /**
  * Migrações versionadas (db/migrations/*.sql), aplicadas em ORDEM LÉXICA e uma
  * única vez por banco: o nome do arquivo fica registrado em `schema_migrations`.
@@ -751,10 +698,14 @@ export interface MigrationsOptions {
  *   • a migration NÃO é registrada quando falha, então o retry a reexecuta;
  *   • parada no primeiro erro: as migrations seguintes não rodam sobre um
  *     estado inconsistente, e o banco fica degradado.
+ *
+ * É isso que faltava para uma correção de schema chegar a quem JÁ tem banco: sem
+ * registro, só existia o db/schema.sql "aplique e reze", e coluna nova vinha com
+ * ALTER TABLE ... IF NOT EXISTS solto no fim do arquivo.
  */
 export async function aplicarMigrationsVersionadas(
   client: PoolClient,
-  opts: MigrationsOptions = {}
+  opts: { migrationsDir?: string; logger?: Pick<Console, 'log' | 'warn' | 'error'> } = {}
 ): Promise<void> {
   if (!client) return;
   const logger = opts.logger ?? console;
@@ -783,7 +734,7 @@ export async function aplicarMigrationsVersionadas(
       logger.log(`🗄️  Migração aplicada: ${nome}`);
     } catch (e) {
       await client.query('ROLLBACK').catch(() => undefined);
-      throw new Error(`Migração ${nome} falhou — o serviço não sobe com o banco pela metade: ${sanitizarMensagemErro(e)}`);
+      throw new Error(`Migração ${nome} falhou — o serviço não sobe com o banco pela metade: ${(e as Error).message}`);
     }
   }
 }

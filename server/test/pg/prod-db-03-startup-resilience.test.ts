@@ -1,352 +1,388 @@
 // ============================================================================
-// PROD-DB-03 — Resiliência de conexão e startup contra PostgreSQL 16.14 REAL.
+// PROD-DB-03 — resiliencia de startup e prontidao contra PostgreSQL REAL.
+//
+// Cobre os 10 cenarios em PostgreSQL 16.14 real (bancos descartaveis + servidor
+// HTTP real + proxy TCP real):
+//   1. PG disponivel na 1a tentativa;
+//   2. PG indisponivel nas primeiras tentativas e disponivel depois;
+//   3. Erro transitorio de conexao recuperado via backoff;
+//   4. Erro permanente (3D000 banco inexistente) falha rapido na 1a tentativa;
+//   5. Startup timeout encerra dentro do limite sem loop infinito;
+//   6. Migration ja aplicada (idempotencia);
+//   7. Migration pendente;
+//   8. Falha de migration (0030/E4.2): /api/health 503 com banco conectado e pronto=false;
+//   9. /api/health antes e depois da conexao/prontidao;
+//  10. Workers, cron e negocio bloqueados (503) antes da prontidao.
 //
 // Roda no job `testes-postgres` do CI (npm run test:pg). Sem DATABASE_URL FALHA.
-// Nenhum mock de banco: usa bancos descartáveis reais no PostgreSQL 16.14,
-// proxy TCP real simulando indisponibilidade transitória de boot e processos
-// reais da API (server/src/index.ts).
 // ============================================================================
-import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import net from 'node:net';
-import path from 'node:path';
-import os from 'node:os';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { spawn, type ChildProcess } from 'node:child_process';
-import { Client } from 'pg';
+import { test } from 'node:test';
+import { randomUUID } from 'node:crypto';
+import { spawn, type ChildProcessByStdio } from 'node:child_process';
+import net, { type AddressInfo } from 'node:net';
+import type { Readable } from 'node:stream';
+import { setTimeout as delay } from 'node:timers/promises';
 import {
   SERVER_DIR,
+  aplicarArquivo,
+  aplicarCadeia,
+  BOOTSTRAP_FILE,
   conectar,
   criarBancoDescartavel,
   destruirBancoDescartavel,
   migrationsRegistradas,
+  nomesDasMigrations,
   rodarBoot,
 } from './_boot-harness';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { Client } from 'pg';
+import { aplicarMigrationsVersionadas } from '../../src/db';
 
 if (!process.env.DATABASE_URL) {
-  throw new Error(
-    'pg/prod-db-03-startup-resilience.test.ts exige DATABASE_URL e PostgreSQL real; não é permitido pular esta prova.'
-  );
+  throw new Error('pg/prod-db-03-startup-resilience.test.ts exige DATABASE_URL e PostgreSQL real; nao e permitido pular esta prova.');
 }
 
-const SEGREDO_JWT_TESTE = 'jwt-segredo-forte-pg-resiliencia-1234567890abcdef';
-const SENHA_ADMIN_TESTE = 'Senha!Forte#2026PgResil';
-const SEGREDO_CRON_TESTE = 'cron-segredo-pg-resiliencia-123456';
+const BOOTSTRAP = readFileSync(BOOTSTRAP_FILE, 'utf8');
+const ADMIN_PASSWORD = `Test-${randomUUID()}-aA!`;
+const JWT_SECRET = `${randomUUID()}${randomUUID()}`;
+const CRON_SECRET = `cron-${randomUUID()}`;
+type Child = ChildProcessByStdio<null, Readable, Readable>;
 
-async function portaLivre(): Promise<number> {
-  return await new Promise((resolve, reject) => {
-    const s = net.createServer();
+async function reservarPorta(): Promise<number> {
+  const s = net.createServer();
+  await new Promise<void>((resolve, reject) => {
     s.once('error', reject);
-    s.listen(0, '127.0.0.1', () => {
-      const addr = s.address() as net.AddressInfo;
-      s.close((err) => (err ? reject(err) : resolve(addr.port)));
-    });
+    s.listen(0, '127.0.0.1', () => resolve());
   });
+  const port = (s.address() as AddressInfo).port;
+  await new Promise<void>((resolve, reject) => s.close((e) => (e ? reject(e) : resolve())));
+  return port;
 }
 
-async function criarProxyTcp(
-  hostAlvo: string,
-  portaAlvo: number,
-  falhasIniciais: number
-): Promise<{ porta: number; conexoes: () => number; fechar: () => Promise<void> }> {
+async function criarProxyTcp(targetDbUrl: string, falharPrimeiras: number) {
+  const u = new URL(targetDbUrl);
+  const targetHost = u.hostname;
+  const targetPort = Number(u.port) || 5432;
   let tentativas = 0;
-  const sockets = new Set<net.Socket>();
-  const server = net.createServer((clientSocket) => {
-    tentativas += 1;
-    sockets.add(clientSocket);
-    clientSocket.on('close', () => sockets.delete(clientSocket));
 
-    if (tentativas <= falhasIniciais) {
-      clientSocket.destroy();
+  const sockets = new Set<net.Socket>();
+  const server = net.createServer((client) => {
+    tentativas += 1;
+    sockets.add(client);
+    client.on('close', () => sockets.delete(client));
+    client.on('error', () => undefined);
+
+    if (tentativas <= falharPrimeiras) {
+      client.destroy();
       return;
     }
 
-    const upstream = net.connect({ host: hostAlvo, port: portaAlvo });
+    const upstream = net.connect(targetPort, targetHost);
     sockets.add(upstream);
     upstream.on('close', () => sockets.delete(upstream));
-    clientSocket.pipe(upstream);
-    upstream.pipe(clientSocket);
-
-    const encerrarPar = () => {
-      clientSocket.destroy();
-      upstream.destroy();
-    };
-    clientSocket.on('error', encerrarPar);
-    upstream.on('error', encerrarPar);
+    upstream.on('error', () => client.destroy());
+    client.on('error', () => upstream.destroy());
+    client.pipe(upstream);
+    upstream.pipe(client);
   });
 
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', () => resolve());
-  });
-  const addr = server.address() as net.AddressInfo;
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+  const proxyPort = (server.address() as AddressInfo).port;
+  const proxyUrl = new URL(targetDbUrl);
+  proxyUrl.hostname = '127.0.0.1';
+  proxyUrl.port = String(proxyPort);
 
   return {
-    porta: addr.port,
-    conexoes: () => tentativas,
-    fechar: async () => {
-      for (const sock of sockets) sock.destroy();
-      sockets.clear();
+    proxyDbUrl: proxyUrl.toString(),
+    getAttempts: () => tentativas,
+    close: async () => {
+      for (const s of sockets) s.destroy();
       await new Promise<void>((resolve) => server.close(() => resolve()));
     },
   };
 }
 
-function iniciarApi(
-  porta: number,
-  extraEnv: NodeJS.ProcessEnv
-): { child: ChildProcess; saida: () => string; exitPromise: Promise<number>; parar: () => Promise<void> } {
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    PORT: String(porta),
-    JWT_SECRET: SEGREDO_JWT_TESTE,
-    ADMIN_PASSWORD: SENHA_ADMIN_TESTE,
-    CRON_SECRET: SEGREDO_CRON_TESTE,
-    PGSSL: 'false',
-    ...extraEnv,
-  };
-  const child = spawn(process.execPath, ['--import', 'tsx', 'src/index.ts'], {
+function spawnBackend(port: number, env: NodeJS.ProcessEnv) {
+  const child: Child = spawn(process.execPath, ['--import', 'tsx', 'src/index.ts'], {
     cwd: SERVER_DIR,
-    env,
+    env: {
+      ...process.env,
+      PORT: String(port),
+      JWT_SECRET,
+      ADMIN_PASSWORD,
+      CRON_SECRET,
+      PG_IDLE_TIMEOUT: '200',
+      ...env,
+    },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
-  let buf = '';
-  child.stdout.on('data', (d) => { buf += String(d); });
-  child.stderr.on('data', (d) => { buf += String(d); });
-  const exitPromise = new Promise<number>((resolve) => {
-    child.once('close', (code) => resolve(code ?? -1));
-  });
-  const parar = async () => {
-    if (child.exitCode === null && child.signalCode === null) {
-      child.kill('SIGTERM');
-    }
-    await exitPromise;
+  let stdout = '';
+  let stderr = '';
+  child.stdout.on('data', (c) => { stdout += String(c); });
+  child.stderr.on('data', (c) => { stderr += String(c); });
+  return {
+    child,
+    baseUrl: `http://127.0.0.1:${port}`,
+    stdout: () => stdout,
+    stderr: () => stderr,
   };
-  return { child, saida: () => buf, exitPromise, parar };
 }
 
-async function esperarHealth(
+async function stopBackend(child: Child): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  await new Promise<void>((resolve) => {
+    const t = setTimeout(() => {
+      try { child.kill('SIGKILL'); } catch { /* ignore */ }
+      resolve();
+    }, 5_000);
+    child.once('exit', () => { clearTimeout(t); resolve(); });
+    child.kill('SIGTERM');
+  });
+}
+
+async function waitHealth(
   baseUrl: string,
-  predicado: (status: number, body: any) => boolean,
-  timeoutMs = 45_000
-): Promise<{ status: number; body: any; historico: Array<{ status: number; body: any }> }> {
-  const historico: Array<{ status: number; body: any }> = [];
-  const fim = Date.now() + timeoutMs;
-  while (Date.now() < fim) {
-    try {
-      const r = await fetch(`${baseUrl}/api/health`);
-      const body = await r.json().catch(() => null);
-      historico.push({ status: r.status, body });
-      if (predicado(r.status, body)) return { status: r.status, body, historico };
-    } catch {
-      // porta ainda subindo
+  child: Child,
+  predicate: (r: { status: number; body: any }) => boolean,
+  timeoutMs = 60_000
+): Promise<{ status: number; body: any }> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null || child.signalCode !== null) {
+      throw new Error(`processo encerrou prematuramente com code=${child.exitCode}`);
     }
-    await new Promise((r) => setTimeout(r, 60));
+    try {
+      const res = await fetch(`${baseUrl}/api/health`, { signal: AbortSignal.timeout(2_000) });
+      const body = await res.json();
+      if (predicate({ status: res.status, body })) return { status: res.status, body };
+    } catch {
+      /* porta ainda abrindo */
+    }
+    await delay(50);
   }
-  throw new Error(`Timeout aguardando /api/health em ${baseUrl} (historico=${JSON.stringify(historico.slice(-5))})`);
+  throw new Error(`timeout esperando /api/health em ${baseUrl}`);
 }
 
-describe('PROD-DB-03 — resiliência real com PostgreSQL 16.14', () => {
-  test('A) PostgreSQL disponível na 1a tentativa + /api/health + cron liberado só após prontidão', { timeout: 90_000 }, async (t) => {
-    const banco = await criarBancoDescartavel('resil_a');
-    const porta = await portaLivre();
-    const api = iniciarApi(porta, {
-      NODE_ENV: 'production',
-      DATABASE_URL: banco.url,
-    });
-    t.after(async () => {
-      await api.parar();
-      await destruirBancoDescartavel(banco);
-    });
+test('PROD-DB-03 (1, 9, 10) PostgreSQL real disponivel na 1a tentativa em modo production', { timeout: 120_000 }, async (t) => {
+  const banco = await criarBancoDescartavel('res_ok');
+  t.after(() => destruirBancoDescartavel(banco));
 
-    const baseUrl = `http://127.0.0.1:${porta}`;
-    const res = await esperarHealth(baseUrl, (s, b) => s === 200 && b?.pronto === true, 60_000);
+  const porta = await reservarPorta();
+  const srv = spawnBackend(porta, {
+    NODE_ENV: 'production',
+    PGSSL: 'false',
+    DATABASE_URL: banco.url,
+  });
+  t.after(() => stopBackend(srv.child));
 
-    assert.equal(res.status, 200);
-    assert.equal(res.body.ok, true);
-    assert.equal(res.body.processo, 'iniciado');
-    assert.equal(res.body.banco, 'conectado');
-    assert.equal(res.body.pronto, true);
-    assert.equal(res.body.db, 'postgres');
+  const h = await waitHealth(srv.baseUrl, srv.child, (x) => x.status === 200);
+  assert.equal(h.status, 200);
+  assert.equal(h.body.ok, true);
+  assert.equal(h.body.processo, 'iniciado');
+  assert.equal(h.body.banco, 'conectado');
+  assert.equal(h.body.pronto, true);
+  assert.equal(h.body.estado, 'pronto');
+  assert.equal(h.body.db, 'postgres');
+  assert.match(srv.stdout(), /PostgreSQL conectado na tentativa 1/);
 
-    for (const h of res.historico) {
-      if (!h.body?.pronto) {
-        assert.equal(h.status, 503, 'enquanto pronto=false, /api/health nunca pode responder 200');
-      }
-    }
+  const cronRes = await fetch(`${srv.baseUrl}/api/admin/scheduled/cron/crm`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${CRON_SECRET}` },
+  });
+  assert.equal(cronRes.status, 200, 'cron executa apos prontidao');
+});
 
-    const cronRes = await fetch(`${baseUrl}/api/admin/scheduled/cron/crm`, {
+test('PROD-DB-03 (2, 3, 9, 10) Indisponibilidade transitoria inicial recupera sem exit 1 via backoff progressivo', { timeout: 120_000 }, async (t) => {
+  const banco = await criarBancoDescartavel('res_retry');
+  t.after(() => destruirBancoDescartavel(banco));
+
+  const proxy = await criarProxyTcp(banco.url, 3);
+  t.after(() => proxy.close());
+
+  const porta = await reservarPorta();
+  const srv = spawnBackend(porta, {
+    NODE_ENV: 'production',
+    PGSSL: 'false',
+    DATABASE_URL: proxy.proxyDbUrl,
+    PG_CONNECT_TIMEOUT: '2000',
+    PG_STARTUP_TIMEOUT_MS: '30000',
+    PG_STARTUP_RETRY_BASE_MS: '400',
+    PG_STARTUP_RETRY_MAX_MS: '1500',
+    PG_STARTUP_MAX_ATTEMPTS: '10',
+  });
+  t.after(() => stopBackend(srv.child));
+
+  // Antes da recuperacao: processo iniciado, banco indisponivel, health=503, cron=503, negocio=503
+  const hAntes = await waitHealth(srv.baseUrl, srv.child, (x) => x.status === 503);
+  assert.equal(hAntes.status, 503);
+  assert.equal(hAntes.body.ok, false);
+  assert.equal(hAntes.body.processo, 'iniciado');
+  assert.equal(hAntes.body.banco, 'indisponivel');
+  assert.equal(hAntes.body.pronto, false);
+  assert.equal(hAntes.body.db, 'postgres-degraded');
+
+  const [cronAntes, vendasAntes] = await Promise.all([
+    fetch(`${srv.baseUrl}/api/admin/scheduled/cron/crm`, {
       method: 'POST',
-      headers: { authorization: `Bearer ${SEGREDO_CRON_TESTE}` },
-    });
-    assert.equal(cronRes.status, 200, 'cron responde 200 depois que aplicação e banco estão prontos');
+      headers: { authorization: `Bearer ${CRON_SECRET}` },
+    }),
+    fetch(`${srv.baseUrl}/api/vendas`),
+  ]);
+  assert.equal(cronAntes.status, 503, 'cron nao executa antes da prontidao');
+  assert.equal(vendasAntes.status, 503, 'negocio bloqueado antes da prontidao');
+
+  // Apos as 3 falhas iniciais, a 4a tentativa passa pelo proxy e completa todas as migrations
+  const hDepois = await waitHealth(srv.baseUrl, srv.child, (x) => x.status === 200);
+  assert.equal(hDepois.status, 200);
+  assert.equal(hDepois.body.ok, true);
+  assert.equal(hDepois.body.banco, 'conectado');
+  assert.equal(hDepois.body.pronto, true);
+  assert.equal(hDepois.body.estado, 'pronto');
+  assert.equal(hDepois.body.db, 'postgres');
+  assert.ok(proxy.getAttempts() >= 4, `esperava >=4 tentativas no proxy; houve ${proxy.getAttempts()}`);
+  assert.match(srv.stderr(), /PostgreSQL indisponível na tentativa 1/);
+  assert.match(srv.stdout(), /Conexão com PostgreSQL recuperada na tentativa 4/);
+
+  const c = await conectar(banco);
+  try {
+    const aplicadas = await migrationsRegistradas(c);
+    const esperadas = await nomesDasMigrations();
+    assert.deepEqual(aplicadas, esperadas, 'todas migrations aplicadas apos recuperacao');
+    assert.ok(aplicadas.includes('0109_payments_oms_estado_pedido.sql'));
+  } finally {
+    await c.end();
+  }
+
+  const cronDepois = await fetch(`${srv.baseUrl}/api/admin/scheduled/cron/crm`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${CRON_SECRET}` },
   });
+  assert.equal(cronDepois.status, 200, 'cron liberado apos prontidao');
+});
 
-  test('B) Indisponibilidade transitória na 1a e 2a tentativas recupera sem exit 1 e aplica todas as migrations', { timeout: 90_000 }, async (t) => {
-    const banco = await criarBancoDescartavel('resil_b');
-    const u = new URL(banco.url);
-    const targetPort = Number(u.port || 5432);
-    const proxy = await criarProxyTcp(u.hostname, targetPort, 2);
-
-    const proxyUrl = new URL(banco.url);
-    proxyUrl.hostname = '127.0.0.1';
-    proxyUrl.port = String(proxy.porta);
-
-    const portaApi = await portaLivre();
-    const api = iniciarApi(portaApi, {
-      NODE_ENV: 'production',
-      DATABASE_URL: proxyUrl.toString(),
-      PG_CONNECT_TIMEOUT: '2000',
-      PG_STARTUP_TIMEOUT_MS: '30000',
-      PG_STARTUP_RETRY_BASE_MS: '150',
-      PG_STARTUP_RETRY_MAX_MS: '600',
-      PG_STARTUP_MAX_ATTEMPTS: '10',
-    });
-    t.after(async () => {
-      await api.parar();
-      await proxy.fechar();
-      await destruirBancoDescartavel(banco);
-    });
-
-    const baseUrl = `http://127.0.0.1:${portaApi}`;
-    // Primeiro confirma que ainda durante o boot/retry o /api/health já responde 503 (e nunca 200).
-    const hReady = await esperarHealth(baseUrl, (s, b) => s === 200 && b?.pronto === true, 60_000);
-    assert.equal(hReady.status, 200);
-    assert.equal(hReady.body.db, 'postgres');
-    assert.equal(api.child.exitCode, null, 'recuperação transitória em produção não encerra processo');
-    assert.ok(proxy.conexoes() >= 3, `proxy deve registrar ao menos 3 tentativas (2 falhas + 1 sucesso), houve ${proxy.conexoes()}`);
-
-    const log = api.saida();
-    assert.match(log, /indisponível na tentativa 1/);
-    assert.match(log, /recuperada na tentativa/);
-
-    const c = await conectar(banco);
-    try {
-      const aplicadas = await migrationsRegistradas(c);
-      assert.ok(aplicadas.length >= 109, `esperava todas as migrations registradas, obteve ${aplicadas.length}`);
-    } finally {
-      await c.end();
-    }
+test('PROD-DB-03 (4, 5) Erro permanente (3D000) falha na 1a tentativa e startup timeout evita loop infinito', { timeout: 120_000 }, async (t) => {
+  // 4. Banco inexistente (3D000)
+  const badUrl = new URL(process.env.DATABASE_URL!);
+  badUrl.pathname = `/inexistente_${Date.now().toString(36)}`;
+  const portaPerm = await reservarPorta();
+  const t0Perm = Date.now();
+  const srvPerm = spawnBackend(portaPerm, {
+    NODE_ENV: 'production',
+    PGSSL: 'false',
+    DATABASE_URL: badUrl.toString(),
+    PG_CONNECT_TIMEOUT: '2000',
+    PG_STARTUP_TIMEOUT_MS: '20000',
+    PG_STARTUP_RETRY_BASE_MS: '500',
   });
+  t.after(() => stopBackend(srvPerm.child));
 
-  test('C) Erro permanente real (3D000 banco inexistente): falha rápida sem loop e reporta fase=conexao', { timeout: 30_000 }, async () => {
-    const u = new URL(process.env.DATABASE_URL!);
-    u.pathname = `/inexistente_${Date.now().toString(36)}`;
-    const portaApi = await portaLivre();
-    const t0 = Date.now();
-    const api = iniciarApi(portaApi, {
-      NODE_ENV: 'production',
-      DATABASE_URL: u.toString(),
-      PG_STARTUP_TIMEOUT_MS: '30000',
-      PG_STARTUP_RETRY_BASE_MS: '200',
-    });
-    const code = await api.exitPromise;
-    const duracao = Date.now() - t0;
-    const log = api.saida();
+  const codePerm = await new Promise<number | null>((resolve) => srvPerm.child.once('exit', (c) => resolve(c)));
+  const elapsedPerm = Date.now() - t0Perm;
+  assert.equal(codePerm, 1);
+  assert.ok(elapsedPerm < 10_000, `erro permanente deve falhar rapido sem esperar 20s (levou ${elapsedPerm}ms)`);
+  assert.match(srvPerm.stderr(), /fase=conexao tipo=permanente/);
+  assert.equal(/fase=desconhecida|\(null\)/.test(srvPerm.stderr()), false);
 
-    assert.equal(code, 1);
-    assert.ok(duracao < 10_000, `erro permanente 3D000 deve falhar rápido sem aguardar startup timeout (${duracao}ms)`);
-    assert.match(log, /fase=conexao/);
-    assert.match(log, /tipo=permanente/);
-    assert.match(log, /3D000|does not exist/i);
-    assert.equal(log.includes('fase=desconhecida'), false);
-    assert.equal(log.includes('(null)'), false);
+  // 5. Timeout de startup limitado (sem loop infinito)
+  const closedPort = await reservarPorta();
+  const portaTo = await reservarPorta();
+  const closedUrl = new URL(process.env.DATABASE_URL!);
+  closedUrl.hostname = '127.0.0.1';
+  closedUrl.port = String(closedPort);
+  const t0To = Date.now();
+  const srvTo = spawnBackend(portaTo, {
+    NODE_ENV: 'production',
+    PGSSL: 'false',
+    DATABASE_URL: closedUrl.toString(),
+    PG_CONNECT_TIMEOUT: '250',
+    PG_STARTUP_TIMEOUT_MS: '800',
+    PG_STARTUP_RETRY_BASE_MS: '150',
+    PG_STARTUP_RETRY_MAX_MS: '300',
   });
+  t.after(() => stopBackend(srvTo.child));
 
-  test('D) Timeout de startup: encerra em produção após janela configurada e bloqueia cron em non-prod', { timeout: 30_000 }, async (t) => {
-    const portaMorta = await portaLivre();
-    const deadUrl = `postgresql://brobond:brobond@127.0.0.1:${portaMorta}/brobond_teste`;
+  const codeTo = await new Promise<number | null>((resolve) => srvTo.child.once('exit', (c) => resolve(c)));
+  const elapsedTo = Date.now() - t0To;
+  assert.equal(codeTo, 1);
+  assert.ok(elapsedTo < 10_000, `timeout deve encerrar no limite configurado (levou ${elapsedTo}ms)`);
+  assert.match(srvTo.stderr(), /fase=conexao tipo=timeout/);
+  assert.equal(/fase=desconhecida|\(null\)/.test(srvTo.stderr()), false);
+});
 
-    // 1. Produção: encerra com exit 1 após PG_STARTUP_TIMEOUT_MS (sem loop infinito)
-    const portaProd = await portaLivre();
-    const prod = iniciarApi(portaProd, {
-      NODE_ENV: 'production',
-      DATABASE_URL: deadUrl,
-      PG_CONNECT_TIMEOUT: '200',
-      PG_STARTUP_TIMEOUT_MS: '600',
-      PG_STARTUP_RETRY_BASE_MS: '80',
-      PG_STARTUP_RETRY_MAX_MS: '160',
-      PG_STARTUP_MAX_ATTEMPTS: '10',
-    });
-    const codeProd = await prod.exitPromise;
-    const logProd = prod.saida();
-    assert.equal(codeProd, 1);
-    assert.match(logProd, /fase=conexao/);
-    assert.match(logProd, /tipo=timeout/);
-    assert.equal(logProd.includes('fase=desconhecida'), false);
+test('PROD-DB-03 (6, 7, 8, 9, 10) Idempotencia de migrations e falha de migration deixa health 503 com banco conectado e pronto=false', { timeout: 120_000 }, async (t) => {
+  // 6 & 7: pendentes -> aplicadas -> reaplicacao idempotente
+  const bancoIdemp = await criarBancoDescartavel('res_idemp');
+  t.after(() => destruirBancoDescartavel(bancoIdemp));
+  const r1 = await rodarBoot(bancoIdemp);
+  assert.equal(r1.estado?.status, 'ready');
+  const r2 = await rodarBoot(bancoIdemp);
+  assert.equal(r2.estado?.status, 'ready');
+  assert.equal(r2.stdout.includes('Migração aplicada:'), false, 'migrations ja aplicadas nao sao reaplicadas');
 
-    // 2. Non-prod: permanece degradada (503) com banco indisponível e cron bloqueado (503)
-    const portaTest = await portaLivre();
-    const tst = iniciarApi(portaTest, {
-      NODE_ENV: 'test',
-      DATABASE_URL: deadUrl,
-      PG_CONNECT_TIMEOUT: '200',
-      PG_STARTUP_TIMEOUT_MS: '500',
-      PG_STARTUP_RETRY_BASE_MS: '80',
-      PG_STARTUP_RETRY_MAX_MS: '150',
-      PG_STARTUP_MAX_ATTEMPTS: '5',
-    });
-    t.after(() => tst.parar());
-
-    const baseUrl = `http://127.0.0.1:${portaTest}`;
-    const h = await esperarHealth(
-      baseUrl,
-      (s, b) => s === 503 && b?.status === 'degraded' && b?.fase === 'conexao',
-      15_000
+  // 8 (transacao): migration com erro sofre ROLLBACK completo sem registro em schema_migrations
+  const tmpDir = mkdtempSync(path.join(os.tmpdir(), 'brobond-pg-mig-'));
+  t.after(() => rmSync(tmpDir, { recursive: true, force: true }));
+  writeFileSync(path.join(tmpDir, '9001_ok.sql'), 'CREATE TABLE IF NOT EXISTS _tmp_resil_ok (id INT PRIMARY KEY);', 'utf8');
+  writeFileSync(path.join(tmpDir, '9002_fail.sql'), 'CREATE TABLE _tmp_resil_fail (id INT); SELECT 1 / 0;', 'utf8');
+  const clientMig = new Client({ connectionString: bancoIdemp.url });
+  await clientMig.connect();
+  try {
+    await assert.rejects(
+      () => aplicarMigrationsVersionadas(clientMig, { migrationsDir: tmpDir }),
+      /9002_fail\.sql/
     );
-    assert.equal(h.status, 503);
-    assert.equal(h.body.banco, 'indisponivel');
-    assert.equal(h.body.pronto, false);
+    const { rows: okRows } = await clientMig.query(`SELECT to_regclass('public._tmp_resil_ok') AS t`);
+    const { rows: failRows } = await clientMig.query(`SELECT to_regclass('public._tmp_resil_fail') AS t`);
+    assert.notEqual(okRows[0].t, null, '9001_ok foi comitada antes da falha');
+    assert.equal(failRows[0].t, null, '9002_fail sofreu rollback total');
+    const reg = await migrationsRegistradas(clientMig);
+    assert.equal(reg.includes('9001_ok.sql'), true);
+    assert.equal(reg.includes('9002_fail.sql'), false);
+  } finally {
+    await clientMig.end();
+  }
 
-    const cronRes = await fetch(`${baseUrl}/api/admin/scheduled/cron/crm`, {
-      method: 'POST',
-      headers: { authorization: `Bearer ${SEGREDO_CRON_TESTE}` },
-    });
-    assert.equal(cronRes.status, 503);
+  // 8, 9, 10: dado legado bloqueando 0030 em HTTP real (NODE_ENV=test para inspecionar /api/health 503)
+  const bancoFalho = await criarBancoDescartavel('res_mig_fail');
+  t.after(() => destruirBancoDescartavel(bancoFalho));
+  const c = await conectar(bancoFalho);
+  try {
+    await aplicarArquivo(c, BOOTSTRAP);
+    await aplicarCadeia(c, '0029_estoque_reservas_transferencias.sql');
+    const emp = await c.query(`INSERT INTO empresas (nome) VALUES ('Empresa Legada') RETURNING id`);
+    const empId = Number(emp.rows[0].id);
+    await c.query(`INSERT INTO locais (empresa_id, nome, tipo) VALUES ($1, 'Deposito Sem Acento', 'armazem')`, [empId]);
+    await c.query(`INSERT INTO locais (empresa_id, nome, tipo) VALUES ($1, 'Depósito Sem Acento', 'armazem')`, [empId]);
+  } finally {
+    await c.end();
+  }
+
+  const porta = await reservarPorta();
+  const srv = spawnBackend(porta, {
+    NODE_ENV: 'test',
+    DATABASE_URL: bancoFalho.url,
   });
+  t.after(() => stopBackend(srv.child));
 
-  test('E) Idempotência de migrations já aplicadas, pendência, falha com rollback e bloqueio de workers', { timeout: 90_000 }, async (t) => {
-    const banco = await criarBancoDescartavel('resil_e');
-    t.after(() => destruirBancoDescartavel(banco));
+  const h = await waitHealth(
+    srv.baseUrl,
+    srv.child,
+    (x) => x.status === 503 && x.body?.fase === 'migrations'
+  );
+  assert.equal(h.status, 503, 'nunca 200 quando migration falha');
+  assert.equal(h.body.ok, false);
+  assert.equal(h.body.processo, 'iniciado');
+  assert.equal(h.body.banco, 'conectado', 'banco conectou, mas migrations falharam');
+  assert.equal(h.body.pronto, false);
+  assert.equal(h.body.db, 'postgres-degraded');
+  assert.equal(h.body.fase, 'migrations');
 
-    // 1. Primeiro boot aplica todas as migrations pendentes.
-    const r1 = await rodarBoot(banco);
-    assert.equal(r1.code, 0);
-    assert.equal(r1.estado?.status, 'ready');
-    assert.equal(r1.estado?.falha, null);
-
-    // 2. Segundo boot no banco já migrado é idempotente: nenhuma migration reaplicada.
-    const r2 = await rodarBoot(banco);
-    assert.equal(r2.code, 0);
-    assert.equal(r2.estado?.status, 'ready');
-    assert.equal(r2.stdout.includes('Migração aplicada:'), false, 'migrations já aplicadas não são reexecutadas');
-
-    // 3. Migration pendente aplicada sequencialmente + migration com erro sofre ROLLBACK sem registro.
-    const tmpDir = mkdtempSync(path.join(os.tmpdir(), 'brobond-pg-mig-'));
-    t.after(() => rmSync(tmpDir, { recursive: true, force: true }));
-
-    writeFileSync(path.join(tmpDir, '9001_ok.sql'), 'CREATE TABLE IF NOT EXISTS _tmp_resil_ok (id INT PRIMARY KEY);', 'utf8');
-    writeFileSync(path.join(tmpDir, '9002_fail.sql'), 'CREATE TABLE _tmp_resil_fail (id INT); SELECT 1 / 0;', 'utf8');
-
-    const { aplicarMigrationsVersionadas } = await import('../../src/db');
-    const c = new Client({ connectionString: banco.url });
-    await c.connect();
-    try {
-      await assert.rejects(
-        () => aplicarMigrationsVersionadas(c, { migrationsDir: tmpDir }),
-        /9002_fail\.sql/
-      );
-
-      const { rows: okRows } = await c.query(`SELECT to_regclass('public._tmp_resil_ok') AS t`);
-      const { rows: failRows } = await c.query(`SELECT to_regclass('public._tmp_resil_fail') AS t`);
-      assert.notEqual(okRows[0].t, null, '9001_ok foi comitada antes da falha');
-      assert.equal(failRows[0].t, null, '9002_fail sofreu rollback total');
-
-      const reg = await migrationsRegistradas(c);
-      assert.equal(reg.includes('9001_ok.sql'), true);
-      assert.equal(reg.includes('9002_fail.sql'), false);
-    } finally {
-      await c.end();
-    }
+  const cronRes = await fetch(`${srv.baseUrl}/api/admin/scheduled/cron/crm`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${CRON_SECRET}` },
   });
+  assert.equal(cronRes.status, 503);
 });

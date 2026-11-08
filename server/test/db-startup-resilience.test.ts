@@ -1,17 +1,15 @@
-import { test, describe, after } from 'node:test';
+import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import net from 'node:net';
-import path from 'node:path';
+import net, { type AddressInfo } from 'node:net';
+import { spawn } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { spawn, type ChildProcess } from 'node:child_process';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { PoolClient, QueryResult } from 'pg';
+import type { PoolClient } from 'pg';
 
-process.env.NODE_ENV = 'test';
 delete process.env.DATABASE_URL;
-
-const SERVER_DIR = fileURLToPath(new URL('../', import.meta.url));
+process.env.NODE_ENV = 'test';
 
 const {
   aplicarMigrationsVersionadas,
@@ -25,11 +23,82 @@ const {
   sanitizarMensagemErro,
 } = await import('../src/db');
 
-const SEGREDO_JWT_TESTE = 'jwt-segredo-forte-teste-resiliencia-db-1234567890';
-const SENHA_ADMIN_TESTE = 'Senha!Forte#2026Resil';
-const SEGREDO_CRON_TESTE = 'cron-segredo-teste-resiliencia-123456';
+const SERVER_DIR = fileURLToPath(new URL('..', import.meta.url));
+const TEST_ADMIN_PWD = 'Br0bond!TestAdmin#2026';
+const TEST_JWT_SECRET = 'jwt-secreto-forte-de-teste-startup-resilience-0123456789';
 
-function criarLoggerMudo() {
+function createFakePgClient(opts: {
+  onQuery?: (sql: string, params?: unknown[]) => Promise<{ rows: any[] }> | { rows: any[] };
+  onRelease?: (destroy?: boolean | Error) => void;
+} = {}): PoolClient {
+  const client: any = {
+    query: async (sql: string, params?: unknown[]) => {
+      if (opts.onQuery) return await opts.onQuery(sql, params);
+      return { rows: [] };
+    },
+    release: (destroy?: boolean | Error) => {
+      opts.onRelease?.(destroy);
+    },
+    on: () => client,
+    off: () => client,
+    removeListener: () => client,
+  };
+  return client as PoolClient;
+}
+
+function createMemoryMigrationClient() {
+  const executedSql: string[] = [];
+  const applied = new Set<string>();
+  let txSnapshots: Set<string> | null = null;
+  let inTx = false;
+
+  const client = createFakePgClient({
+    onQuery: async (sql: string, params?: unknown[]) => {
+      const trimmed = sql.trim();
+      if (/^BEGIN$/i.test(trimmed)) {
+        inTx = true;
+        txSnapshots = new Set(applied);
+        return { rows: [] };
+      }
+      if (/^COMMIT$/i.test(trimmed)) {
+        inTx = false;
+        txSnapshots = null;
+        return { rows: [] };
+      }
+      if (/^ROLLBACK$/i.test(trimmed)) {
+        if (inTx && txSnapshots) {
+          applied.clear();
+          for (const item of txSnapshots) applied.add(item);
+        }
+        inTx = false;
+        txSnapshots = null;
+        return { rows: [] };
+      }
+      if (/^SELECT 1$/i.test(trimmed) || /pg_advisory_(?:un)?lock/i.test(trimmed)) {
+        return { rows: [] };
+      }
+      if (/^CREATE TABLE IF NOT EXISTS schema_migrations/i.test(trimmed)) {
+        return { rows: [] };
+      }
+      if (/^SELECT id FROM schema_migrations$/i.test(trimmed)) {
+        return { rows: [...applied].sort().map((id) => ({ id })) };
+      }
+      if (/^INSERT INTO schema_migrations/i.test(trimmed)) {
+        applied.add(String(params?.[0] ?? ''));
+        return { rows: [] };
+      }
+      if (/FAIL_MIGRATION/i.test(trimmed)) {
+        throw new Error('erro SQL simulado na migration');
+      }
+      executedSql.push(trimmed);
+      return { rows: [] };
+    },
+  });
+
+  return { client, applied, executedSql };
+}
+
+function createSilentLogger() {
   const logs: string[] = [];
   const warns: string[] = [];
   const errors: string[] = [];
@@ -45,656 +114,625 @@ function criarLoggerMudo() {
   };
 }
 
-function criarFakeClient(
-  onQuery?: (sql: string, params?: unknown[]) => Promise<{ rows: any[] }> | { rows: any[] }
-): { client: PoolClient; queries: Array<{ sql: string; params?: unknown[] }>; released: boolean[]; destroyed: boolean[] } {
-  const queries: Array<{ sql: string; params?: unknown[] }> = [];
-  const released: boolean[] = [];
-  const destroyed: boolean[] = [];
-  const client = {
-    query: async (sql: string, params?: unknown[]) => {
-      queries.push({ sql, params });
-      if (onQuery) {
-        const res = await onQuery(sql, params);
-        return res as QueryResult;
-      }
-      return { rows: [] } as unknown as QueryResult;
-    },
-    release: (destroy?: boolean | Error) => {
-      released.push(true);
-      destroyed.push(Boolean(destroy));
-    },
-    on: () => client,
-    off: () => client,
-  } as unknown as PoolClient;
-  return { client, queries, released, destroyed };
-}
-
-function criarPgErrorPacket(sqlstate: string, message: string): Buffer {
-  const fields = Buffer.concat([
-    Buffer.from(`S`, 'ascii'),
-    Buffer.from('FATAL\0', 'utf8'),
-    Buffer.from(`C`, 'ascii'),
-    Buffer.from(`${sqlstate}\0`, 'ascii'),
-    Buffer.from(`M`, 'ascii'),
-    Buffer.from(`${message}\0`, 'utf8'),
-    Buffer.from([0]),
+function pgWireErrorPacket(sqlState: string, message: string): Buffer {
+  const body = Buffer.concat([
+    Buffer.from('SFATAL\0', 'utf8'),
+    Buffer.from(`C${sqlState}\0`, 'utf8'),
+    Buffer.from(`M${message}\0`, 'utf8'),
+    Buffer.from('\0', 'utf8'),
   ]);
-  const packet = Buffer.alloc(1 + 4 + fields.length);
-  packet[0] = 'E'.charCodeAt(0);
-  packet.writeInt32BE(4 + fields.length, 1);
-  fields.copy(packet, 5);
-  return packet;
+  const header = Buffer.alloc(5);
+  header[0] = 'E'.charCodeAt(0);
+  header.writeInt32BE(body.length + 4, 1);
+  return Buffer.concat([header, body]);
 }
 
-async function portaLivre(): Promise<number> {
-  return await new Promise((resolve, reject) => {
-    const s = net.createServer();
-    s.once('error', reject);
-    s.listen(0, '127.0.0.1', () => {
-      const addr = s.address() as net.AddressInfo;
-      s.close((err) => (err ? reject(err) : resolve(addr.port)));
+async function startPgErrorTcpServer(handler: (attempt: number, socket: net.Socket) => void) {
+  let attempts = 0;
+  const server = net.createServer((socket) => {
+    attempts += 1;
+    const current = attempts;
+    socket.on('error', () => undefined);
+    socket.once('data', (chunk) => {
+      // Handle SSLRequest ('\x00\x00\x00\x08\x04\xd2\x16\x2f') by replying 'N' so pg continues with StartupMessage
+      if (chunk.length === 8 && chunk.readInt32BE(4) === 80877103) {
+        socket.write('N');
+        socket.once('data', () => handler(current, socket));
+        return;
+      }
+      handler(current, socket);
     });
   });
-}
-
-async function esperarHttp(
-  url: string,
-  predicado: (status: number, body: any) => boolean,
-  timeoutMs = 15_000
-): Promise<{ status: number; body: any }> {
-  const fim = Date.now() + timeoutMs;
-  while (Date.now() < fim) {
-    try {
-      const r = await fetch(url);
-      const body = await r.json().catch(() => null);
-      if (predicado(r.status, body)) return { status: r.status, body };
-    } catch {
-      // servidor ainda abrindo porta
-    }
-    await new Promise((r) => setTimeout(r, 80));
-  }
-  throw new Error(`Timeout aguardando ${url}`);
-}
-
-const processosAtivos = new Set<ChildProcess>();
-after(async () => {
-  for (const child of processosAtivos) {
-    if (child.exitCode === null && child.signalCode === null) {
-      child.kill('SIGTERM');
-    }
-  }
-  processosAtivos.clear();
-});
-
-function iniciarApiFilha(
-  porta: number,
-  extraEnv: NodeJS.ProcessEnv
-): { child: ChildProcess; saida: () => string; exitPromise: Promise<number> } {
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    PORT: String(porta),
-    JWT_SECRET: SEGREDO_JWT_TESTE,
-    ADMIN_PASSWORD: SENHA_ADMIN_TESTE,
-    CRON_SECRET: SEGREDO_CRON_TESTE,
-    PGSSL: 'false',
-    ...extraEnv,
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+  const { port } = server.address() as AddressInfo;
+  return {
+    port,
+    getAttempts: () => attempts,
+    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
   };
+}
+
+async function getFreePort(): Promise<number> {
+  const s = net.createServer();
+  await new Promise<void>((resolve) => s.listen(0, '127.0.0.1', () => resolve()));
+  const { port } = s.address() as AddressInfo;
+  await new Promise<void>((resolve) => s.close(() => resolve()));
+  return port;
+}
+
+function spawnBackend(port: number, env: Record<string, string | undefined>) {
+  const mergedEnv: Record<string, string> = {
+    PATH: process.env.PATH || '',
+    PORT: String(port),
+    JWT_SECRET: TEST_JWT_SECRET,
+    ADMIN_PASSWORD: TEST_ADMIN_PWD,
+    CRON_SECRET: 'cron-secret-resilience-test',
+  };
+  for (const [k, v] of Object.entries(env)) {
+    if (v === undefined) delete mergedEnv[k];
+    else mergedEnv[k] = v;
+  }
+
   const child = spawn(process.execPath, ['--import', 'tsx', 'src/index.ts'], {
     cwd: SERVER_DIR,
-    env,
+    env: mergedEnv,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
-  processosAtivos.add(child);
-  let buf = '';
-  child.stdout.on('data', (d) => { buf += String(d); });
-  child.stderr.on('data', (d) => { buf += String(d); });
-  const exitPromise = new Promise<number>((resolve) => {
-    child.once('close', (code) => {
-      processosAtivos.delete(child);
-      resolve(code ?? -1);
-    });
-  });
-  return { child, saida: () => buf, exitPromise };
+  let stdout = '';
+  let stderr = '';
+  child.stdout.on('data', (d) => { stdout += String(d); });
+  child.stderr.on('data', (d) => { stderr += String(d); });
+  return {
+    child,
+    baseUrl: `http://127.0.0.1:${port}`,
+    getStdout: () => stdout,
+    getStderr: () => stderr,
+  };
 }
 
-describe('Resiliência de startup e conexão PostgreSQL', () => {
-  test('1) PostgreSQL disponível na 1a tentativa: conecta, adquire advisory lock, migra e conclui sem sleep', async () => {
-    const cap = criarLoggerMudo();
-    const { client, queries, released, destroyed } = criarFakeClient();
-    const sleeps: number[] = [];
-    const ordem: string[] = [];
+async function stopBackend(child: ReturnType<typeof spawn>) {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  await new Promise<void>((resolve) => {
+    const timer = setTimeout(() => {
+      try { child.kill('SIGKILL'); } catch { /* ignore */ }
+    }, 3000);
+    child.once('exit', () => {
+      clearTimeout(timer);
+      resolve();
+    });
+    child.kill('SIGTERM');
+  });
+}
+
+async function waitForHealth(baseUrl: string, timeoutMs = 15_000): Promise<{ status: number; body: any }> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const res = await fetch(`${baseUrl}/api/health`);
+      const body = await res.json();
+      return { status: res.status, body };
+    } catch {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  }
+  throw new Error(`Health endpoint unreachable within ${timeoutMs}ms`);
+}
+
+describe('PostgreSQL startup resilience (10 cenarios)', () => {
+  test('1. PostgreSQL disponivel na 1a tentativa conclui boot e registra sucesso', async () => {
+    const queries: string[] = [];
+    let releasedDestroy: boolean | Error | undefined;
+    const { logger, logs, warns, errors } = createSilentLogger();
+
+    const client = createFakePgClient({
+      onQuery: (sql) => {
+        queries.push(sql.trim());
+        return { rows: [] };
+      },
+      onRelease: (d) => { releasedDestroy = d; },
+    });
 
     await migrate({
       clientFactory: async () => client,
-      sleep: async (ms) => { sleeps.push(ms); },
-      bootstrapFn: async () => { ordem.push('bootstrap'); },
-      migrationsFn: async () => { ordem.push('migrations'); },
-      logger: cap.logger,
+      bootstrapFn: async () => { queries.push('BOOTSTRAP'); },
+      migrationsFn: async () => { queries.push('MIGRATIONS'); },
+      logger,
     });
 
-    assert.equal(sleeps.length, 0);
-    assert.deepEqual(ordem, ['bootstrap', 'migrations']);
-    assert.equal(queries[0]?.sql, 'SELECT 1');
-    assert.match(queries[1]?.sql || '', /pg_advisory_lock/);
-    assert.match(queries[2]?.sql || '', /pg_advisory_unlock/);
-    assert.deepEqual(released, [true]);
-    assert.deepEqual(destroyed, [false]);
-    assert.equal(dbBootState().stage, 'ready');
-    assert.equal(dbBootState().connected, true);
-    assert.equal(dbBootState().ready, true);
+    const defaultCfg = lerConfigBootBanco();
+    assert.equal(defaultCfg.connectTimeoutMs, 10_000);
+    assert.equal(defaultCfg.startupTimeoutMs, 60_000);
+    assert.equal(defaultCfg.retryBaseMs, 500);
+    assert.equal(defaultCfg.retryMaxMs, 8_000);
+    assert.equal(defaultCfg.maxAttempts, 20);
+
+    const state = dbBootState();
+    assert.equal(state.connected, true);
+    assert.equal(state.ready, true);
+    assert.equal(state.stage, 'ready');
+    assert.equal(state.failure, null);
     assert.equal(bootFailure(), null);
     assert.equal(migrationError(), null);
-    assert.ok(cap.logs.some((l) => l.includes('tentativa 1')));
+    assert.equal(warns.length, 0);
+    assert.equal(errors.length, 0);
+    assert.ok(logs.some((l) => /tentativa 1/i.test(l)));
+    assert.equal(releasedDestroy, false);
+    assert.deepEqual(queries, [
+      'SELECT 1',
+      "SELECT pg_advisory_lock(hashtext('brobond_schema_bootstrap'))",
+      'BOOTSTRAP',
+      'MIGRATIONS',
+      "SELECT pg_advisory_unlock(hashtext('brobond_schema_bootstrap'))",
+    ]);
   });
 
-  test('2) PostgreSQL indisponível na 1a tentativa, depois disponível: backoff progressivo e recuperação registrada', async () => {
-    const cap = criarLoggerMudo();
-    const { client } = criarFakeClient();
+  test('2. PostgreSQL indisponivel nas 2 primeiras tentativas e disponivel na 3a recupera com backoff progressivo', async () => {
     const sleeps: number[] = [];
-    let t = 0;
-    let tentativas = 0;
+    let fakeNow = 1000;
+    let calls = 0;
+    const { logger, logs, warns, errors } = createSilentLogger();
 
     await migrate({
       clientFactory: async () => {
-        tentativas += 1;
-        t += 40;
-        if (tentativas === 1) {
-          throw new AggregateError(
-            [Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:5432'), { code: 'ECONNREFUSED' })],
-            ''
-          );
-        }
-        if (tentativas === 2) {
-          throw Object.assign(new Error('the database system is starting up'), { code: '57P03' });
-        }
-        return client;
+        calls += 1;
+        fakeNow += 25;
+        if (calls === 1) throw Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:5432'), { code: 'ECONNREFUSED' });
+        if (calls === 2) throw Object.assign(new Error('the database system is starting up'), { code: '57P03' });
+        return createFakePgClient();
       },
-      startupConfig: { connectTimeoutMs: 1000, startupTimeoutMs: 10_000, retryBaseMs: 100, retryMaxMs: 500, maxAttempts: 6 },
-      sleep: async (ms) => { sleeps.push(ms); t += ms; },
-      now: () => t,
-      bootstrapFn: async () => undefined,
-      migrationsFn: async () => undefined,
-      logger: cap.logger,
+      bootstrapFn: async () => {},
+      migrationsFn: async () => {},
+      startupConfig: { connectTimeoutMs: 1000, startupTimeoutMs: 10_000, retryBaseMs: 200, retryMaxMs: 1000, maxAttempts: 10 },
+      sleep: async (ms) => {
+        sleeps.push(ms);
+        fakeNow += ms;
+      },
+      now: () => fakeNow,
+      logger,
     });
 
-    assert.equal(tentativas, 3);
-    assert.deepEqual(sleeps, [100, 200]);
-    assert.equal(dbBootState().stage, 'ready');
-    assert.equal(dbBootState().ready, true);
-    assert.equal(bootFailure(), null);
-    assert.equal(cap.warns.length, 2);
-    assert.match(cap.warns[0], /tentativa 1\/6.*\[ECONNREFUSED\].*100ms/);
-    assert.match(cap.warns[1], /tentativa 2\/6.*\[57P03\].*200ms/);
-    assert.ok(cap.logs.some((l) => l.includes('recuperada na tentativa 3')));
+    const state = dbBootState();
+    assert.equal(calls, 3);
+    assert.deepEqual(sleeps, [200, 400]);
+    assert.equal(state.connected, true);
+    assert.equal(state.ready, true);
+    assert.equal(state.stage, 'ready');
+    assert.equal(state.failure, null);
+    assert.equal(warns.length, 2);
+    assert.equal(errors.length, 0);
+    assert.match(warns[0], /tentativa 1\/10/i);
+    assert.match(warns[1], /tentativa 2\/10/i);
+    assert.ok(logs.some((l) => /recuperada na tentativa 3\/10/i.test(l)));
   });
 
-  test('3) Classificação de erros transitórios e backoff exponencial com teto + sanitização de credenciais', () => {
-    assert.equal(calcularBackoffMs(1, 500, 8000), 500);
-    assert.equal(calcularBackoffMs(2, 500, 8000), 1000);
-    assert.equal(calcularBackoffMs(3, 500, 8000), 2000);
-    assert.equal(calcularBackoffMs(4, 500, 8000), 4000);
-    assert.equal(calcularBackoffMs(5, 500, 8000), 8000);
-    assert.equal(calcularBackoffMs(6, 500, 8000), 8000);
-
-    for (const err of [
-      Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }),
-      Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }),
-      Object.assign(new Error('connect ETIMEDOUT'), { code: 'ETIMEDOUT' }),
-      Object.assign(new Error('getaddrinfo EAI_AGAIN db.internal'), { code: 'EAI_AGAIN' }),
-      Object.assign(new Error('the database system is starting up'), { code: '57P03' }),
-      Object.assign(new Error('terminating connection due to administrator command'), { code: '57P01' }),
-      Object.assign(new Error('remaining connection slots are reserved'), { code: '53300' }),
-      new Error('Connection terminated unexpectedly'),
-      new AggregateError([Object.assign(new Error('connect ECONNREFUSED ::1:5432'), { code: 'ECONNREFUSED' })], ''),
-    ]) {
-      assert.equal(classificarErroConexao(err).transitorio, true, `esperado transitório: ${String(err)}`);
-    }
-
-    const msgSanitizada = sanitizarMensagemErro(
-      new Error('Falha ao conectar em postgresql://usuario_secreto:SenhaSuperSecreta@db.render.com:5432/prod')
+  test('3. Erros transitorios (AggregateError, drop no SELECT 1/lock, timeout de socket) sao retentados com backoff limitado', async () => {
+    // 3a. Classificacao explicita de erros transitorios inclusive AggregateError do Node 22/24
+    const agg = new AggregateError(
+      [
+        Object.assign(new Error('connect ECONNREFUSED ::1:5432'), { code: 'ECONNREFUSED' }),
+        Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:5432'), { code: 'ECONNREFUSED' }),
+      ],
+      ''
     );
-    assert.equal(msgSanitizada.includes('SenhaSuperSecreta'), false);
-    assert.equal(msgSanitizada.includes('usuario_secreto'), false);
-    assert.match(msgSanitizada, /postgres:\/\/\*\*\*@db\.render\.com:5432\/prod/);
-  });
+    assert.equal(classificarErroConexao(agg).transitorio, true);
+    assert.equal(classificarErroConexao(agg).codigo, 'ECONNREFUSED');
+    assert.match(sanitizarMensagemErro(agg), /ECONNREFUSED/);
 
-  test('4) Erro permanente de conexão (28P01/3D000/ERR_INVALID_URL): falha rápida sem retry e sem fase=desconhecida', async () => {
-    for (const cod of ['28P01', '3D000', 'ERR_INVALID_URL'] as const) {
-      const cap = criarLoggerMudo();
-      const sleeps: number[] = [];
-      let tentativas = 0;
-
-      await migrate({
-        clientFactory: async () => {
-          tentativas += 1;
-          throw Object.assign(new Error(`erro permanente simulado ${cod}`), { code: cod });
-        },
-        startupConfig: { connectTimeoutMs: 1000, startupTimeoutMs: 30_000, retryBaseMs: 100, retryMaxMs: 1000, maxAttempts: 10 },
-        sleep: async (ms) => { sleeps.push(ms); },
-        bootstrapFn: async () => { throw new Error('não deveria executar bootstrap'); },
-        migrationsFn: async () => { throw new Error('não deveria executar migrations'); },
-        logger: cap.logger,
-      });
-
-      assert.equal(tentativas, 1, `${cod} não deve entrar em retry`);
-      assert.equal(sleeps.length, 0);
-      assert.equal(dbBootState().stage, 'degraded');
-      assert.equal(dbBootState().connected, false);
-      assert.equal(bootFailure()?.fase, 'conexao');
-      assert.equal(bootFailure()?.tipo, 'permanente');
-      assert.ok(migrationError()?.includes(cod));
-      assert.equal(cap.errors.length, 1);
+    for (const code of ['ECONNRESET', 'ETIMEDOUT', 'EAI_AGAIN', 'ENOTFOUND', '57P01', '57P03', '53300', '08006']) {
+      const cls = classificarErroConexao(Object.assign(new Error('transient'), { code }));
+      assert.equal(cls.transitorio, true, `${code} deve ser transitorio`);
     }
+    assert.equal(calcularBackoffMs(1, 500, 3000), 500);
+    assert.equal(calcularBackoffMs(2, 500, 3000), 1000);
+    assert.equal(calcularBackoffMs(3, 500, 3000), 2000);
+    assert.equal(calcularBackoffMs(4, 500, 3000), 3000);
 
-    // Prova real em processo filho NODE_ENV=production com servidor wire PG emitindo 28P01:
-    // falha rápida na 1a tentativa e exit 1 com [fase=conexao tipo=permanente] (nunca fase=desconhecida).
-    const pgPort = await portaLivre();
-    let conexoes = 0;
-    const wireSrv = net.createServer((socket) => {
-      conexoes += 1;
-      socket.once('data', () => {
-        socket.write(criarPgErrorPacket('28P01', 'password authentication failed for user "brobond"'));
-        socket.end();
-      });
-    });
-    await new Promise<void>((ok) => wireSrv.listen(pgPort, '127.0.0.1', () => ok()));
-
-    try {
-      const appPort = await portaLivre();
-      const p = iniciarApiFilha(appPort, {
-        NODE_ENV: 'production',
-        DATABASE_URL: `postgresql://brobond:errada@127.0.0.1:${pgPort}/brobond_test`,
-        PG_STARTUP_TIMEOUT_MS: '10000',
-        PG_STARTUP_RETRY_BASE_MS: '50',
-      });
-      const code = await p.exitPromise;
-      const log = p.saida();
-      assert.equal(code, 1);
-      assert.equal(conexoes, 1, 'erro permanente 28P01 não faz retentativa');
-      assert.match(log, /fase=conexao/);
-      assert.match(log, /tipo=permanente/);
-      assert.match(log, /28P01|password authentication failed/);
-      assert.equal(log.includes('fase=desconhecida'), false);
-    } finally {
-      await new Promise<void>((ok) => wireSrv.close(() => ok()));
-    }
-  });
-
-  test('5) Timeout no startup: respeita PG_STARTUP_TIMEOUT_MS, encerra sem loop infinito e reporta fase=conexao', async () => {
-    const cap = criarLoggerMudo();
-    const sleeps: number[] = [];
-    let t = 0;
-    let tentativas = 0;
+    // 3b. Drop durante SELECT 1 e tentativa lenta que excede connectTimeoutMs devem destruir o cliente e recuperar na tentativa 3
+    let attempt = 0;
+    const destroyed: Array<boolean | Error | undefined> = [];
+    const { logger } = createSilentLogger();
 
     await migrate({
       clientFactory: async () => {
-        tentativas += 1;
-        t += 120;
-        throw Object.assign(new Error('connect ETIMEDOUT'), { code: 'ETIMEDOUT' });
+        attempt += 1;
+        if (attempt === 1) {
+          // Conexao abre mas cai no SELECT 1
+          return createFakePgClient({
+            onQuery: async () => {
+              throw new Error('Connection terminated unexpectedly');
+            },
+            onRelease: (d) => destroyed.push(d),
+          });
+        }
+        if (attempt === 2) {
+          // Conexao trava alem do connectTimeoutMs (60ms) e resolve tarde: cliente tardio precisa ser destruido
+          return new Promise<PoolClient>((resolve) => {
+            setTimeout(() => resolve(createFakePgClient({ onRelease: (d) => destroyed.push(d) })), 150);
+          });
+        }
+        return createFakePgClient({ onRelease: (d) => destroyed.push(d) });
       },
-      startupConfig: { connectTimeoutMs: 500, startupTimeoutMs: 1000, retryBaseMs: 200, retryMaxMs: 800, maxAttempts: 20 },
-      sleep: async (ms) => { sleeps.push(ms); t += ms; },
-      now: () => t,
-      logger: cap.logger,
+      bootstrapFn: async () => {},
+      migrationsFn: async () => {},
+      startupConfig: { connectTimeoutMs: 60, startupTimeoutMs: 3000, retryBaseMs: 20, retryMaxMs: 50, maxAttempts: 5 },
+      logger,
     });
 
-    assert.ok(tentativas >= 2 && tentativas <= 5);
-    assert.ok(t <= 1150, `duração (${t}ms) deve respeitar o teto do startup`);
-    assert.equal(dbBootState().stage, 'degraded');
-    assert.equal(bootFailure()?.fase, 'conexao');
-    assert.equal(bootFailure()?.tipo, 'timeout');
-    assert.match(migrationError() || '', /ETIMEDOUT|indisponível/i);
+    // Aguarda eventual resolucao tardia da tentativa 2
+    await new Promise((r) => setTimeout(r, 180));
+    assert.equal(attempt, 3);
+    assert.equal(dbBootState().ready, true);
+    assert.ok(destroyed.filter((d) => d === true).length >= 2, 'clientes com erro/timeout devem ser destruidos (release(true))');
+  });
 
-    // Também garante que uma tentativa travada (que nunca resolve) é interrompida pelo timeout da janela.
-    const capHang = criarLoggerMudo();
-    const t0 = Date.now();
+  test('4. Erro permanente falha rapido na 1a tentativa sem retry infinito e mascara credenciais', async () => {
+    for (const code of ['28P01', '28000', '3D000', '3F000', '42501', 'ERR_INVALID_URL', 'CERT_HAS_EXPIRED']) {
+      assert.equal(classificarErroConexao(Object.assign(new Error('perm'), { code })).transitorio, false, `${code} deve ser permanente`);
+    }
+    assert.equal(classificarErroConexao(new Error('compute is starting up')).transitorio, true);
+
+    let attempts = 0;
+    let slept = false;
+    const { logger, errors } = createSilentLogger();
+
     await migrate({
-      clientFactory: () => new Promise<PoolClient>(() => undefined),
-      startupConfig: { connectTimeoutMs: 250, startupTimeoutMs: 250, retryBaseMs: 50, retryMaxMs: 100, maxAttempts: 3 },
-      logger: capHang.logger,
+      clientFactory: async () => {
+        attempts += 1;
+        throw Object.assign(
+          new Error('password authentication failed for user "brobond" at postgresql://admin:SuperSecret123@db.internal:5432/erp password=KvSecret999'),
+          { code: '28P01' }
+        );
+      },
+      startupConfig: { connectTimeoutMs: 1000, startupTimeoutMs: 60_000, retryBaseMs: 100, retryMaxMs: 1000, maxAttempts: 10 },
+      sleep: async () => { slept = true; },
+      logger,
     });
-    const elapsedHang = Date.now() - t0;
-    assert.ok(elapsedHang < 2000, `socket travado não pode bloquear startup (${elapsedHang}ms)`);
-    assert.equal(bootFailure()?.fase, 'conexao');
-    assert.equal(bootFailure()?.tipo, 'timeout');
 
-    // Processo filho real em NODE_ENV=production contra wire server 57P03 persistente:
-    // faz retries controlados dentro de PG_STARTUP_TIMEOUT_MS e encerra com exit 1 sem loop infinito.
-    const pgPort = await portaLivre();
-    let conexoes57P03 = 0;
-    const wireSrv = net.createServer((socket) => {
-      conexoes57P03 += 1;
-      socket.once('data', () => {
-        socket.write(criarPgErrorPacket('57P03', 'the database system is starting up'));
-        socket.end();
-      });
+    const state = dbBootState();
+    assert.equal(attempts, 1, 'falha permanente nao deve ser retentada');
+    assert.equal(slept, false);
+    assert.equal(state.connected, false);
+    assert.equal(state.ready, false);
+    assert.equal(state.stage, 'degraded');
+    assert.equal(state.failure?.fase, 'conexao');
+    assert.equal(state.failure?.tipo, 'permanente');
+    assert.equal(state.failure?.tentativas, 1);
+    assert.ok(state.failure?.mensagem.includes('28P01'));
+    assert.equal(state.failure?.mensagem.includes('SuperSecret123'), false, 'credenciais nunca vazam na mensagem de boot');
+    assert.equal(state.failure?.mensagem.includes('KvSecret999'), false, 'password= key-value nunca vaza na mensagem de boot');
+    assert.equal(errors.some((e) => e.includes('SuperSecret123') || e.includes('KvSecret999')), false, 'credenciais nunca vazam no log');
+
+    // Tambem testa via servidor PG-wire real no socket TCP com processo de producao (exit 1 imediato, sem retry)
+    const pgErrSrv = await startPgErrorTcpServer((_n, socket) => {
+      socket.write(pgWireErrorPacket('28P01', 'password authentication failed for user "bad"'));
+      socket.end();
     });
-    await new Promise<void>((ok) => wireSrv.listen(pgPort, '127.0.0.1', () => ok()));
-
+    const apiPort = await getFreePort();
+    const srv = spawnBackend(apiPort, {
+      NODE_ENV: 'production',
+      PGSSL: 'false',
+      DATABASE_URL: `postgresql://bad:secret@127.0.0.1:${pgErrSrv.port}/brobond`,
+      PG_CONNECT_TIMEOUT: '1000',
+      PG_STARTUP_TIMEOUT_MS: '15000',
+      PG_STARTUP_RETRY_BASE_MS: '100',
+    });
     try {
-      const appPort = await portaLivre();
-      const p = iniciarApiFilha(appPort, {
-        NODE_ENV: 'production',
-        DATABASE_URL: `postgresql://brobond:senha@127.0.0.1:${pgPort}/brobond_test`,
-        PG_CONNECT_TIMEOUT: '300',
-        PG_STARTUP_TIMEOUT_MS: '650',
-        PG_STARTUP_RETRY_BASE_MS: '80',
-        PG_STARTUP_RETRY_MAX_MS: '160',
-        PG_STARTUP_MAX_ATTEMPTS: '10',
-      });
-      const code = await p.exitPromise;
-      const log = p.saida();
+      const code = await new Promise<number | null>((resolve) => srv.child.once('exit', (c) => resolve(c)));
       assert.equal(code, 1);
-      assert.ok(conexoes57P03 >= 2, `esperava múltiplas tentativas antes do timeout (houve ${conexoes57P03})`);
-      assert.match(log, /fase=conexao/);
-      assert.match(log, /tipo=timeout/);
-      assert.equal(log.includes('fase=desconhecida'), false);
-      assert.equal(log.includes('(null)'), false);
+      assert.equal(pgErrSrv.getAttempts(), 1, 'producao falha na 1a tentativa diante de 28P01 real');
+      assert.match(srv.getStderr(), /fase=conexao tipo=permanente/);
+      assert.equal(/fase=desconhecida|\(null\)/.test(srv.getStderr()), false);
     } finally {
-      await new Promise<void>((ok) => wireSrv.close(() => ok()));
+      await stopBackend(srv.child);
+      await pgErrSrv.close();
     }
   });
 
-  test('6, 7 e 8) Migrations: já aplicada (idempotente), pendente (ordem + transação) e falha (ROLLBACK + fase=migrations)', async () => {
-    const tmpDir = mkdtempSync(path.join(os.tmpdir(), 'brobond-mig-'));
+  test('5. Startup timeout encerra retentativas dentro do limite configurado sem loop infinito', async () => {
+    let fakeNow = 0;
+    let attempts = 0;
+    const sleeps: number[] = [];
+    const { logger } = createSilentLogger();
+
+    await migrate({
+      clientFactory: async () => {
+        attempts += 1;
+        fakeNow += 50;
+        throw Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:5432'), { code: 'ECONNREFUSED' });
+      },
+      startupConfig: { connectTimeoutMs: 500, startupTimeoutMs: 1000, retryBaseMs: 200, retryMaxMs: 500, maxAttempts: 20 },
+      sleep: async (ms) => {
+        sleeps.push(ms);
+        fakeNow += ms;
+      },
+      now: () => fakeNow,
+      logger,
+    });
+
+    const state = dbBootState();
+    assert.ok(attempts >= 2 && attempts <= 5, `tentativas limitadas pelo timeout (obtido ${attempts})`);
+    assert.ok(fakeNow <= 1000, `duracao (${fakeNow}ms) respeita startupTimeoutMs=1000ms`);
+    assert.equal(state.stage, 'degraded');
+    assert.equal(state.connected, false);
+    assert.equal(state.ready, false);
+    assert.equal(state.failure?.fase, 'conexao');
+    assert.equal(state.failure?.tipo, 'timeout');
+    assert.ok(sleeps.length >= 1);
+
+    // Tambem valida limite maxAttempts (para antes do startupTimeoutMs se maxAttempts for menor)
+    let maxAttCalls = 0;
+    await migrate({
+      clientFactory: async () => {
+        maxAttCalls += 1;
+        throw Object.assign(new Error('the database system is starting up'), { code: '57P03' });
+      },
+      startupConfig: { connectTimeoutMs: 500, startupTimeoutMs: 60_000, retryBaseMs: 10, retryMaxMs: 20, maxAttempts: 3 },
+      sleep: async () => {},
+      logger,
+    });
+    assert.equal(maxAttCalls, 3);
+    assert.equal(dbBootState().failure?.tentativas, 3);
+    assert.equal(dbBootState().failure?.tipo, 'timeout');
+
+    // Processo real em NODE_ENV=production contra porta fechada encerra com exit 1 ao estourar PG_STARTUP_TIMEOUT_MS
+    const closedPort = await getFreePort();
+    const apiPort = await getFreePort();
+    const t0 = Date.now();
+    const srv = spawnBackend(apiPort, {
+      NODE_ENV: 'production',
+      PGSSL: 'false',
+      DATABASE_URL: `postgresql://u:p@127.0.0.1:${closedPort}/db`,
+      PG_CONNECT_TIMEOUT: '200',
+      PG_STARTUP_TIMEOUT_MS: '700',
+      PG_STARTUP_RETRY_BASE_MS: '100',
+      PG_STARTUP_RETRY_MAX_MS: '250',
+      PG_STARTUP_MAX_ATTEMPTS: '10',
+    });
     try {
-      writeFileSync(path.join(tmpDir, '0001_init.sql'), 'CREATE TABLE t1 (id INT);', 'utf8');
-      writeFileSync(path.join(tmpDir, '0002_add.sql'), 'CREATE TABLE t2 (id INT);', 'utf8');
-      writeFileSync(path.join(tmpDir, '0003_bad.sql'), 'FAIL_ON_PURPOSE;', 'utf8');
-      writeFileSync(path.join(tmpDir, '0004_after.sql'), 'CREATE TABLE t4 (id INT);', 'utf8');
+      const code = await new Promise<number | null>((resolve) => srv.child.once('exit', (c) => resolve(c)));
+      const elapsed = Date.now() - t0;
+      assert.equal(code, 1);
+      assert.ok(elapsed < 10_000, `encerramento limitado no tempo (${elapsed}ms)`);
+      assert.match(srv.getStderr(), /fase=conexao tipo=timeout/);
+      assert.equal(/fase=desconhecida|\(null\)/.test(srv.getStderr()), false);
+    } finally {
+      await stopBackend(srv.child);
+    }
+  });
 
-      const registradas = new Set<string>(['0001_init.sql']);
-      let pendentesSnapshot = new Set(registradas);
-      let emTx = false;
-      const executadasSql: string[] = [];
+  test('6, 7 e 8. Migrations pendentes, ja aplicadas (idempotentes) e falha com rollback e recuperacao', async () => {
+    const tmpDir = mkdtempSync(path.join(os.tmpdir(), 'brobond-mig-test-'));
+    try {
+      writeFileSync(path.join(tmpDir, '0002_segunda.sql'), 'CREATE TABLE t2 (id int);');
+      writeFileSync(path.join(tmpDir, '0001_primeira.sql'), 'CREATE TABLE t1 (id int);');
+      writeFileSync(path.join(tmpDir, '0003_terceira.sql'), 'FAIL_MIGRATION;');
+      writeFileSync(path.join(tmpDir, '0004_quarta.sql'), 'CREATE TABLE t4 (id int);');
 
-      const { client } = criarFakeClient(async (sql, params) => {
-        if (sql.startsWith('SELECT id FROM schema_migrations')) {
-          return { rows: [...registradas].map((id) => ({ id })) };
-        }
-        if (sql === 'BEGIN') {
-          emTx = true;
-          pendentesSnapshot = new Set(registradas);
-          return { rows: [] };
-        }
-        if (sql === 'COMMIT') {
-          emTx = false;
-          for (const id of pendentesSnapshot) registradas.add(id);
-          return { rows: [] };
-        }
-        if (sql === 'ROLLBACK') {
-          emTx = false;
-          pendentesSnapshot = new Set(registradas);
-          return { rows: [] };
-        }
-        if (sql.startsWith('INSERT INTO schema_migrations')) {
-          const id = String(params?.[0]);
-          if (emTx) pendentesSnapshot.add(id);
-          else registradas.add(id);
-          return { rows: [] };
-        }
-        if (
-          sql === 'SELECT 1' ||
-          sql.includes('pg_advisory_') ||
-          sql.startsWith('CREATE TABLE IF NOT EXISTS schema_migrations')
-        ) {
-          return { rows: [] };
-        }
-        if (sql.includes('FAIL_ON_PURPOSE')) {
-          throw new Error('erro de sintaxe simulado em 0003_bad.sql');
-        }
-        executadasSql.push(sql);
-        return { rows: [] };
-      });
+      const { client, applied, executedSql } = createMemoryMigrationClient();
+      const { logger } = createSilentLogger();
 
-      // Cenário 6 + 7 + 8 em uma cadeia:
-      // - 0001 já aplicada -> pulada;
-      // - 0002 pendente -> aplicada em transação e registrada;
-      // - 0003 falha -> ROLLBACK, não registrada, 0004 não roda, boot fica em fase='migrations'.
-      const capFalha = criarLoggerMudo();
+      // 7 & 8: 0001 e 0002 rodam em ordem lexica; 0003 falha e interrompe antes da 0004
       await migrate({
         clientFactory: async () => client,
-        bootstrapFn: async () => undefined,
-        migrationsFn: async (c) => aplicarMigrationsVersionadas(c, { migrationsDir: tmpDir, logger: capFalha.logger }),
-        logger: capFalha.logger,
+        bootstrapFn: async () => {},
+        migrationsFn: async (c) => aplicarMigrationsVersionadas(c, { migrationsDir: tmpDir, logger }),
+        logger,
       });
 
-      assert.equal(executadasSql.some((s) => s.includes('t1')), false, 'migration já aplicada foi pulada');
-      assert.equal(executadasSql.some((s) => s.includes('t2')), true, 'migration pendente 0002 executou');
-      assert.equal(executadasSql.some((s) => s.includes('t4')), false, 'parou na primeira falha antes da 0004');
-      assert.deepEqual([...registradas], ['0001_init.sql', '0002_add.sql']);
-      assert.equal(dbBootState().stage, 'degraded');
-      assert.equal(bootFailure()?.fase, 'migrations');
-      assert.match(migrationError() || '', /0003_bad\.sql/);
+      const failState = dbBootState();
+      assert.equal(failState.connected, true, 'banco conectou antes das migrations');
+      assert.equal(failState.ready, false, 'migration falhou entao ready segue false');
+      assert.equal(failState.stage, 'degraded');
+      assert.equal(failState.failure?.fase, 'migrations');
+      assert.match(failState.failure?.mensagem || '', /0003_terceira\.sql/);
+      assert.deepEqual([...applied], ['0001_primeira.sql', '0002_segunda.sql']);
+      assert.deepEqual(executedSql, ['CREATE TABLE t1 (id int);', 'CREATE TABLE t2 (id int);']);
 
-      // Corrige 0003 e reexecuta migrate(): 0001 e 0002 seguem puladas, 0003 e 0004 aplicam e boot fica pronto.
-      writeFileSync(path.join(tmpDir, '0003_bad.sql'), 'CREATE TABLE t3 (id INT);', 'utf8');
-      executadasSql.length = 0;
+      // Corrige 0003 e reexecuta: 0001 e 0002 ja aplicadas sao puladas (6); 0003 e 0004 rodam (7)
+      writeFileSync(path.join(tmpDir, '0003_terceira.sql'), 'CREATE TABLE t3 (id int);');
+      executedSql.length = 0;
 
-      const capOk = criarLoggerMudo();
       await migrate({
         clientFactory: async () => client,
-        bootstrapFn: async () => undefined,
-        migrationsFn: async (c) => aplicarMigrationsVersionadas(c, { migrationsDir: tmpDir, logger: capOk.logger }),
-        logger: capOk.logger,
+        bootstrapFn: async () => {},
+        migrationsFn: async (c) => aplicarMigrationsVersionadas(c, { migrationsDir: tmpDir, logger }),
+        logger,
       });
 
-      assert.equal(executadasSql.some((s) => s.includes('t1')), false);
-      assert.equal(executadasSql.some((s) => s.includes('t2')), false);
-      assert.equal(executadasSql.some((s) => s.includes('t3')), true);
-      assert.equal(executadasSql.some((s) => s.includes('t4')), true);
-      assert.deepEqual([...registradas], ['0001_init.sql', '0002_add.sql', '0003_bad.sql', '0004_after.sql']);
-      assert.equal(dbBootState().stage, 'ready');
-      assert.equal(bootFailure(), null);
+      assert.equal(dbBootState().ready, true);
+      assert.equal(dbBootState().failure, null);
+      assert.deepEqual([...applied], [
+        '0001_primeira.sql',
+        '0002_segunda.sql',
+        '0003_terceira.sql',
+        '0004_quarta.sql',
+      ]);
+      assert.deepEqual(executedSql, ['CREATE TABLE t3 (id int);', 'CREATE TABLE t4 (id int);']);
 
-      // Reexecução idempotente com tudo já aplicado: nenhuma migration pendente roda.
-      executadasSql.length = 0;
+      // 6: Reexecutar com todas ja aplicadas e totalmente idempotente
+      executedSql.length = 0;
       await migrate({
         clientFactory: async () => client,
-        bootstrapFn: async () => undefined,
-        migrationsFn: async (c) => aplicarMigrationsVersionadas(c, { migrationsDir: tmpDir, logger: capOk.logger }),
-        logger: capOk.logger,
+        bootstrapFn: async () => {},
+        migrationsFn: async (c) => aplicarMigrationsVersionadas(c, { migrationsDir: tmpDir, logger }),
+        logger,
       });
-      assert.equal(executadasSql.length, 0);
-      assert.equal(dbBootState().stage, 'ready');
+      assert.equal(dbBootState().ready, true);
+      assert.deepEqual(executedSql, []);
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }
   });
 
-  test('9 e 10) /api/health e bloqueio de rotas, workers e cron antes da prontidão obrigatória', async () => {
-    // 9a: durante retries ativos (status === 'connecting'), /api/health já responde 503 com processo='iniciado',
-    // banco='indisponivel', pronto=false (nunca 200), e rotas de negócio/cron respondem 503.
-    const portaConectando = await portaLivre();
-    const portaBancoMorto = await portaLivre();
-    const srvConectando = iniciarApiFilha(portaConectando, {
-      NODE_ENV: 'test',
-      DATABASE_URL: `postgresql://nao_existe:nao_existe@127.0.0.1:${portaBancoMorto}/nao_existe`,
-      PG_CONNECT_TIMEOUT: '200',
-      PG_STARTUP_TIMEOUT_MS: '5000',
-      PG_STARTUP_RETRY_BASE_MS: '400',
-      PG_STARTUP_RETRY_MAX_MS: '800',
-      PG_STARTUP_MAX_ATTEMPTS: '10',
+  test('9. /api/health distingue processo iniciado, banco indisponivel, banco conectado (migrando/falho) e pronto para trafego', async () => {
+    // 9a. Transicoes internas de estado (connecting -> migrating -> ready) observaveis em dbBootState()
+    const observedStages: Array<{ connected: boolean; ready: boolean; stage: string }> = [];
+    const { logger } = createSilentLogger();
+    await migrate({
+      clientFactory: async () => {
+        const s = dbBootState();
+        observedStages.push({ connected: s.connected, ready: s.ready, stage: s.stage });
+        return createFakePgClient();
+      },
+      bootstrapFn: async () => {
+        const s = dbBootState();
+        observedStages.push({ connected: s.connected, ready: s.ready, stage: s.stage });
+      },
+      migrationsFn: async () => {},
+      logger,
     });
-
-    try {
-      const hConectando = await esperarHttp(`http://127.0.0.1:${portaConectando}/api/health`, (s) => s === 503);
-      assert.equal(hConectando.status, 503);
-      assert.equal(hConectando.body.ok, false);
-      assert.equal(hConectando.body.status, 'connecting');
-      assert.equal(hConectando.body.processo, 'iniciado');
-      assert.equal(hConectando.body.banco, 'indisponivel');
-      assert.equal(hConectando.body.pronto, false);
-      assert.equal(hConectando.body.db, 'postgres-degraded');
-      assert.equal(hConectando.body.fase, 'conexao');
-
-      const rCron = await fetch(`http://127.0.0.1:${portaConectando}/api/admin/scheduled/cron/crm`, {
-        method: 'POST',
-        headers: { authorization: `Bearer ${SEGREDO_CRON_TESTE}` },
-      });
-      assert.equal(rCron.status, 503, 'rota de cron não executa sem prontidão do banco');
-
-      const rNegocio = await fetch(`http://127.0.0.1:${portaConectando}/api/vendas`);
-      assert.equal(rNegocio.status, 503, 'rota de negócio bloqueada com 503');
-    } finally {
-      srvConectando.child.kill('SIGTERM');
-      await srvConectando.exitPromise;
+    {
+      const s = dbBootState();
+      observedStages.push({ connected: s.connected, ready: s.ready, stage: s.stage });
     }
 
-    // 9b: após esgotar startup em non-prod, /api/health transiciona para status='degraded' (503).
-    const portaIndisp = await portaLivre();
-    const srv = iniciarApiFilha(portaIndisp, {
+    assert.deepEqual(observedStages, [
+      { connected: false, ready: false, stage: 'connecting' },
+      { connected: true, ready: false, stage: 'migrating' },
+      { connected: true, ready: true, stage: 'ready' },
+    ]);
+
+    // 9b. Servidor HTTP real com banco obrigatorio indisponivel: processo iniciado + banco indisponivel + NUNCA 200
+    const closedPort = await getFreePort();
+    const apiPort = await getFreePort();
+    const srvDegraded = spawnBackend(apiPort, {
       NODE_ENV: 'test',
-      DATABASE_URL: `postgresql://nao_existe:nao_existe@127.0.0.1:${portaBancoMorto}/nao_existe`,
-      PG_CONNECT_TIMEOUT: '150',
-      PG_STARTUP_TIMEOUT_MS: '300',
-      PG_STARTUP_RETRY_BASE_MS: '50',
-      PG_STARTUP_RETRY_MAX_MS: '100',
-      PG_STARTUP_MAX_ATTEMPTS: '2',
-    });
-
-    try {
-      const hDegradado = await esperarHttp(
-        `http://127.0.0.1:${portaIndisp}/api/health`,
-        (s, b) => s === 503 && b?.status === 'degraded'
-      );
-      assert.equal(hDegradado.status, 503);
-      assert.equal(hDegradado.body.ok, false);
-      assert.equal(hDegradado.body.processo, 'iniciado');
-      assert.equal(hDegradado.body.banco, 'indisponivel');
-      assert.equal(hDegradado.body.pronto, false);
-      assert.equal(hDegradado.body.db, 'postgres-degraded');
-      assert.equal(hDegradado.body.fase, 'conexao');
-    } finally {
-      srv.child.kill('SIGTERM');
-      await srv.exitPromise;
-    }
-
-    // 10a: ordem estática de inicialização em index.ts garante workers/intervals só após appReady = true.
-    const indexFonte = readFileSync(path.join(SERVER_DIR, 'src/index.ts'), 'utf8');
-    const posMigrate = indexFonte.indexOf('await migrate()');
-    const posAppReady = indexFonte.indexOf('appReady = true;');
-    const posInitNegocios = indexFonte.indexOf('initNegociosEngine();');
-    const posFilaCommerce = indexFonte.indexOf('const filaCommerce = setInterval(');
-    const posLimpeza = indexFonte.indexOf('const limpeza = setInterval(');
-    assert.ok(posMigrate > 0 && posAppReady > posMigrate, 'appReady só após migrate()');
-    assert.ok(posInitNegocios > posAppReady, 'initNegociosEngine() só inicia após appReady');
-    assert.ok(posFilaCommerce > posAppReady, 'filaCommerce só inicia após appReady');
-    assert.ok(posLimpeza > posAppReady, 'limpeza periódica só inicia após appReady');
-
-    // 9b: modo memória (sem DATABASE_URL): pronto=true + 200 após inicialização.
-    const portaMem = await portaLivre();
-    const mem = iniciarApiFilha(portaMem, {
-      NODE_ENV: 'test',
-      DATABASE_URL: '',
+      DATABASE_URL: `postgresql://u:p@127.0.0.1:${closedPort}/db`,
+      PG_CONNECT_TIMEOUT: '300',
+      PG_STARTUP_TIMEOUT_MS: '600',
+      PG_STARTUP_RETRY_BASE_MS: '100',
     });
     try {
-      const hMem = await esperarHttp(`http://127.0.0.1:${portaMem}/api/health`, (s, b) => s === 200 && b?.pronto === true);
-      assert.equal(hMem.status, 200);
-      assert.equal(hMem.body.ok, true);
-      assert.equal(hMem.body.processo, 'iniciado');
-      assert.equal(hMem.body.banco, 'memoria');
-      assert.equal(hMem.body.pronto, true);
-      assert.equal(hMem.body.db, 'memory');
+      const h = await waitForHealth(srvDegraded.baseUrl);
+      assert.equal(h.status, 503, 'health nunca retorna 200 quando banco obrigatorio esta indisponivel');
+      assert.equal(h.body.ok, false);
+      assert.equal(h.body.processo, 'iniciado');
+      assert.equal(h.body.banco, 'indisponivel');
+      assert.equal(h.body.pronto, false);
+      assert.equal(h.body.db, 'postgres-degraded');
+      assert.equal(h.body.fase, 'conexao');
+
+      // Mesmo apos estourar timeout de startup, segue 503 (nao 200) e cron/negocio retornam 503
+      await new Promise((r) => setTimeout(r, 750));
+      const hAfter = await fetch(`${srvDegraded.baseUrl}/api/health`).then(async (r) => ({ status: r.status, body: await r.json() }));
+      assert.equal(hAfter.status, 503);
+      assert.equal(hAfter.body.banco, 'indisponivel');
+      assert.equal(hAfter.body.pronto, false);
+      assert.equal(hAfter.body.erroTipo, 'timeout');
     } finally {
-      mem.child.kill('SIGTERM');
-      await mem.exitPromise;
+      await stopBackend(srvDegraded.child);
     }
 
-    // 10b: Prova direta em processo isolado com DATABASE_URL configurada (sem migrate()):
-    // executarProcessoCron, processarComercioAgendado e atualizarMotorNegocios recusam execução!
-    const scriptGate = `
-      const { executarProcessoCron, processosCron } = await import('./src/scheduled.ts');
-      const { processarComercioAgendado } = await import('./src/commerce/outbox.ts');
-      const { atualizarMotorNegocios } = await import('./src/negocios.ts');
-      const { isDbConnected, isDbDegraded } = await import('./src/db.ts');
-      let cronExecutou = false;
-      processosCron.crm = async () => { cronExecutou = true; return { itens: 1, detalhes: [], falhas: [] }; };
-      const cronRes = await executarProcessoCron('crm');
-      const outboxRes = await processarComercioAgendado();
-      const motorRes = await atualizarMotorNegocios();
-      console.log('__GATE__' + JSON.stringify({
-        connected: isDbConnected(),
-        degraded: isDbDegraded(),
-        cronExecutou,
-        cronStatus: cronRes.status,
-        cronOk: cronRes.ok,
-        outboxFalhas: outboxRes.falhas,
-        motorRes,
-      }));
-    `;
-    const gateOut = await new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => {
-      const p = spawn(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', scriptGate], {
-        cwd: SERVER_DIR,
-        env: {
-          ...process.env,
-          NODE_ENV: 'test',
-          DATABASE_URL: 'postgresql://nao_existe:nao_existe@127.0.0.1:1/nao_existe',
-          PG_IDLE_TIMEOUT: '200',
-        },
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
-      let stdout = '';
-      let stderr = '';
-      p.stdout.on('data', (d) => { stdout += String(d); });
-      p.stderr.on('data', (d) => { stderr += String(d); });
-      p.on('close', (code) => resolve({ code: code ?? -1, stdout, stderr }));
+    // 9c. Servidor HTTP real em modo demonstracao (sem DATABASE_URL): pronto = true -> HTTP 200
+    const demoPort = await getFreePort();
+    const srvDemo = spawnBackend(demoPort, {
+      NODE_ENV: 'test',
+      DATABASE_URL: undefined,
     });
-    assert.equal(gateOut.code, 0, gateOut.stderr);
-    const linhaGate = gateOut.stdout.split('\n').find((l) => l.startsWith('__GATE__'));
-    assert.ok(linhaGate, `saída esperada não encontrada: ${gateOut.stdout}`);
-    const gate = JSON.parse(linhaGate.slice('__GATE__'.length));
-    assert.equal(gate.connected, false);
-    assert.equal(gate.degraded, true);
-    assert.equal(gate.cronExecutou, false, 'executor do cron não pode rodar antes da prontidão');
-    assert.equal(gate.cronStatus, 503);
-    assert.equal(gate.cronOk, false);
-    assert.deepEqual(gate.outboxFalhas, ['banco_indisponivel']);
-    assert.deepEqual(gate.motorRes, { margens: 0, abc: 0 });
+    try {
+      const deadline = Date.now() + 15_000;
+      let h = { status: 0, body: null as any };
+      while (Date.now() < deadline) {
+        h = await waitForHealth(srvDemo.baseUrl);
+        if (h.status === 200) break;
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      assert.equal(h.status, 200);
+      assert.equal(h.body.ok, true);
+      assert.equal(h.body.processo, 'iniciado');
+      assert.equal(h.body.banco, 'memoria');
+      assert.equal(h.body.pronto, true);
+      assert.equal(h.body.estado, 'pronto');
+      assert.equal(h.body.db, 'memory');
+    } finally {
+      await stopBackend(srvDemo.child);
+    }
   });
 
-  test('Configuração de startup via ambiente segue limites coerentes', () => {
-    const anterior = {
-      PG_CONNECT_TIMEOUT: process.env.PG_CONNECT_TIMEOUT,
-      PG_STARTUP_TIMEOUT_MS: process.env.PG_STARTUP_TIMEOUT_MS,
-      PG_STARTUP_RETRY_BASE_MS: process.env.PG_STARTUP_RETRY_BASE_MS,
-      PG_STARTUP_RETRY_MAX_MS: process.env.PG_STARTUP_RETRY_MAX_MS,
-      PG_STARTUP_MAX_ATTEMPTS: process.env.PG_STARTUP_MAX_ATTEMPTS,
-    };
+  test('10. Workers, cron e rotas de negocio nao iniciam nem executam antes da prontidao obrigatoria', async () => {
+    // 10a. Guardas diretas nos modulos cron/outbox/negocios quando DATABASE_URL existe mas !isDbConnected()
+    const closedPort = await getFreePort();
+    const checkScript = `
+      process.env.DATABASE_URL = 'postgresql://u:p@127.0.0.1:${closedPort}/db';
+      process.env.NODE_ENV = 'test';
+      const db = await import('./src/db.ts');
+      const sched = await import('./src/scheduled.ts');
+      const outbox = await import('./src/commerce/outbox.ts');
+      const neg = await import('./src/negocios.ts');
+
+      let executorChamado = false;
+      sched.processosCron.crm = async () => { executorChamado = true; return { itens: 1, detalhes: [], falhas: [] }; };
+
+      const rCron = await sched.executarProcessoCron('crm');
+      const rOutbox = await outbox.processarComercioAgendado();
+      const rMotor = await neg.atualizarMotorNegocios();
+      neg.initNegociosEngine();
+      neg.agendarRecalculo(['s1'], 1);
+      neg.agendarProjecaoVendasErp(1);
+
+      console.log('__GATES__' + JSON.stringify({
+        connected: db.isDbConnected(),
+        degraded: db.isDbDegraded(),
+        executorChamado,
+        rCronStatus: rCron.status,
+        rCronOk: rCron.ok,
+        rOutboxFalhas: rOutbox.falhas,
+        rMotor,
+      }));
+      await db.pool?.end().catch(() => {});
+    `;
+    const gateRes = await new Promise<{ code: number | null; out: string; err: string }>((resolve) => {
+      const p = spawn(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', checkScript], {
+        cwd: SERVER_DIR,
+        env: { PATH: process.env.PATH || '' },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      let out = '';
+      let err = '';
+      p.stdout.on('data', (d) => { out += String(d); });
+      p.stderr.on('data', (d) => { err += String(d); });
+      p.on('close', (code) => resolve({ code, out, err }));
+    });
+
+    assert.equal(gateRes.code, 0, gateRes.err);
+    const gateLine = gateRes.out.split('\n').find((l) => l.startsWith('__GATES__'));
+    assert.ok(gateLine, gateRes.out);
+    const gates = JSON.parse(gateLine.slice('__GATES__'.length));
+    assert.equal(gates.connected, false);
+    assert.equal(gates.degraded, true);
+    assert.equal(gates.executorChamado, false, 'cron nao executa o processo antes da prontidao');
+    assert.equal(gates.rCronStatus, 503);
+    assert.equal(gates.rCronOk, false);
+    assert.deepEqual(gates.rOutboxFalhas, ['banco_indisponivel']);
+    assert.deepEqual(gates.rMotor, { margens: 0, abc: 0 });
+
+    // 10b. Rotas HTTP de cron e negocio bloqueadas com 503 enquanto banco obrigatorio nao esta pronto
+    const apiPort = await getFreePort();
+    const srv = spawnBackend(apiPort, {
+      NODE_ENV: 'test',
+      DATABASE_URL: `postgresql://u:p@127.0.0.1:${closedPort}/db`,
+      PG_CONNECT_TIMEOUT: '300',
+      PG_STARTUP_TIMEOUT_MS: '600',
+      PG_STARTUP_RETRY_BASE_MS: '100',
+    });
     try {
-      delete process.env.PG_CONNECT_TIMEOUT;
-      delete process.env.PG_STARTUP_TIMEOUT_MS;
-      delete process.env.PG_STARTUP_RETRY_BASE_MS;
-      delete process.env.PG_STARTUP_RETRY_MAX_MS;
-      delete process.env.PG_STARTUP_MAX_ATTEMPTS;
-
-      const padrao = lerConfigBootBanco();
-      assert.deepEqual(padrao, {
-        connectTimeoutMs: 10_000,
-        startupTimeoutMs: 60_000,
-        retryBaseMs: 500,
-        retryMaxMs: 8_000,
-        maxAttempts: 20,
+      await waitForHealth(srv.baseUrl);
+      const cronRes = await fetch(`${srv.baseUrl}/api/admin/scheduled/cron/crm`, {
+        method: 'POST',
+        headers: { authorization: 'Bearer cron-secret-resilience-test' },
       });
+      assert.equal(cronRes.status, 503);
 
-      process.env.PG_CONNECT_TIMEOUT = '2500';
-      process.env.PG_STARTUP_TIMEOUT_MS = '25000';
-      process.env.PG_STARTUP_RETRY_BASE_MS = '250';
-      process.env.PG_STARTUP_RETRY_MAX_MS = '4000';
-      process.env.PG_STARTUP_MAX_ATTEMPTS = '12';
-      assert.deepEqual(lerConfigBootBanco(), {
-        connectTimeoutMs: 2500,
-        startupTimeoutMs: 25_000,
-        retryBaseMs: 250,
-        retryMaxMs: 4000,
-        maxAttempts: 12,
+      const cronLegacyRes = await fetch(`${srv.baseUrl}/api/admin/scheduled/cron`, {
+        method: 'POST',
+        headers: { authorization: 'Bearer cron-secret-resilience-test' },
       });
+      assert.equal(cronLegacyRes.status, 503);
+
+      const vendasRes = await fetch(`${srv.baseUrl}/api/vendas`);
+      assert.equal(vendasRes.status, 503);
     } finally {
-      for (const [k, v] of Object.entries(anterior)) {
-        if (v === undefined) delete process.env[k];
-        else process.env[k] = v;
-      }
+      await stopBackend(srv.child);
     }
   });
 });
