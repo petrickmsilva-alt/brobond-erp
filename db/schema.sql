@@ -9074,3 +9074,30 @@ ALTER TABLE produtos ADD COLUMN IF NOT EXISTS estoque_seguranca INTEGER NOT NULL
 ALTER TABLE produtos ADD COLUMN IF NOT EXISTS lote_minimo_compra INTEGER NOT NULL DEFAULT 1;
 ALTER TABLE produtos ADD COLUMN IF NOT EXISTS multiplo_compra INTEGER NOT NULL DEFAULT 1;
 ALTER TABLE produtos ADD COLUMN IF NOT EXISTS lead_time_dias INTEGER;
+
+-- ============================================================================
+-- ESPELHO da migração 0108 — PROMOÇÃO COM ESCOPO, CANAL E PRECEDÊNCIA
+-- (a autoridade é db/migrations/0108_pim_pricing_promocao_escopo.sql; este
+--  espelho existe para o parser de schema e o contrato de colunas dos recursos)
+-- ============================================================================
+ALTER TABLE commerce_promocoes ADD COLUMN IF NOT EXISTS escopo TEXT NOT NULL DEFAULT 'pedido';
+ALTER TABLE commerce_promocoes ADD COLUMN IF NOT EXISTS canal TEXT NOT NULL DEFAULT 'todos';
+ALTER TABLE commerce_promocoes ADD COLUMN IF NOT EXISTS prioridade INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE IF NOT EXISTS commerce_promocao_alvos (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL REFERENCES empresas(id),
+  promocao_id INTEGER NOT NULL REFERENCES commerce_promocoes(id) ON DELETE CASCADE,
+  produto_id INTEGER REFERENCES produtos(id) ON DELETE CASCADE,
+  categoria_id INTEGER REFERENCES categorias(id) ON DELETE CASCADE,
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT commerce_promocao_alvos_exclusivo_ck CHECK (
+    (produto_id IS NOT NULL AND categoria_id IS NULL)
+    OR (produto_id IS NULL AND categoria_id IS NOT NULL)
+  )
+);
+CREATE INDEX IF NOT EXISTS commerce_promocao_alvos_promocao_idx
+  ON commerce_promocao_alvos (empresa_id, promocao_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_commerce_promocao_alvo_produto
+  ON commerce_promocao_alvos (promocao_id, produto_id) WHERE produto_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_commerce_promocao_alvo_categoria
+  ON commerce_promocao_alvos (promocao_id, categoria_id) WHERE categoria_id IS NOT NULL;

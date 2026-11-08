@@ -42,8 +42,8 @@ pendência declarada — nunca `pronto`.
 | Preço por canal / loja | **pronto** | `commerce_precos` (`store_key` RETAIL/WHOLESALE), `precoAutoridade.ts` |
 | Tabelas de preço com vigência/prioridade | **pronto** | `listas_preco` + `lista_preco_itens` (prioridade, vigência) |
 | Precedência explícita de política de preço | **parcial** | listas + `commerce_precos` + base coexistem; falta política por grupo de cliente/representante |
-| Motor de promoções | **parcial** | `commerce_promocoes` + `commerce/regras.ts` (maior desconto vence); sem kits, cupons progressivos, elegibilidade por cliente |
-| Simulação de preço / promoção | **parcial** | regra pura testável existe; simulador de impacto não |
+| Motor de promoções | **parcial (avançou)** | `commerce_promocoes` + `commerce/regras.ts` (maior desconto vence); **0108** entrega escopo produto/categoria, elegibilidade por canal, precedência determinística (maior desconto → prioridade → mais recente) e alvos (`commerce_promocao_alvos`); sem kits, cupons progressivos, elegibilidade por cliente |
+| Simulação de preço / promoção | **parcial (avançou)** | regra pura testável existe; **0108** entrega simulador de impacto (`POST /api/commerce/promocoes/simular` + tela `/commerce/promocoes/simulador`) que usa a MESMA regra do checkout |
 | Governança de aprovação de preço | **parcial** | `politicas_comerciais`; sem fluxo de aprovação dedicado |
 
 ## FASE 5 — Payments & OMS
@@ -70,7 +70,10 @@ pendência declarada — nunca `pronto`.
 2. **Fase 3 — WMS dirigido** (put-away/picking/packing por endereço, wave, contagem
    cíclica automatizada) — `GAP-P2-16`.
 3. **Fase 3 — Rastreabilidade ponta a ponta** — entregue no PR #117 (lote físico + consulta).
-4. **Fase 4 — Promoções e precedência de preço** (kits, cupons, elegibilidade, simulador).
+4. **Fase 4 — Promoções e precedência de preço** — **incremento entregue (0108)**:
+   escopo produto/categoria, canal, prioridade determinística, alvos e simulador de
+   impacto. Continuam abertos: kits/combos, cupons progressivos e elegibilidade por
+   cliente (exigem escopo comercial aprovado).
 5. **Fase 5 — OMS: máquina de estados versionada + conciliação automática de repasse.**
 
 > Decisões que continuam com o Diretor: `DEC-001`…`DEC-004` em `MASTER-BACKLOG.md`

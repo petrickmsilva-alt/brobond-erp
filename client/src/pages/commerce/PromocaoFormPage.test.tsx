@@ -76,7 +76,35 @@ describe('Commerce — Formulário de promoção (/commerce/promocoes/nova)', ()
     fireEvent.change(obrigatorios[1], { target: { value: '150' } });
     await user.click(screen.getByRole('button', { name: /salvar/i }));
     expect(await screen.findByText(/100%/)).toBeInTheDocument();
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(fetchMock.mock.calls.some((c) => c[0] === '/commerce/promocoes')).toBe(false);
     expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('escopo produto exige alvo e envia escopo+produtos ao criar (0108)', async () => {
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.startsWith('/categorias/options')) return [];
+      if (url.startsWith('/commerce/produtos')) return { produtos: [{ id: 7, sku: 'S7', nome: 'Camiseta Alvo' }] };
+      return { ok: true };
+    });
+    const user = userEvent.setup();
+    renderPagina();
+    await screen.findByPlaceholderText('Ex.: Volta às aulas');
+    preencherCriacao();
+
+    await user.selectOptions(screen.getByLabelText(/escopo/i), 'produto');
+    await user.click(screen.getByRole('button', { name: /salvar/i }));
+    expect(await screen.findByText(/ao menos um produto/i)).toBeInTheDocument();
+
+    await user.type(screen.getByPlaceholderText(/buscar produto/i), 'camiseta');
+    const alvo = await screen.findByRole('button', { name: /camiseta alvo/i });
+    await user.click(alvo);
+
+    await user.click(screen.getByRole('button', { name: /salvar/i }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/commerce/promocoes', expect.objectContaining({ method: 'POST' })));
+    const chamada = fetchMock.mock.calls.find((c) => c[0] === '/commerce/promocoes' && (c[1] as { method?: string })?.method === 'POST');
+    const corpo = JSON.parse(String((chamada?.[1] as { body?: string })?.body));
+    expect(corpo.escopo).toBe('produto');
+    expect(corpo.produtos).toEqual([7]);
+    expect(corpo.categorias).toEqual([]);
   });
 });

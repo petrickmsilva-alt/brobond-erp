@@ -1,25 +1,25 @@
 {
-  "gerado_em": "2026-11-08T17:16:27.539Z",
+  "gerado_em": "2026-11-08T18:43:54.712Z",
   "fonte_de_verdade_do_schema": "db/schema.sql + db/migrations/*.sql (PostgreSQL); Prisma = bounded context do commerce",
   "migrations": {
-    "sql": 107,
-    "sql_com_conteudo": 107,
+    "sql": 108,
+    "sql_com_conteudo": 108,
     "prisma": 7
   },
   "tabelas": {
-    "total": 216,
-    "com_empresa_id": 196,
+    "total": 217,
+    "com_empresa_id": 197,
     "sem_empresa_id": 20,
-    "fora_do_prisma": 205
+    "fora_do_prisma": 206
   },
-  "indices": 601,
-  "constraints": 403,
+  "indices": 605,
+  "constraints": 406,
   "recursos": {
-    "total": 178,
-    "com_tabela": 178,
-    "multiempresa": 160,
-    "somente_leitura": 84,
-    "rbac_restrito": 83,
+    "total": 179,
+    "com_tabela": 179,
+    "multiempresa": 161,
+    "somente_leitura": 85,
+    "rbac_restrito": 84,
     "cobertura_tenant_pct": 89.9
   },
   "crm": [
@@ -87,10 +87,10 @@
     "com_recurso": 109
   },
   "rotas": {
-    "total": 486,
+    "total": 487,
     "por_metodo": {
       "GET": 217,
-      "POST": 230,
+      "POST": 231,
       "PUT": 22,
       "DELETE": 14,
       "PATCH": 3
@@ -201,14 +201,14 @@
   },
   "testes": {
     "server": {
-      "arquivos": 298,
-      "casos": 2471
+      "arquivos": 302,
+      "casos": 2503
     },
     "client": {
       "arquivos": 133,
-      "casos": 1140
+      "casos": 1141
     },
-    "total": 3611
+    "total": 3644
   },
   "integracoes": {
     "arquivos_modules": 80,
@@ -434,11 +434,6 @@
       "nivel": "AVISO",
       "regra": "TENANT_SEM_TESTE",
       "mensagem": "O recurso \"woocommerce_reconciliacao_divergencias\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
-    },
-    {
-      "nivel": "AVISO",
-      "regra": "TENANT_SEM_TESTE",
-      "mensagem": "O recurso \"commerce_promocoes\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
     }
   ],
   "tabelas_sem_empresa_id": [
@@ -491,6 +486,7 @@
     "commerce_pedidos",
     "commerce_precos",
     "commerce_produtos",
+    "commerce_promocao_alvos",
     "commerce_promocoes",
     "commerce_publicacoes",
     "commerce_rastreio",

@@ -292,6 +292,124 @@ export function melhorDesconto(
 }
 
 // ----------------------------------------------------------------------------
+// Promoções com ESCOPO, CANAL e PRECEDÊNCIA (migração 0108)
+//
+// A promoção automática deixou de ser sempre "sobre o pedido inteiro". Cada
+// promoção declara:
+//   • escopo — 'pedido' (subtotal inteiro), 'produto' ou 'categoria' (só o
+//     subtotal ELEGÍVEL, dado pelos alvos);
+//   • canal  — 'todos' | 'varejo' | 'atacado' (restrição de elegibilidade);
+//   • prioridade — desempate determinístico (maior vence; empate → mais recente).
+//
+// Compatibilidade: uma promoção com escopo='pedido' e canal='todos' produz o
+// MESMO desconto de antes (a base elegível é o subtotal inteiro).
+// ----------------------------------------------------------------------------
+
+export type CanalPromocao = 'todos' | 'varejo' | 'atacado';
+export type EscopoPromocao = 'pedido' | 'produto' | 'categoria';
+
+/** Linha do carrinho vista pela avaliação de promoção (valores já resolvidos). */
+export type ItemElegivel = {
+  /** Subtotal da linha (preço unitário × quantidade), já arredondado. */
+  subtotal: number;
+  produtoId: number;
+  categoriaId: number | null;
+};
+
+export type PromocaoEscopada = {
+  id: number;
+  nome: string;
+  tipo: 'percentual' | 'valor';
+  valor: number;
+  minimoPedido?: number | null;
+  escopo: EscopoPromocao;
+  canal: CanalPromocao;
+  prioridade: number;
+  /** Produtos alvo (escopo 'produto'). */
+  alvosProduto: number[];
+  /** Categorias alvo (escopo 'categoria'). */
+  alvosCategoria: number[];
+};
+
+export type AvaliacaoPromocao = {
+  id: number;
+  nome: string;
+  desconto: number;
+  base: number;
+  prioridade: number;
+};
+
+/** A promoção vale neste canal? ('todos' sempre vale.) */
+export function canalElegivel(promocao: Pick<PromocaoEscopada, 'canal'>, canal: string | null | undefined): boolean {
+  if (promocao.canal === 'todos') return true;
+  return String(canal || '') === promocao.canal;
+}
+
+/** Subtotal alcançado pela promoção conforme o escopo (nunca negativo). */
+export function baseElegivel(promocao: PromocaoEscopada, itens: ItemElegivel[], subtotal: number): number {
+  if (promocao.escopo === 'produto') {
+    const alvos = new Set(promocao.alvosProduto.map(Number));
+    return round2(itens.filter((i) => alvos.has(Number(i.produtoId))).reduce((s, i) => s + Math.max(0, i.subtotal), 0));
+  }
+  if (promocao.escopo === 'categoria') {
+    const alvos = new Set(promocao.alvosCategoria.map(Number));
+    return round2(
+      itens.filter((i) => i.categoriaId != null && alvos.has(Number(i.categoriaId))).reduce((s, i) => s + Math.max(0, i.subtotal), 0)
+    );
+  }
+  return round2(Math.max(0, subtotal));
+}
+
+/**
+ * Desconto que UMA promoção escopada produz. `null` quando não se aplica
+ * (canal inelegível, nenhum item elegível, mínimo não atingido ou desconto 0).
+ *
+ * `minimo_pedido` é conferido contra o SUBTOTAL DO PEDIDO (semântica legada do
+ * campo); o desconto incide sobre a BASE ELEGÍVEL — nunca sobre o pedido
+ * inteiro quando o escopo é produto/categoria (senão descontaria item fora da
+ * regra). Para escopo='pedido' a base elegível É o subtotal: idêntico ao legado.
+ */
+export function avaliarPromocao(
+  promocao: PromocaoEscopada,
+  itens: ItemElegivel[],
+  subtotal: number,
+  canal?: string | null
+): AvaliacaoPromocao | null {
+  if (!canalElegivel(promocao, canal)) return null;
+  const pedido = Math.max(0, round2(subtotal));
+  if (pedido < Math.max(0, round2(promocao.minimoPedido ?? 0))) return null;
+  const base = baseElegivel(promocao, itens, pedido);
+  if (base <= 0) return null;
+  const desconto = descontoDaRegra(base, { tipo: promocao.tipo, valor: promocao.valor });
+  if (desconto <= 0) return null;
+  return { id: Number(promocao.id), nome: promocao.nome, desconto, base, prioridade: Number(promocao.prioridade ?? 0) };
+}
+
+/**
+ * Melhor promoção aplicável. Ordem determinística:
+ *   1) MAIOR desconto;
+ *   2) empate → MAIOR prioridade;
+ *   3) empate → MAIS RECENTE (maior id).
+ * Devolve também a avaliação de TODAS as candidatas (auditoria/simulador).
+ */
+export function melhorPromocaoEscopada(
+  promocoes: PromocaoEscopada[],
+  itens: ItemElegivel[],
+  subtotal: number,
+  canal?: string | null
+): { melhor: AvaliacaoPromocao | null; avaliacoes: AvaliacaoPromocao[] } {
+  const avaliacoes: AvaliacaoPromocao[] = [];
+  for (const p of promocoes) {
+    const av = avaliarPromocao(p, itens, subtotal, canal);
+    if (av) avaliacoes.push(av);
+  }
+  const ordenadas = [...avaliacoes].sort(
+    (a, b) => b.desconto - a.desconto || b.prioridade - a.prioridade || b.id - a.id
+  );
+  return { melhor: ordenadas[0] ?? null, avaliacoes: ordenadas };
+}
+
+// ----------------------------------------------------------------------------
 // Totais do checkout
 // ----------------------------------------------------------------------------
 

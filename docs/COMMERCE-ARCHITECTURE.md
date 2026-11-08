@@ -34,7 +34,8 @@
 | `commerce_publicacoes` | Fila multicanal | UNIQUE parcial por `(empresa_id, produto_id, canal)`; estados `DRAFT→QUEUED→PUBLISHING→PUBLISHED/ERROR/REJECTED`; `versao`, `tentativas`, `ultimo_erro`, `proxima_tentativa_em` |
 | `commerce_pedidos` | Pedido omnichannel | CHECK de canal com **6** valores (os 5 acima + `MERCADOPAGO`); `sale_id`→`sales`, `venda_id`→`vendas` (SET NULL), `cobranca_id`→`gateway_cobrancas` (SET NULL); estados `AGUARDANDO_PAGAMENTO … ERRO`; `chave_checkout` (idempotência do carrinho), `checkout_token` (credencial pública) |
 | `commerce_rastreio` | Rastreio da entrega | `venda_id` NOT NULL→`vendas` (NO ACTION); UNIQUE `(empresa_id, venda_id)` |
-| `commerce_promocoes` | Promoção automática da vitrine | período + mínimo; **não acumula** com cupom |
+| `commerce_promocoes` | Promoção automática da vitrine | período + mínimo; `escopo` (`pedido\|produto\|categoria`), `canal` (`todos\|varejo\|atacado`), `prioridade` (0108); **não acumula** com cupom |
+| `commerce_promocao_alvos` | Alvos da promoção escopada (0108) | `produto_id` OU `categoria_id` (CHECK exclusivo), `empresa_id`, `ON DELETE CASCADE`; UNIQUE parcial por alvo |
 | `commerce_cupons` | Cupom por código | `uso_maximo`/`uso_atual`, validade; exclusão com uso vira desativação |
 | `commerce_configuracoes` | Config da loja | frete (`nenhum\|retirada\|manual`), prazo, `checkout_expira_minutos`, `responsavelCheckout` |
 | `commerce_outbox` | Outbox de sincronização | `empresa_id,tipo,chave` únicos; `PENDENTE→PROCESSADO` com backoff (teto 1 h) |
@@ -49,14 +50,14 @@ declará-lo — DEFAULT 1 seria cross-tenant).
 
 | Módulo | Responsabilidade |
 |---|---|
-| `regras.ts` | Vocabulário e regras PURAS: transições de estado do pedido (9 estados), `estadoSeguraReserva`, preço efetivo/vigência, desconto/cupom sem acúmulo, `calcularTotaisCheckout` com **clamp por item** (nunca subtotal negativo), `round2` com nudge relativo, backoff de fila (teto 1 h), `tendenciaLinear`, `mapearEstadoPagamento` |
+| `regras.ts` | Vocabulário e regras PURAS: transições de estado do pedido (9 estados), `estadoSeguraReserva`, preço efetivo/vigência, desconto/cupom sem acúmulo, promoção ESCOPADA (`avaliarPromocao`/`melhorPromocaoEscopada`: maior desconto → prioridade → mais recente; base = subtotal elegível), `calcularTotaisCheckout` com **clamp por item** (nunca subtotal negativo), `round2` com nudge relativo, backoff de fila (teto 1 h), `tendenciaLinear`, `mapearEstadoPagamento` |
 | `frete.ts` | `FreightProvider`: `nenhum` \| `retirada` \| `manual`. Sem provedor → `disponivel:false` com a mensagem exata **“Frete não configurado”** (fail-closed) |
 | `loja-base.ts` | `empresaDaVitrine` (env → config única → fail-closed) e `responsavelCheckout` (dono operacional do checkout) |
 | `grade.ts` | Disponibilidade por tamanho, coerência com o estoque canônico |
 | `catalogo.ts` | Projeção (`projetarProdutoCommerce`), preço por canal, `enfileirarPublicacao` **idempotente** (catch `23505`), `processarPublicacao` com claim `tryUpdateIf`, `processarFilaPublicacoes` e publicadores: `BROBOND` (local, grava slug), `WOOCOMMERCE` (`wooFetch`), `MERCADOLIVRE`, `NUVEMSHOP`, `INSTAGRAM_SHOPPING` → **REJECTED honesto** (a Graph API não publica item individual) |
 | `vitrine.ts` | 6 rotas públicas `/api/loja/*` (`rateLimitPublico`): config, produtos, produto/:slug, preview, checkout, pedido/:token. Checkout em **tx serializable**: idempotência por `chave_checkout`, reserva de estoque, cupom, cria `sales` COM `empresa_id`, cria cobrança no gateway (backend); falhou → `falharCheckout` devolve estoque/cupom e marca `ERRO` |
 | `pedidos.ts` | `garantirPedidoDaSale` (catch `23505`), `converterPedidoSale` (ponte canônica, idempotente), `confirmarPagamentoCobranca` (ouvinte do gateway → `PAGO` + consumo de cupom), `expirarCheckoutsPendentes` (CAS `tryUpdateIf` + **retry 40001** `repetirSerial` — varredura × varredura nunca perde release), cancelamento devolve reserva/cupom |
-| `promocoes.ts` | `consumirUsoCupom` por CAS (`uso_atual`) → **409** quando esgotado; criação/edição/exclusão de promoções e cupons |
+| `promocoes.ts` | `promocoesVigentes` (com escopo/canal/prioridade e alvos), `melhorPromocaoDoCarrinho` (base elegível), `consumirUsoCupom` por CAS (`uso_atual`) → **409** quando esgotado; CRUD de promoções escopadas (alvos transacionais) e cupons; `POST /api/commerce/promocoes/simular` (mesma regra do checkout, nada é gravado) |
 | `analytics.ts` | `/commerce/trends`, `/commerce/analytics` — métricas reais da operação (período, série, tendência, top crescimento), `vazio` honesto |
 | `outbox.ts` | Fila de eventos (`pedido.convertido`, `evento.enviado`…) com tentativas/backoff |
 

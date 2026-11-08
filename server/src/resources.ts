@@ -6818,6 +6818,33 @@ export const RESOURCES: Record<string, Resource> = {
         ],
       },
       { name: 'valor', label: 'Valor', type: 'number', required: true, min: 0, hint: 'Percentual 0–100 ou valor em R$.' },
+      {
+        name: 'escopo',
+        label: 'Escopo',
+        type: 'select',
+        required: true,
+        default: 'pedido',
+        options: [
+          { value: 'pedido', label: 'Pedido inteiro', tone: 'slate' },
+          { value: 'produto', label: 'Produtos específicos', tone: 'blue' },
+          { value: 'categoria', label: 'Categorias', tone: 'amber' },
+        ],
+        hint: 'Produto/categoria descontam apenas o subtotal ELEGÍVEL (alvos), nunca o pedido inteiro.',
+      },
+      {
+        name: 'canal',
+        label: 'Canal',
+        type: 'select',
+        required: true,
+        default: 'todos',
+        options: [
+          { value: 'todos', label: 'Todos os canais', tone: 'slate' },
+          { value: 'varejo', label: 'Varejo', tone: 'green' },
+          { value: 'atacado', label: 'Atacado', tone: 'blue' },
+        ],
+        hint: 'Restringe a elegibilidade ao canal do cliente.',
+      },
+      { name: 'prioridade', label: 'Prioridade', type: 'integer', default: 0, hint: 'Desempate quando dois descontos empatam (maior vence; empate → a mais recente).' },
       { name: 'minimo_pedido', label: 'Pedido mínimo (R$)', type: 'money', min: 0, default: 0 },
       { name: 'data_inicio', label: 'Início', type: 'date', required: true },
       { name: 'data_fim', label: 'Fim', type: 'date', list: true, hint: 'Vazio = sem fim programado.' },
@@ -6827,6 +6854,26 @@ export const RESOURCES: Record<string, Resource> = {
     ],
     filterFields: ['tipo', 'ativo'],
     orderBy: { field: 'id', dir: 'desc' },
+  },
+
+  commerce_promocao_alvos: {
+    key: 'commerce_promocao_alvos',
+    empresa: true,
+    internal: true,
+    table: 'commerce_promocao_alvos',
+    label: 'Alvos da Promoção',
+    singular: 'Alvo',
+    labelFields: ['promocao_id'],
+    minPerfil: 'gerente',
+    ops: { create: false, update: false, delete: false },
+    notice:
+      'Alvos de uma promoção escopada (produto OU categoria). Gerenciados pela própria promoção em commerce/promocoes.ts; nunca expostos como CRUD.',
+    fields: [
+      { name: 'promocao_id', label: 'Promoção', type: 'ref', ref: 'commerce_promocoes' },
+      { name: 'produto_id', label: 'Produto', type: 'ref', ref: 'produtos' },
+      { name: 'categoria_id', label: 'Categoria', type: 'ref', ref: 'categorias' },
+      { name: 'criado_em', label: 'Criado em', type: 'datetime', readonly: true, list: false },
+    ],
   },
 
   commerce_cupons: {

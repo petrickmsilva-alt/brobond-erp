@@ -56,6 +56,7 @@ const CommerceProdutoNovoPage = lazy(() => import('./pages/commerce/ProdutoNovoP
 const CommerceProdutoDetalhePage = lazy(() => import('./pages/commerce/ProdutoDetalhePage'));
 const CommercePedidoDetalhePage = lazy(() => import('./pages/commerce/PedidoDetalhePage'));
 const CommercePromocaoFormPage = lazy(() => import('./pages/commerce/PromocaoFormPage'));
+const CommercePromocaoSimuladorPage = lazy(() => import('./pages/commerce/PromocaoSimuladorPage'));
 const CommerceCupomFormPage = lazy(() => import('./pages/commerce/CupomFormPage'));
 // Publicações: fila → nova/detalhe/editar em rota própria (CRIAR→EDITAR→SALVAR
 // →PUBLICAR→DESPUBLICAR→REPROCESSAR sem modal).
@@ -549,6 +550,7 @@ export default function App() {
             <Route path="commerce/produtos/:id" element={<ModuleAccess moduleId="commerce-produtos"><CommerceProdutoDetalhePage /></ModuleAccess>} />
             <Route path="commerce/pedidos/:saleId" element={<ModuleAccess moduleId="commerce-pedidos"><CommercePedidoDetalhePage /></ModuleAccess>} />
             <Route path="commerce/promocoes/nova" element={<ModuleAccess moduleId="commerce-promocoes"><CommercePromocaoFormPage /></ModuleAccess>} />
+            <Route path="commerce/promocoes/simulador" element={<ModuleAccess moduleId="commerce-promocoes"><CommercePromocaoSimuladorPage /></ModuleAccess>} />
             <Route path="commerce/promocoes/:id/editar" element={<ModuleAccess moduleId="commerce-promocoes"><CommercePromocaoFormPage /></ModuleAccess>} />
             <Route path="commerce/cupons/novo" element={<ModuleAccess moduleId="commerce-cupons"><CommerceCupomFormPage /></ModuleAccess>} />
             <Route path="commerce/cupons/:id/editar" element={<ModuleAccess moduleId="commerce-cupons"><CommerceCupomFormPage /></ModuleAccess>} />
