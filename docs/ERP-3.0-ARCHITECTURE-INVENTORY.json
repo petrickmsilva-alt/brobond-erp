@@ -1,26 +1,26 @@
 {
-  "gerado_em": "2026-11-08T22:49:46.019Z",
+  "gerado_em": "2026-11-08T23:25:00.670Z",
   "fonte_de_verdade_do_schema": "db/schema.sql + db/migrations/*.sql (PostgreSQL); Prisma = bounded context do commerce",
   "migrations": {
-    "sql": 111,
-    "sql_com_conteudo": 111,
+    "sql": 112,
+    "sql_com_conteudo": 112,
     "prisma": 7
   },
   "tabelas": {
-    "total": 219,
-    "com_empresa_id": 199,
+    "total": 221,
+    "com_empresa_id": 201,
     "sem_empresa_id": 20,
-    "fora_do_prisma": 208
+    "fora_do_prisma": 210
   },
-  "indices": 613,
-  "constraints": 413,
+  "indices": 619,
+  "constraints": 422,
   "recursos": {
-    "total": 181,
-    "com_tabela": 181,
-    "multiempresa": 163,
-    "somente_leitura": 87,
-    "rbac_restrito": 86,
-    "cobertura_tenant_pct": 90.1
+    "total": 183,
+    "com_tabela": 183,
+    "multiempresa": 165,
+    "somente_leitura": 88,
+    "rbac_restrito": 88,
+    "cobertura_tenant_pct": 90.2
   },
   "crm": [
     {
@@ -79,18 +79,18 @@
     }
   ],
   "modulos": {
-    "total": 148,
-    "navegaveis": 148,
+    "total": 151,
+    "navegaveis": 151,
     "planejados": 0,
     "areas": 11,
     "grupos": 35,
-    "com_recurso": 110
+    "com_recurso": 112
   },
   "rotas": {
-    "total": 494,
+    "total": 500,
     "por_metodo": {
-      "GET": 221,
-      "POST": 234,
+      "GET": 223,
+      "POST": 238,
       "PUT": 22,
       "DELETE": 14,
       "PATCH": 3
@@ -201,14 +201,14 @@
   },
   "testes": {
     "server": {
-      "arquivos": 306,
-      "casos": 2533
+      "arquivos": 307,
+      "casos": 2547
     },
     "client": {
-      "arquivos": 136,
-      "casos": 1150
+      "arquivos": 138,
+      "casos": 1155
     },
-    "total": 3683
+    "total": 3702
   },
   "integracoes": {
     "arquivos_modules": 81,
@@ -393,11 +393,6 @@
     {
       "nivel": "AVISO",
       "regra": "TENANT_SEM_TESTE",
-      "mensagem": "O recurso \"service_tickets\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
-    },
-    {
-      "nivel": "AVISO",
-      "regra": "TENANT_SEM_TESTE",
       "mensagem": "O recurso \"devolucoes_fornecedor\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
     },
     {
@@ -459,6 +454,8 @@
     "ai_prompts",
     "ai_providers",
     "ai_recommendations",
+    "alert_events",
+    "alert_rules",
     "aportes",
     "arquivos",
     "auditoria",

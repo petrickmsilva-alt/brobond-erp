@@ -9187,3 +9187,75 @@ CREATE INDEX IF NOT EXISTS commerce_reconciliacao_store_idx
 CREATE INDEX IF NOT EXISTS commerce_reconciliacao_produto_idx
   ON commerce_reconciliacao (empresa_id, produto_id)
   WHERE produto_id IS NOT NULL;
+
+-- ============================================================================
+-- ESPELHO da migração 0112 — BI & AI CONTROL TOWER (FASE 8): ALERTAS
+-- (a autoridade é db/migrations/0112_fase8_alerts_control_tower.sql;
+--  este espelho existe para o parser de schema e o contrato de colunas)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS alert_rules (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL REFERENCES empresas(id),
+  chave TEXT NOT NULL,
+  nome TEXT NOT NULL,
+  dominio TEXT NOT NULL,
+  CONSTRAINT alert_rules_dominio_ck CHECK (dominio IN (
+    'estoque', 'vendas', 'financeiro', 'operacao', 'atendimento', 'marketing', 'integracoes'
+  )),
+  severidade TEXT NOT NULL DEFAULT 'media',
+  CONSTRAINT alert_rules_severidade_ck CHECK (severidade IN ('baixa', 'media', 'alta', 'critica')),
+  limiar JSONB NOT NULL DEFAULT '{}'::jsonb,
+  ativo BOOLEAN NOT NULL DEFAULT true,
+  canal TEXT NOT NULL DEFAULT 'interno',
+  CONSTRAINT alert_rules_canal_ck CHECK (canal IN ('interno', 'email', 'whatsapp', 'sms', 'push', 'portal')),
+  destinatarios JSONB NOT NULL DEFAULT '[]'::jsonb,
+  frequencia_minima_min INTEGER NOT NULL DEFAULT 0,
+  CONSTRAINT alert_rules_frequencia_ck CHECK (frequencia_minima_min >= 0),
+  silenciado_ate TIMESTAMPTZ,
+  criado_por INTEGER REFERENCES usuarios(id),
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  atualizado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT alert_rules_nome_obrigatorio CHECK (TRIM(COALESCE(nome, '')) <> '')
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_alert_rules_empresa_chave
+  ON alert_rules (empresa_id, chave);
+CREATE INDEX IF NOT EXISTS alert_rules_empresa_dominio_idx
+  ON alert_rules (empresa_id, dominio, ativo);
+
+CREATE TABLE IF NOT EXISTS alert_events (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL REFERENCES empresas(id),
+  regra_id INTEGER REFERENCES alert_rules(id) ON DELETE SET NULL,
+  regra_chave TEXT NOT NULL,
+  dominio TEXT NOT NULL,
+  severidade TEXT NOT NULL DEFAULT 'media',
+  CONSTRAINT alert_events_severidade_ck CHECK (severidade IN ('baixa', 'media', 'alta', 'critica')),
+  titulo TEXT NOT NULL,
+  detalhe TEXT NOT NULL,
+  evidencia JSONB NOT NULL DEFAULT '{}'::jsonb,
+  fingerprint TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'ABERTO',
+  CONSTRAINT alert_events_status_ck CHECK (status IN ('ABERTO', 'CIENTE', 'RESOLVIDO', 'SILENCIADO')),
+  ocorrencias INTEGER NOT NULL DEFAULT 1,
+  CONSTRAINT alert_events_ocorrencias_ck CHECK (ocorrencias >= 1),
+  primeira_deteccao TIMESTAMPTZ NOT NULL DEFAULT now(),
+  ultima_deteccao TIMESTAMPTZ NOT NULL DEFAULT now(),
+  ultima_notificacao_em TIMESTAMPTZ,
+  reconhecido_por INTEGER REFERENCES usuarios(id),
+  reconhecido_em TIMESTAMPTZ,
+  resolvido_por INTEGER REFERENCES usuarios(id),
+  resolvido_em TIMESTAMPTZ,
+  resolucao TEXT,
+  silenciado_ate TIMESTAMPTZ,
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  atualizado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT alert_events_titulo_obrigatorio CHECK (TRIM(COALESCE(titulo, '')) <> '')
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_alert_events_fingerprint
+  ON alert_events (empresa_id, fingerprint);
+CREATE INDEX IF NOT EXISTS alert_events_painel_idx
+  ON alert_events (empresa_id, status, severidade, ultima_deteccao DESC);
+CREATE INDEX IF NOT EXISTS alert_events_dominio_idx
+  ON alert_events (empresa_id, dominio, status);
+CREATE INDEX IF NOT EXISTS alert_events_regra_idx
+  ON alert_events (empresa_id, regra_chave, status);
