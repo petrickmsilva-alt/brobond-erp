@@ -2887,6 +2887,7 @@ export const RESOURCES: Record<string, Resource> = {
       { name: 'estornado_em', label: 'Estornado em', type: 'datetime', list: false },
       { name: 'estornado_por', label: 'Estornado por', type: 'text', list: false },
       { name: 'movimentacao_estorno_id', label: 'Movimentação de estorno', type: 'ref', ref: 'movimentacoes', list: false },
+      { name: 'devolucao_fornecedor_id', label: 'Devolução ao fornecedor', type: 'integer', readonly: true, list: false, form: false },
       { name: 'data', label: 'Data', type: 'datetime', readonly: true },
       { name: 'inventario_id', label: 'Inventário de origem', type: 'ref', ref: 'inventarios', readonly: true, list: false },
     ],
@@ -3700,6 +3701,7 @@ export const RESOURCES: Record<string, Resource> = {
       // E2: vínculo FORMAL com a OP que consumiu o insumo (antes só o texto do
       // motivo ligava as duas coisas, e o estorno dependia de dar match nele).
       { name: 'ordem_id', label: 'Ordem de fabricação', type: 'ref', ref: 'ordens', search: true, hint: 'Preenchido automaticamente no consumo por OP.' },
+      { name: 'devolucao_fornecedor_id', label: 'Devolução ao fornecedor', type: 'integer', readonly: true, list: false, form: false },
       { name: 'data', label: 'Data', type: 'datetime', readonly: true },
     ],
     orderBy: { field: 'data', dir: 'desc' },
@@ -5190,6 +5192,117 @@ export const RESOURCES: Record<string, Resource> = {
       { name: 'item_compra_id', label: 'Item da compra', type: 'ref', ref: 'itens_compra' },
       { name: 'quantidade', label: 'Quantidade', type: 'number' },
     ],
+  },
+
+  // ==========================================================================
+  // DEVOLUÇÃO AO FORNECEDOR — SUPPLY CHAIN (migration 0105)
+  //
+  // Operação inversa do recebimento: devolve ao fornecedor mercadoria recibada
+  // (avaria, divergência de qualidade, compra errada, recall). O documento tem
+  // estados e trilha; o SALDO só muda na expedição, pela movimentação oficial
+  // de SAÍDA. Nada é apagado (CANCELADA é estado).
+  //
+  // Escrita fora do CRUD genérico: criar/autorizar/expedir/encerrar/cancelar
+  // passam por server/src/devolucaoFornecedor.ts, que valida o recebido e lança
+  // a baixa na mesma transação. O CRUD aqui é leitura.
+  // ==========================================================================
+  devolucoes_fornecedor: {
+    key: 'devolucoes_fornecedor',
+    empresa: true,
+    table: 'devolucoes_fornecedor',
+    label: 'Devoluções ao fornecedor',
+    singular: 'Devolução ao fornecedor',
+    labelFields: ['numero'],
+    detail: true,
+    ops: READ_ONLY,
+    minPerfil: 'gerente',
+    notice:
+      'Solicitada → Autorizada → Expedida → Encerrada (ou Cancelada antes de expedir). A baixa de estoque acontece uma única vez, na expedição, pela movimentação oficial de saída.',
+    fields: [
+      { name: 'numero', label: 'Número', type: 'text', maxLength: 40, search: true },
+      { name: 'compra_id', label: 'Pedido de compra', type: 'ref', ref: 'compras', required: true, search: true },
+      { name: 'fornecedor_id', label: 'Fornecedor', type: 'ref', ref: 'fornecedores', required: true, search: true },
+      {
+        name: 'status',
+        label: 'Status',
+        type: 'select',
+        required: true,
+        readonly: true,
+        options: [
+          { value: 'solicitada', label: 'Solicitada', tone: 'amber' },
+          { value: 'autorizada', label: 'Autorizada', tone: 'blue' },
+          { value: 'expedida', label: 'Expedida', tone: 'blue' },
+          { value: 'encerrada', label: 'Encerrada', tone: 'green' },
+          { value: 'cancelada', label: 'Cancelada', tone: 'red' },
+        ],
+      },
+      { name: 'motivo', label: 'Motivo', type: 'text', required: true, maxLength: 500, wide: true },
+      { name: 'local_origem_id', label: 'Local de origem', type: 'ref', ref: 'locais', search: true },
+      { name: 'documento_origem', label: 'Documento de origem', type: 'text', maxLength: 120, list: false },
+      { name: 'idempotency_key', label: 'Chave de idempotência', type: 'text', maxLength: 160, readonly: true, list: false, form: false },
+      { name: 'solicitante_id', label: 'Solicitante', type: 'ref', ref: 'usuarios', readonly: true },
+      { name: 'autorizador_id', label: 'Autorizador', type: 'ref', ref: 'usuarios', readonly: true, list: false },
+      { name: 'solicitada_em', label: 'Solicitada em', type: 'datetime', readonly: true, list: false },
+      { name: 'autorizada_em', label: 'Autorizada em', type: 'datetime', readonly: true, list: false },
+      { name: 'expedida_em', label: 'Expedida em', type: 'datetime', readonly: true },
+      { name: 'encerrada_em', label: 'Encerrada em', type: 'datetime', readonly: true, list: false },
+      { name: 'cancelada_em', label: 'Cancelada em', type: 'datetime', readonly: true, list: false },
+      { name: 'motivo_cancelamento', label: 'Motivo do cancelamento', type: 'text', readonly: true, list: false, wide: true },
+      { name: 'observacoes', label: 'Observações', type: 'textarea', readonly: true, list: false, wide: true },
+      ...auditFields,
+    ],
+    orderBy: { field: 'id', dir: 'desc' },
+    filterFields: ['status', 'compra_id', 'fornecedor_id'],
+    uso: { recurso: 'devolucao_fornecedor_itens', campo: 'devolucao_id', singular: 'item', plural: 'itens' },
+  },
+
+  devolucao_fornecedor_itens: {
+    key: 'devolucao_fornecedor_itens',
+    empresa: true,
+    internal: true,
+    table: 'devolucao_fornecedor_itens',
+    label: 'Itens da devolução ao fornecedor',
+    singular: 'Item da devolução',
+    labelFields: ['id'],
+    ops: READ_ONLY,
+    minPerfil: 'gerente',
+    fields: [
+      { name: 'devolucao_id', label: 'Devolução', type: 'ref', ref: 'devolucoes_fornecedor', required: true, search: true },
+      { name: 'item_compra_id', label: 'Item da compra', type: 'ref', ref: 'itens_compra', required: true, search: true },
+      { name: 'produto_id', label: 'Produto', type: 'ref', ref: 'produtos', search: true },
+      { name: 'tamanho_id', label: 'Tamanho', type: 'ref', ref: 'tamanhos' },
+      { name: 'insumo_id', label: 'Insumo', type: 'ref', ref: 'insumos', list: false },
+      { name: 'quantidade', label: 'Quantidade', type: 'number', required: true },
+      { name: 'custo_unitario', label: 'Custo unitário (R$)', type: 'money', readonly: true },
+      { name: 'estoque_baixado', label: 'Estoque baixado', type: 'boolean', readonly: true },
+      { name: 'movimentacao_id', label: 'Movimentação', type: 'integer', readonly: true, list: false, form: false },
+      { name: 'movimentacao_insumo_id', label: 'Movimentação de insumo', type: 'integer', readonly: true, list: false, form: false },
+    ],
+    filterFields: ['devolucao_id'],
+    orderBy: { field: 'id', dir: 'asc' },
+  },
+
+  devolucao_fornecedor_eventos: {
+    key: 'devolucao_fornecedor_eventos',
+    empresa: true,
+    internal: true,
+    table: 'devolucao_fornecedor_eventos',
+    label: 'Eventos da devolução ao fornecedor',
+    singular: 'Evento',
+    labelFields: ['status_novo'],
+    ops: READ_ONLY,
+    minPerfil: 'gerente',
+    notice: 'Trilha imutável da devolução: cada mudança de estado com usuário, data e observação.',
+    fields: [
+      { name: 'devolucao_id', label: 'Devolução', type: 'ref', ref: 'devolucoes_fornecedor', required: true, search: true },
+      { name: 'status_anterior', label: 'De', type: 'text' },
+      { name: 'status_novo', label: 'Para', type: 'text', required: true, search: true },
+      { name: 'usuario_id', label: 'Usuário', type: 'ref', ref: 'usuarios' },
+      { name: 'observacao', label: 'Observação', type: 'text', maxLength: 300, wide: true },
+      { name: 'criado_em', label: 'Quando', type: 'datetime', readonly: true },
+    ],
+    orderBy: { field: 'criado_em', dir: 'desc' },
+    filterFields: ['devolucao_id', 'status_novo'],
   },
 
   // ==========================================================================

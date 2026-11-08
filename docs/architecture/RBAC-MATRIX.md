@@ -29,7 +29,7 @@ Regras aplicadas por `checkAccess(r, actor, op)`:
 > **O perfil vem sempre da identidade autenticada** — nunca de `role` ou
 > `empresa_id` enviados pelo cliente.
 
-## 2. Matriz por recurso (174 recursos)
+## 2. Matriz por recurso (177 recursos)
 
 Colunas: **Recurso** · **Perfil mínimo** (regra de acesso) · **Ops** (C=incluir,
 U=alterar, D=excluir no CRUD genérico; `-` = somente leitura) · **Tabela** ·
@@ -96,7 +96,10 @@ U=alterar, D=excluir no CRUD genérico; `-` = somente leitura) · **Tabela** ·
 | `customer_segments` | gerente | CUD | customer_segments | sim |
 | `demand_forecasts` | gerente | - | demand_forecasts | sim |
 | `devolucao_itens` | operador+ (leitura) | - | devolucao_itens | sim |
+| `devolucao_fornecedor_eventos` | gerente | - | devolucao_fornecedor_eventos | sim |
+| `devolucao_fornecedor_itens` | gerente | - | devolucao_fornecedor_itens | sim |
 | `devolucoes` | operador+ (leitura) | - | devolucoes | sim |
+| `devolucoes_fornecedor` | gerente | - | devolucoes_fornecedor | sim |
 | `divergencias_conferencia` | operador+ (leitura) | U | divergencias_conferencia | sim |
 | `documentos_fiscais` | operador+ (leitura) | - | documentos_fiscais | sim |
 | `documentos_fiscais_eventos` | operador+ (leitura) | - | documentos_fiscais_eventos | sim |
