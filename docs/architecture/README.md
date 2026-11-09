@@ -60,6 +60,11 @@ Documentos de **Fase 2** (núcleo canônico de dados):
 - [`DATA-QUALITY-REPORT.md`](DATA-QUALITY-REPORT.md)
 - [`NATIVE-STORE-DECOMMISSION-REPORT.md`](NATIVE-STORE-DECOMMISSION-REPORT.md)
 
+Documentos de **Fases 6–9** (commerce, CRM, BI/Control Tower, integridade, UX):
+
+- [`../FASE-8-BI-AI-CONTROL-TOWER.md`](../FASE-8-BI-AI-CONTROL-TOWER.md)
+- [`../FASE-9-INTEGRIDADE-CRM-UX.md`](../FASE-9-INTEGRIDADE-CRM-UX.md)
+
 ---
 
 ## 2. Relação com a documentação existente

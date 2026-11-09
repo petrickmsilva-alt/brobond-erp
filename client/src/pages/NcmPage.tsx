@@ -20,6 +20,7 @@ import { api, ApiError } from '../lib/api';
 import { formatDateTime } from '../lib/format';
 import type { ListResult } from '../lib/meta';
 import { Alert, Badge, ConfirmacaoInline, EmptyState, PageHeader, Spinner, useToast } from '../components/ui';
+import { PageShell } from '../components/ui-kit-negocios';
 import { useAuth } from '../auth/AuthContext';
 
 type ImpostoNcm = {
@@ -109,7 +110,7 @@ export default function NcmPage() {
   const padrao = linhas.find(ehPadrao) ?? null;
 
   return (
-    <div className="space-y-4">
+    <PageShell>
       <PageHeader
         title="NCM / Tributação"
         description="Alíquotas por NCM usadas pelo motor de impostos de cada venda. O motor aplica sempre a chave mais longa que casa com o NCM do produto; a chave vazia é a alíquota PADRÃO. Sem nenhuma chave casando, o imposto é 0%."
@@ -232,6 +233,6 @@ export default function NcmPage() {
         onConfirm={() => void excluir()}
         onCancel={() => setExcluindo(null)}
       />
-    </div>
+    </PageShell>
   );
 }

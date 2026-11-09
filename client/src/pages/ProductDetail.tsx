@@ -5,7 +5,8 @@ import { api } from '../lib/api';
 import { useMeta, type PublicFile } from '../lib/meta';
 import { useAuth } from '../auth/AuthContext';
 import { formatDate, formatDateTime, formatMoney, formatNumber } from '../lib/format';
-import { Alert, Badge, PageHeader, Spinner } from '../components/ui';
+import { Alert, Badge, PageHeader } from '../components/ui';
+import { PageLoading, PageShell } from '../components/ui-kit-negocios';
 import { ColorDot, ImageField, Lightbox } from '../components/ImageField';
 import { LabelSheet } from '../components/LabelSheet';
 
@@ -69,14 +70,14 @@ export default function ProductDetail() {
 
   if (error)
     return (
-      <div className="p-4 sm:p-6">
+      <PageShell>
         <Alert tone="red">{error}</Alert>
         <Link to="/produtos" className="btn-secondary mt-4">
           <ArrowLeft className="h-4 w-4" /> Voltar para Produtos
         </Link>
-      </div>
+      </PageShell>
     );
-  if (!data) return <Spinner />;
+  if (!data) return <PageLoading  />;
 
   const p = data.produto;
   const fotos = p.fotos || [];
@@ -85,7 +86,7 @@ export default function ProductDetail() {
   const corHex = p.cor_id__color || null;
 
   return (
-    <div className="p-4 sm:p-6">
+    <PageShell>
       <PageHeader
         title={
           <span className="flex items-center gap-2.5">
@@ -376,7 +377,7 @@ export default function ProductDetail() {
           <Barcode className="h-3.5 w-3.5" /> Dica: cadastre o código de barras (EAN) para que as etiquetas saiam com o código comercial em vez do SKU interno.
         </p>
       )}
-    </div>
+    </PageShell>
   );
 }
 

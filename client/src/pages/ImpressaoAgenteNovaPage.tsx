@@ -13,6 +13,7 @@ import { KeyRound, Loader2, ShieldCheck } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { gerarCodigoPareamentoAgente, getPreferredTerminal } from '../lib/printAgent';
 import { Alert, PageHeader, useToast } from '../components/ui';
+import { PageShell } from '../components/ui-kit-negocios';
 import { useAuth } from '../auth/AuthContext';
 
 function fmtDataHora(iso?: string | null): string {
@@ -54,18 +55,18 @@ export default function ImpressaoAgenteNovaPage() {
 
   if (!isGestor) {
     return (
-      <div className="space-y-4 p-4 sm:p-6">
+      <PageShell>
         <PageHeader title="Parear novo agente local" description="Pareamento de máquinas de impressão." />
         <Alert tone="amber">Somente gerentes e administradores pareiam agentes de impressão.</Alert>
         <button className="btn-secondary" onClick={() => navigate('/config/impressao')}>
           Voltar
         </button>
-      </div>
+      </PageShell>
     );
   }
 
   return (
-    <div className="space-y-4 p-4 sm:p-6">
+    <PageShell>
       <PageHeader
         title={
           <span className="flex items-center gap-2.5">
@@ -141,6 +142,6 @@ export default function ImpressaoAgenteNovaPage() {
           </div>
         )}
       </div>
-    </div>
+    </PageShell>
   );
 }

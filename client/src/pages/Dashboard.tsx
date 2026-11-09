@@ -18,6 +18,7 @@ import { Link } from 'react-router-dom';
 import { Banknote, Boxes, ChevronRight, Cog, Factory, Package, RotateCcw, ShoppingCart, Store, Wallet, Receipt, Warehouse } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
 import { PageHeader, Alert } from '../components/ui';
+import { PageShell } from '../components/ui-kit-negocios';
 import { CardHeader, ErrorState, LoadingState, StatCard } from '../components/ui-kit-negocios';
 import { centavosParaReais, formatMoney, formatNumber, formatPct } from '../lib/format';
 import { dataISO, janelaDoPeriodo, variacaoPct } from '../lib/periodo';
@@ -143,7 +144,7 @@ export default function Dashboard() {
   const atualizarTudo = () => raizes.forEach((q) => q.reload());
 
   return (
-    <div className="space-y-4 p-4 sm:p-6">
+    <PageShell>
       <PageHeader
         title="Meu Negócio"
         description={`${greeting}${firstName ? `, ${firstName}` : ''} — como a operação está agora, com comparação ao período anterior.`}
@@ -379,7 +380,7 @@ export default function Dashboard() {
           <QuickLink to="/compras" icon={ShoppingCart} title="Registrar compra" text="Pedidos de insumos por fornecedor." />
         </div>
       </div>
-    </div>
+    </PageShell>
   );
 }
 

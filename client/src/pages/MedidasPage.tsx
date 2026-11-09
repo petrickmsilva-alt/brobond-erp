@@ -4,6 +4,7 @@ import { CheckCircle, ClipboardCopy, Copy, Info, Loader2, Plus, Printer, Ruler, 
 import { api } from '../lib/api';
 import { formatDateTime, formatNumber } from '../lib/format';
 import { Alert, Badge, ConfirmacaoInline, PainelInline, PageHeader, Spinner, useToast } from '../components/ui';
+import { PageShell } from '../components/ui-kit-negocios';
 import { useAuth } from '../auth/AuthContext';
 
 type Tamanho = { id: number; codigo: string };
@@ -413,7 +414,7 @@ export default function MedidasPage() {
   const podeImprimir = cols.some((c) => c.nome.trim()) && tamanhos.length > 0;
 
   return (
-    <div className="space-y-4">
+    <PageShell>
       <PageHeader
         title={
           <span className="flex items-center gap-2.5">
@@ -844,6 +845,6 @@ export default function MedidasPage() {
           </span>
         </label>
       </PainelInline>
-    </div>
+    </PageShell>
   );
 }

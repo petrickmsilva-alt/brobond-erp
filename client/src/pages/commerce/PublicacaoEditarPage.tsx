@@ -11,7 +11,8 @@ import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, RefreshCw, Save } from 'lucide-react';
 import { apiFetch, ApiError } from '../../lib/api';
-import { Alert, PageHeader, Spinner, useToast } from '../../components/ui';
+import { Alert, PageHeader, useToast } from '../../components/ui';
+import { PageLoading } from '../../components/ui-kit-negocios';
 import { rotuloCanal } from './shared';
 
 type Detalhe = {
@@ -110,7 +111,7 @@ export default function CommercePublicacaoEditarPage() {
     }
   };
 
-  if (carregando) return <Spinner label="Carregando publicação…" />;
+  if (carregando) return <PageLoading label="Carregando publicação…" />;
   if (!detalhe) {
     return (
       <div className="space-y-4">

@@ -14,6 +14,7 @@ import { Loader2, Save, Wrench } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { atualizarAgenteImpressao, listarAgentesImpressao, type AgenteRemotoCliente } from '../lib/printAgent';
 import { Alert, Badge, PageHeader, Spinner, useToast } from '../components/ui';
+import { PageShell } from '../components/ui-kit-negocios';
 import { useAuth } from '../auth/AuthContext';
 
 function fmtDataHora(iso?: string | null): string {
@@ -78,18 +79,18 @@ export default function ImpressaoAgenteEdicaoPage() {
 
   if (!isGestor) {
     return (
-      <div className="space-y-4 p-4 sm:p-6">
+      <PageShell>
         <PageHeader title="Configurar agente" description="Configuração de agentes de impressão." />
         <Alert tone="amber">Somente gerentes e administradores configuram agentes de impressão.</Alert>
         <button className="btn-secondary" onClick={() => navigate('/config/impressao')}>
           Voltar
         </button>
-      </div>
+      </PageShell>
     );
   }
 
   return (
-    <div className="space-y-4 p-4 sm:p-6">
+    <PageShell>
       <PageHeader
         title={
           <span className="flex items-center gap-2.5">
@@ -143,6 +144,6 @@ export default function ImpressaoAgenteEdicaoPage() {
           </p>
         </div>
       )}
-    </div>
+    </PageShell>
   );
 }

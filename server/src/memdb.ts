@@ -231,6 +231,15 @@ export class MemStore implements Store {
         continue;
       }
       if (!cols0.has(k)) continue;
+      // Conjunto de igualdade: `{ sale_id: [idA, idB] }` restringe a coluna a
+      // QUALQUER um dos valores — o mesmo `= ANY(...)` que o PostgreSQL aplica.
+      // É como um recurso sem `empresa_id` (ex.: `sale_items`) é recortado pelo
+      // tenant sem trazer linha de outra empresa para a memória.
+      if (Array.isArray(v)) {
+        const alvo = new Set(v.map((x) => norm(x)));
+        rows = rows.filter((row) => alvo.has(norm(row[k])));
+        continue;
+      }
       rows = rows.filter((row) => norm(row[k]) === norm(v));
     }
     if (term) rows = rows.filter((row) => this.matches(r, row, term));

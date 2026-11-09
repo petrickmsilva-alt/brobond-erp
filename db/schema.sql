@@ -9259,3 +9259,63 @@ CREATE INDEX IF NOT EXISTS alert_events_dominio_idx
   ON alert_events (empresa_id, dominio, status);
 CREATE INDEX IF NOT EXISTS alert_events_regra_idx
   ON alert_events (empresa_id, regra_chave, status);
+
+-- ============================================================================
+-- ESPELHO da migração 0113 — FASE 9.2: CAIXA DE ENTRADA INTERNA DO CRM
+-- (a autoridade é db/migrations/0113_fase9_crm_notificacoes.sql;
+--  este espelho existe para o parser de schema e o contrato de colunas)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS crm_notificacoes (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL REFERENCES empresas(id),
+  atividade_id INTEGER REFERENCES crm_atividades(id) ON DELETE SET NULL,
+  tipo TEXT NOT NULL,
+  CONSTRAINT crm_notificacoes_tipo_ck CHECK (tipo IN (
+    'atribuicao', 'lembrete', 'vencida', 'alteracao_responsavel', 'conclusao', 'reagendamento', 'cancelamento', 'falha'
+  )),
+  severidade TEXT NOT NULL DEFAULT 'media',
+  CONSTRAINT crm_notificacoes_severidade_ck CHECK (severidade IN ('baixa', 'media', 'alta', 'critica')),
+  -- RETENÇÃO (hardening 0114): SET NULL, não CASCADE — apagar o destinatário
+  -- preserva a trilha do aviso (nunca se apaga histórico).
+  usuario_id INTEGER REFERENCES usuarios(id) ON DELETE SET NULL,
+  ator_id INTEGER REFERENCES usuarios(id) ON DELETE SET NULL,
+  titulo TEXT NOT NULL,
+  detalhe TEXT NOT NULL DEFAULT '',
+  payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+  chave_idempotencia TEXT NOT NULL,
+  lida_em TIMESTAMPTZ,
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT crm_notificacoes_titulo_ck CHECK (TRIM(COALESCE(titulo, '')) <> '')
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_crm_notificacoes_idempotencia
+  ON crm_notificacoes (empresa_id, chave_idempotencia);
+CREATE INDEX IF NOT EXISTS crm_notificacoes_empresa_usuario_lida_idx
+  ON crm_notificacoes (empresa_id, usuario_id, lida_em);
+CREATE INDEX IF NOT EXISTS crm_notificacoes_empresa_criado_idx
+  ON crm_notificacoes (empresa_id, criado_em DESC);
+CREATE INDEX IF NOT EXISTS crm_notificacoes_atividade_idx
+  ON crm_notificacoes (atividade_id);
+-- HARDENING 0114 — integridade multiempresa: a atividade de origem é do MESMO
+-- tenant do aviso (FK composta, padrão E4.2 da 0104). O destinatário
+-- (`usuario_id`) não usa FK composta porque pode ter acesso a várias empresas;
+-- a checagem é da aplicação (`destinatarioDoTenant`).
+CREATE UNIQUE INDEX IF NOT EXISTS uq_e42_crm_atividades_empresa_id
+  ON crm_atividades (empresa_id, id);
+CREATE INDEX IF NOT EXISTS e42_crm_notificacoes_empresa_atividade_idx
+  ON crm_notificacoes (empresa_id, atividade_id);
+DO $e42_crm_notificacoes$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conrelid = to_regclass('public.crm_notificacoes')
+       AND conname = 'fk_e42_crm_notificacoes_empresa_atividade'
+  ) THEN
+    ALTER TABLE crm_notificacoes
+      ADD CONSTRAINT fk_e42_crm_notificacoes_empresa_atividade
+      FOREIGN KEY (empresa_id, atividade_id) REFERENCES crm_atividades (empresa_id, id)
+      NOT VALID;
+  END IF;
+  ALTER TABLE crm_notificacoes
+    VALIDATE CONSTRAINT fk_e42_crm_notificacoes_empresa_atividade;
+END
+$e42_crm_notificacoes$;

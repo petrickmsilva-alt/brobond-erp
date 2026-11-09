@@ -4,6 +4,7 @@ import { Calculator, ClipboardList, Loader2, Plus, Search, Tag } from 'lucide-re
 import { api } from '../lib/api';
 import { useAuth } from '../auth/AuthContext';
 import { Alert, EmptyState, PageHeader, Spinner } from '../components/ui';
+import { PageShell } from '../components/ui-kit-negocios';
 import { ProductSelector } from '../components/ProductSelector';
 import { formatMoney, formatNumber } from '../lib/format';
 
@@ -50,7 +51,7 @@ export default function CustoPage() {
   const abrirNova = () => navigate('/custo/nova');
 
   return (
-    <div className="p-4 pb-24 sm:p-6 md:pb-6">
+    <PageShell className="pb-24 md:pb-6">
       <PageHeader
         title={
           <span className="flex items-center gap-2.5">
@@ -142,6 +143,6 @@ export default function CustoPage() {
         </>
       )}
 
-    </div>
+    </PageShell>
   );
 }

@@ -15,6 +15,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, Loader2, RefreshCw, Target } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
 import { Alert, Badge, EmptyState, PageHeader, useToast } from '../components/ui';
+import { PageShell } from '../components/ui-kit-negocios';
 import { Card, CardHeader } from '../components/ui-kit-negocios';
 import { BarrasVerticais } from '../components/Charts';
 
@@ -91,7 +92,7 @@ export default function MetaAcompanhamentoPage() {
   const fmt = (v: number) => (ehMoeda ? moeda(v) : numero(v));
 
   return (
-    <div className="p-4 sm:p-6">
+    <PageShell>
       <PageHeader
         title={dados?.meta?.nome ? `Acompanhamento — ${dados.meta.nome}` : 'Acompanhamento de meta'}
         description="O realizado é calculado a partir das vendas faturadas do período. Nenhum número desta tela é digitado."
@@ -239,6 +240,6 @@ export default function MetaAcompanhamentoPage() {
           )}
         </div>
       )}
-    </div>
+    </PageShell>
   );
 }

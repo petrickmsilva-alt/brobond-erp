@@ -1316,13 +1316,10 @@ export async function dispararLembretesCrm(
   // Import dinâmico: `notifications` depende de `services`, que depende deste
   // módulo — importar no topo criaria ciclo.
   const canal = await import('./notifications');
-  // Canal DESLIGADO: não carimbamos `lembrete_enviado_em`, senão a trilha
-  // diria "enviado" para algo que nunca saiu. O lembrete segue visível na
-  // Agenda; o carimbo só acontece quando há entrega de verdade.
-  if (!canal.crmLembreteHabilitado()) {
-    return { analisados: 0, disparados: 0, empresas: 0, canal: 'desabilitado' };
-  }
-
+  // O canal EXTERNO (e-mail) é opcional: sem ele, não carimbamos
+  // `lembrete_enviado_em` (a trilha não pode dizer "enviado" o que nunca saiu).
+  // O canal INTERNO (caixa de entrada) roda INDEPENDENTE do e-mail: a
+  // notificação interna é o produto desta fase.
   const { requireJobLease } = await import('./cronLock');
   const r = await requireJobLease('crm', () => executarLembretesCrm(agora, canal), { busy: 'retry' });
   return r.result ?? { analisados: 0, disparados: 0, empresas: 0, canal: 'habilitado' };
@@ -1333,6 +1330,8 @@ async function executarLembretesCrm(
   canal: typeof import('./notifications'),
 ): Promise<{ analisados: number; disparados: number; empresas: number; canal: string }> {
   const s = getStore();
+  const habilitado = canal.crmLembreteHabilitado();
+  const { notificarAtividadeVencida, notificarLembreteInterno } = await import('./crmNotificacoes');
   const { withCronIdempotency, markUnknownCronUnit, currentCronLease } = await import('./cronLock');
   const limite = agora.getTime();
   // `empresas` é o cadastro de TENANTS — não tem `empresa_id`, então usa a
@@ -1350,9 +1349,22 @@ async function executarLembretesCrm(
       // Sem lembrete explícito, a própria data da atividade é o lembrete.
       const quando = lembrete ?? (atividade.data_atividade ? new Date(String(atividade.data_atividade)) : null);
       if (!quando || Number.isNaN(quando.getTime())) continue;
-      if (quando.getTime() > limite) continue; // ainda não venceu
+
+      // CANAL INTERNO — sempre ativo (não depende do e-mail):
+      //   • vencida: idempotente POR DIA (um aviso por dia, sem empilhar);
+      //   • lembrete: idempotente por (atividade, instante do lembrete), então
+      //     reagendar gera novo aviso e não duplica o mesmo.
+      if (quando.getTime() <= limite) {
+        await notificarAtividadeVencida(atividade, agora).catch(() => undefined);
+      } else {
+        await notificarLembreteInterno(atividade, quando).catch(() => undefined);
+      }
+
+      if (quando.getTime() > limite) continue; // ainda não venceu (e-mail)
       if (atividade.lembrete_enviado_em) continue;
       analisados += 1;
+      // Sem canal externo: o lembrete interno já saiu; não carimba nem envia e-mail.
+      if (!habilitado) continue;
 
       try {
       await withCronIdempotency(`crm:lembrete:${atividade.id}`, String(atividade.id), async () => {
@@ -1391,7 +1403,7 @@ async function executarLembretesCrm(
     }
   }
 
-  return { analisados, disparados, empresas: ids.length, canal: 'habilitado' };
+  return { analisados, disparados, empresas: ids.length, canal: habilitado ? 'habilitado' : 'desabilitado' };
 }
 
 // ----------------------------------------------------------------------------

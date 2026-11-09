@@ -52,7 +52,8 @@ import {
   type StatusAgenteLocal,
   type TerminalConfigCliente,
 } from '../lib/printAgent';
-import { PainelInline, useToast } from '../components/ui';
+import { PageHeader, PainelInline, useToast } from '../components/ui';
+import { PageShell } from '../components/ui-kit-negocios';
 
 const STATUS_BADGE: Record<string, { label: string; cls: string }> = {
   QUEUED: { label: 'Na fila', cls: 'bg-slate-100 text-slate-700 dark:bg-navy-800 dark:text-navy-200' },
@@ -258,57 +259,55 @@ export default function ImpressaoPage() {
   }
 
   return (
-    <div className="p-4 sm:p-6 space-y-6">
-      {/* Cabeçalho */}
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h1 className="text-xl font-bold text-navy-900 dark:text-white flex items-center gap-2">
+    <PageShell>
+      <PageHeader
+        title={
+          <span className="flex items-center gap-2">
             <Printer className="h-6 w-6 text-brand-600" />
             Central de Impressão Operacional
-          </h1>
-          <p className="mt-1 text-sm text-slate-600 dark:text-navy-300">
-            Fila assíncrona auditável, configuração por terminal, agentes locais (ESC/POS, ZPL, EPL2) e contingência PDF/HTML.
-          </p>
-        </div>
+          </span>
+        }
+        description="Fila assíncrona auditável, configuração por terminal, agentes locais (ESC/POS, ZPL, EPL2) e contingência PDF/HTML."
+        actions={
+          <>
+            <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs dark:border-navy-700 dark:bg-navy-900">
+              <Monitor className="h-4 w-4 text-slate-500" />
+              <span className="text-slate-600 dark:text-navy-300">Meu terminal:</span>
+              <select
+                aria-label="Selecionar meu terminal padrão"
+                className="bg-transparent font-semibold text-navy-900 focus:outline-none dark:text-white"
+                value={meuTerminal}
+                onChange={(e) => {
+                  setMeuTerminal(e.target.value);
+                  setPreferredTerminal(e.target.value);
+                  toast.info(e.target.value ? `Terminal padrão desta estação: ${e.target.value}` : 'Usando roteamento automático da empresa.');
+                }}
+              >
+                <option value="">Automático</option>
+                {terminais.filter((t) => t.ativo).map((t) => (
+                  <option key={t.id} value={t.codigo}>
+                    {t.codigo} ({t.nome})
+                  </option>
+                ))}
+              </select>
+            </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs dark:border-navy-700 dark:bg-navy-900">
-            <Monitor className="h-4 w-4 text-slate-500" />
-            <span className="text-slate-600 dark:text-navy-300">Meu terminal:</span>
-            <select
-              aria-label="Selecionar meu terminal padrão"
-              className="bg-transparent font-semibold text-navy-900 focus:outline-none dark:text-white"
-              value={meuTerminal}
-              onChange={(e) => {
-                setMeuTerminal(e.target.value);
-                setPreferredTerminal(e.target.value);
-                toast.info(e.target.value ? `Terminal padrão desta estação: ${e.target.value}` : 'Usando roteamento automático da empresa.');
+            <button
+              type="button"
+              className="btn-secondary text-xs"
+              onClick={() => {
+                carregarResumoELocal();
+                if (aba === 'fila') carregarJobs();
+                if (aba === 'agentes') carregarAgentes();
+                if (aba === 'auditoria') carregarAuditoria();
               }}
             >
-              <option value="">Automático</option>
-              {terminais.filter((t) => t.ativo).map((t) => (
-                <option key={t.id} value={t.codigo}>
-                  {t.codigo} ({t.nome})
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <button
-            type="button"
-            className="btn-secondary text-xs"
-            onClick={() => {
-              carregarResumoELocal();
-              if (aba === 'fila') carregarJobs();
-              if (aba === 'agentes') carregarAgentes();
-              if (aba === 'auditoria') carregarAuditoria();
-            }}
-          >
-            <RefreshCw className="h-3.5 w-3.5" />
-            Atualizar
-          </button>
-        </div>
-      </div>
+              <RefreshCw className="h-3.5 w-3.5" />
+              Atualizar
+            </button>
+          </>
+        }
+      />
 
       {/* KPIs Operacionais */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
@@ -1170,6 +1169,6 @@ export default function ImpressaoPage() {
           </div>
         )}
       </PainelInline>
-    </div>
+    </PageShell>
   );
 }

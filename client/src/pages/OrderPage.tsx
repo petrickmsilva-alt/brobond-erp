@@ -20,6 +20,7 @@ import { api } from '../lib/api';
 import { useMeta, type Option, type ResourceMeta } from '../lib/meta';
 import { useAuth } from '../auth/AuthContext';
 import { Alert, Badge, ConfirmacaoInline, PageHeader, Spinner, useToast } from '../components/ui';
+import { PageLoading, PageShell } from '../components/ui-kit-negocios';
 import { DocumentPrintButton } from '../components/DocumentPrintButton';
 import { Thumb } from '../components/ImageField';
 import { ProductSelector } from '../components/ProductSelector';
@@ -977,16 +978,16 @@ function VendaOrderEngine({ modo }: { modo?: ModoPaginaVenda }) {
     }
   }
 
-  if (loading) return <Spinner label="Carregando venda..." />;
+  if (loading) return <PageLoading label="Carregando venda..." />;
 
   if (loadError) {
     return (
-      <div className="p-4 sm:p-6">
+      <PageShell>
         <Alert tone="red">{loadError}</Alert>
         <button type="button" className="btn-secondary mt-4" onClick={() => navigate('/vendas')}>
           <ArrowLeft className="h-4 w-4" /> Voltar para Vendas
         </button>
-      </div>
+      </PageShell>
     );
   }
 
@@ -1003,7 +1004,7 @@ function VendaOrderEngine({ modo }: { modo?: ModoPaginaVenda }) {
   const listaErrosResumo = Object.values(erros);
 
   return (
-    <div className="mx-auto max-w-6xl space-y-5 p-4 sm:p-6">
+    <PageShell className="mx-auto max-w-6xl space-y-5">
       <PageHeader
         title={
           <span className="flex flex-wrap items-center gap-2.5">
@@ -2312,7 +2313,7 @@ function VendaOrderEngine({ modo }: { modo?: ModoPaginaVenda }) {
           </p>
         }
       />
-    </div>
+    </PageShell>
   );
 }
 
@@ -2461,21 +2462,21 @@ function CompraOrderEngine() {
 
   const statusOptions = resource?.fields.find((f) => f.name === 'status')?.options || [];
 
-  if (loading) return <Spinner />;
+  if (loading) return <PageLoading  />;
   if (error) {
     return (
-      <div className="p-4 sm:p-6">
+      <PageShell>
         <Alert tone="red">{error}</Alert>
         <button className="btn-secondary mt-4" onClick={() => navigate('/compras')}>
           <ArrowLeft className="h-4 w-4" /> Voltar
         </button>
-      </div>
+      </PageShell>
     );
   }
   if (!pedido) return null;
 
   return (
-    <div className="p-4 sm:p-6">
+    <PageShell>
       <PageHeader
         title={
           <span className="flex items-center gap-2.5">
@@ -2715,7 +2716,7 @@ function CompraOrderEngine() {
           </p>
         }
       />
-    </div>
+    </PageShell>
   );
 }
 

@@ -11,8 +11,8 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { api, ApiError } from '../lib/api';
-import { Alert, PageHeader, Spinner } from '../components/ui';
-import { StatCard } from '../components/ui-kit-negocios';
+import { PageHeader } from '../components/ui';
+import { PageError, PageLoading, PageShell, StatCard } from '../components/ui-kit-negocios';
 import { formatMoney } from '../lib/format';
 
 type Metricas = {
@@ -48,24 +48,26 @@ export default function Customer360Page() {
   const [data, setData] = useState<Customer360 | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
+  const [tentativa, setTentativa] = useState(0);
 
   useEffect(() => {
     let ativo = true;
     setLoading(true);
+    setError('');
     api.get<Customer360>(`/customer360/${id}`)
       .then((r) => { if (ativo) setData(r); })
       .catch((e: unknown) => { if (ativo) setError(e instanceof ApiError ? e.message : 'Não foi possível carregar o Customer 360.'); })
       .finally(() => { if (ativo) setLoading(false); });
     return () => { ativo = false; };
-  }, [id]);
+  }, [id, tentativa]);
 
-  if (loading) return <Spinner label="Carregando Customer 360…" />;
-  if (error) return <Alert tone="red">{error}</Alert>;
-  if (!data) return null;
+  if (loading) return <PageLoading label="Carregando Customer 360…" />;
+  if (error) return <PageError message={error} onRetry={() => setTentativa((n) => n + 1)} />;
+  if (!data) return <PageError message="Não foi possível carregar o Customer 360." />;
   const m = data.metricas;
 
   return (
-    <div className="min-w-0 space-y-4">
+    <PageShell>
       <PageHeader
         title={`Customer 360 — ${data.cliente.nome}`}
         description="Visão consolidada do cliente a partir de pedidos, pagamentos, devoluções e atendimento reais."
@@ -130,6 +132,6 @@ export default function Customer360Page() {
           </table>
         </div>
       </section>
-    </div>
+    </PageShell>
   );
 }

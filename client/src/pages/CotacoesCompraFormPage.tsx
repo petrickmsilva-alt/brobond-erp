@@ -13,6 +13,7 @@ import { AlertTriangle, Loader2, Save } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
 import { useAuth } from '../auth/AuthContext';
 import { Alert, PageHeader, useToast } from '../components/ui';
+import { PageShell } from '../components/ui-kit-negocios';
 import { CRITERIOS } from './CotacoesCompraPage';
 
 export default function CotacoesCompraFormPage({ modo = 'novo' }: { modo?: 'novo' | 'editar' }) {
@@ -52,7 +53,7 @@ export default function CotacoesCompraFormPage({ modo = 'novo' }: { modo?: 'novo
   }
 
   return (
-    <div className="p-4 pb-24 sm:p-6 md:pb-6">
+    <PageShell className="pb-24 md:pb-6">
       <PageHeader
         title={
           <span className="flex items-center gap-2.5">
@@ -112,6 +113,6 @@ export default function CotacoesCompraFormPage({ modo = 'novo' }: { modo?: 'novo
           </div>
         </section>
       </div>
-    </div>
+    </PageShell>
   );
 }

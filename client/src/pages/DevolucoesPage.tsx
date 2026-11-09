@@ -22,6 +22,7 @@ import { api, ApiError } from '../lib/api';
 import { formatDateTime, formatNumber } from '../lib/format';
 import type { ListResult } from '../lib/meta';
 import { Alert, Badge, EmptyState, PainelInline, PageHeader, Spinner, useToast } from '../components/ui';
+import { PageShell } from '../components/ui-kit-negocios';
 
 type StatusDevolucao = 'solicitada' | 'autorizada' | 'em_transito' | 'recebida' | 'recusada' | 'cancelada';
 
@@ -216,7 +217,7 @@ export default function DevolucoesPage() {
   }, [detalhe, conferencia]);
 
   return (
-    <div>
+    <PageShell>
       <PageHeader
         title="Devoluções e logística reversa"
         description="Solicitar → autorizar → rastrear → receber. Só item em bom estado volta ao estoque."
@@ -621,7 +622,7 @@ export default function DevolucoesPage() {
           </Badge>
         </div>
       )}
-    </div>
+    </PageShell>
   );
 }
 

@@ -31,3 +31,17 @@ describe('apiFetch — segurança de retry e cancelamento', () => {
     await vi.advanceTimersByTimeAsync(30_000); await rejected;
   });
 });
+
+describe('api.upload — multipart sem Content-Type manual', () => {
+  it('não força application/json quando o corpo é FormData (o browser põe o boundary)', async () => {
+    const fetch = vi.fn().mockResolvedValue(response(200, { ok: true })); vi.stubGlobal('fetch', fetch);
+    const fd = new FormData(); fd.append('file', new Blob(['<xml/>']), 'nota.xml'); fd.append('aplicar', 'false');
+    const { api } = await import('./api');
+    await expect(api.upload('/suprimentos/compras/importar-xml', fd)).resolves.toEqual({ ok: true });
+    const [, opts] = fetch.mock.calls[0];
+    const headers = opts.headers as Headers;
+    expect(headers.has('Content-Type')).toBe(false);
+    expect(headers.get('Authorization')).toBeNull(); // sem token no localStorage
+    expect(opts.body).toBe(fd);
+  });
+});

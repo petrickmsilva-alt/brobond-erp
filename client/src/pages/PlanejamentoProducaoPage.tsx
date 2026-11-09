@@ -16,6 +16,7 @@ import { AlertTriangle, CalendarDays, Factory, Scissors, TriangleAlert } from 'l
 import { api, ApiError } from '../lib/api';
 import { formatDate, formatMoney, formatNumber } from '../lib/format';
 import { Alert, Badge, EmptyState, PageHeader, Spinner } from '../components/ui';
+import { PageShell } from '../components/ui-kit-negocios';
 
 type LinhaPlanejada = {
   id: number;
@@ -111,7 +112,7 @@ export default function PlanejamentoProducaoPage() {
   const emFalta = useMemo(() => (dados?.insumos || []).filter((i) => i.faltando > 0), [dados]);
 
   return (
-    <div className="p-4 pb-24 sm:p-6 md:pb-6">
+    <PageShell className="pb-24 md:pb-6">
       <PageHeader
         title={
           <span className="flex items-center gap-2.5">
@@ -332,6 +333,6 @@ export default function PlanejamentoProducaoPage() {
           </div>
         </>
       )}
-    </div>
+    </PageShell>
   );
 }

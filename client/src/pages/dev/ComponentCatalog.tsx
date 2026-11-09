@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Inbox, Plus, Search } from 'lucide-react';
 import { Alert, Badge, ConfirmacaoInline, EmptyState, PainelInline, PageHeader, Spinner, useToast } from '../../components/ui';
-import { Combobox, DataTable, DateRangePicker, Pagination, Tabs } from '../../components/ui-kit-negocios';
+import { Combobox, DataTable, DateRangePicker, PageShell, Pagination, Tabs } from '../../components/ui-kit-negocios';
 import type { Tone } from '../../lib/meta';
 
 const TONES: Tone[] = ['green', 'red', 'amber', 'blue', 'slate'];
@@ -20,7 +20,7 @@ export default function ComponentCatalog() {
   const [confirmOpen, setConfirmOpen] = useState(false);
 
   return (
-    <div className="p-4 sm:p-6">
+    <PageShell>
       <PageHeader
         title="Catálogo de componentes"
         description="Referência visual dos componentes reutilizáveis de ui.tsx e ui-kit.tsx — use Ctrl/Cmd+K ou alterne o tema em Configurações para conferir o modo escuro aqui também."
@@ -155,7 +155,7 @@ export default function ComponentCatalog() {
         onConfirm={() => setConfirmOpen(false)}
         onCancel={() => setConfirmOpen(false)}
       />
-    </div>
+    </PageShell>
   );
 }
 

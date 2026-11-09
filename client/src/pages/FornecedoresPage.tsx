@@ -43,6 +43,7 @@ import { api, ApiError, downloadFile } from '../lib/api';
 import { useMeta, type Field, type ListResult } from '../lib/meta';
 import { UFS_BRASIL } from '../lib/format';
 import { Alert, ConfirmacaoInline, EmptyState, PageHeader, Spinner, useToast } from '../components/ui';
+import { PageShell } from '../components/ui-kit-negocios';
 import { Dropdown, Pagination } from '../components/ui-kit';
 import { ListaTabela, type OrdenacaoLista } from '../components/ListaTabela';
 import { ListaCards } from '../components/ListaCards';
@@ -383,7 +384,7 @@ export default function FornecedoresPage() {
   const dependenciasAtivaAinda = !!dependencias && linhas.some((l) => Number(l.id) === Number(dependencias.id) && l.ativo !== false);
 
   return (
-    <div className="p-4 sm:p-6">
+    <PageShell>
       <PageHeader
         title={
           <span className="flex items-center gap-2.5">
@@ -692,6 +693,6 @@ export default function FornecedoresPage() {
           navigate(destino.path);
         }}
       />
-    </div>
+    </PageShell>
   );
 }

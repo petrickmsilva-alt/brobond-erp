@@ -28,6 +28,7 @@ import { api, ApiError, downloadFile } from '../lib/api';
 import type { Meta } from '../lib/meta';
 import { useAuth } from '../auth/AuthContext';
 import { Alert, Badge, PainelInline, PageHeader, useToast } from '../components/ui';
+import { PageShell } from '../components/ui-kit-negocios';
 import ReauthModal from '../components/ReauthModal';
 import { useTheme, type ThemePref } from '../lib/theme';
 
@@ -76,7 +77,7 @@ export default function Settings() {
   }
 
   return (
-    <div className="p-4 sm:p-6">
+    <PageShell>
       <PageHeader title="Configurações" description="Sua conta, senha, sessão e informações do sistema." />
 
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-navy-800 dark:bg-navy-900">
@@ -264,7 +265,7 @@ export default function Settings() {
           )}
         </div>
       </div>
-    </div>
+    </PageShell>
   );
 }
 

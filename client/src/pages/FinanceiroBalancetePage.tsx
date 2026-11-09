@@ -15,6 +15,7 @@ import { BookOpen, RefreshCw } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { api, ApiError } from '../lib/api';
 import { Alert, EmptyState, PageHeader, Spinner } from '../components/ui';
+import { PageShell } from '../components/ui-kit-negocios';
 import { StatCard } from '../components/ui-kit-negocios';
 
 type Conta = {
@@ -74,7 +75,7 @@ export default function FinanceiroBalancetePage() {
   }, [carregar]);
 
   return (
-    <div className="space-y-4">
+    <PageShell>
       <PageHeader
         title="Balancete e classificação"
         description="Estrutura contábil já preparada: débito/crédito por conta, competência e documento de origem. O ERP soma o livro-caixa existente — não apura imposto nem gera partida dobrada."
@@ -198,6 +199,6 @@ export default function FinanceiroBalancetePage() {
           )}
         </>
       )}
-    </div>
+    </PageShell>
   );
 }

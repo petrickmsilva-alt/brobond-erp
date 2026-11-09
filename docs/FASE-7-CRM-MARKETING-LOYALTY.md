@@ -112,3 +112,14 @@ atendendo ao direito de acesso/portabilidade (LGPD art. 18). Cada exportação �
   processo jurídico e prazo de retenção.
 - Canais externos de comunicação (WhatsApp/E-mail) permanecem desativados até
   homologação e credenciais.
+
+## 7. Extensão — Fase 9.2 (ciclo de vida das atividades)
+
+O **canal INTERNO** de notificação do CRM (lembrete de atividade, vencimento,
+atribuição, troca de responsável, conclusão, reagendamento, cancelamento e falha
+de processamento) foi entregue na Fase 9.2 sobre o agendador existente
+(`scheduled.ts` → `dispararLembretesCrm`) — **sem** segundo motor e **sem**
+ativar canal externo. Caixa pessoal em `crm_notificacoes` (migration `0113`),
+idempotente por `UNIQUE (empresa_id, chave_idempotencia)` e recortada por empresa
+e por usuário. Detalhe e evidências em
+[`FASE-9-INTEGRIDADE-CRM-UX.md`](FASE-9-INTEGRIDADE-CRM-UX.md) §2.

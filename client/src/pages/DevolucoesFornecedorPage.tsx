@@ -16,6 +16,7 @@ import { Loader2, PackageOpen, Plus, RefreshCw, X } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
 import { useMeta, type ListResult, type Option } from '../lib/meta';
 import { Alert, Badge, ConfirmacaoInline, EmptyState, PageHeader, Spinner, useToast } from '../components/ui';
+import { PageShell } from '../components/ui-kit-negocios';
 import { formatDateTime, formatMoney, formatNumber } from '../lib/format';
 
 type Status = 'solicitada' | 'autorizada' | 'expedida' | 'encerrada' | 'cancelada';
@@ -226,7 +227,7 @@ export default function DevolucoesFornecedorPage() {
   const fornecedorNome = (d: Devolucao) => `Fornecedor #${d.fornecedor_id}`;
 
   return (
-    <div className="p-4 sm:p-6">
+    <PageShell>
       <PageHeader
         title="Devoluções ao fornecedor"
         description="Devolva mercadoria recebida (avaria, divergência, compra errada). Só se devolve o que foi recebido; o estoque só baixa na expedição."
@@ -490,7 +491,7 @@ export default function DevolucoesFornecedorPage() {
         A devolução não movimenta estoque até ser expedida. Só se devolve a quantidade efetivamente recebida da compra.
         {meta?.mode === 'memory' ? ' (modo demonstração)' : ''}
       </p>
-    </div>
+    </PageShell>
   );
 }
 

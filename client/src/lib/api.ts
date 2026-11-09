@@ -57,7 +57,7 @@ export async function apiFetch<T = any>(path: string, opts: RequestInit = {}): P
   const method = String(opts.method || 'GET').toUpperCase();
   const maxRetries = ['GET', 'HEAD', 'OPTIONS'].includes(method) ? 2 : 0;
   const headers = new Headers(opts.headers);
-  if (!headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
+  if (!headers.has('Content-Type') && !(opts.body instanceof FormData)) headers.set('Content-Type', 'application/json');
   if (token && !headers.has('Authorization')) headers.set('Authorization', `Bearer ${token}`);
   let res: Response | undefined;
   try {
@@ -100,6 +100,8 @@ export const api = {
   post: <T = any>(path: string, body: unknown) => apiFetch<T>(path, { method: 'POST', body: JSON.stringify(body) }),
   put: <T = any>(path: string, body: unknown) => apiFetch<T>(path, { method: 'PUT', body: JSON.stringify(body) }),
   del: <T = any>(path: string) => apiFetch<T>(path, { method: 'DELETE' }),
+  /** Envia multipart/form-data (upload de arquivo); o browser define o boundary. */
+  upload: <T = any>(path: string, form: FormData) => apiFetch<T>(path, { method: 'POST', body: form }),
 };
 
 /**

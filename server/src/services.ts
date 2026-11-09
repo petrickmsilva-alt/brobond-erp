@@ -37,6 +37,7 @@ import {
   registrarHistoricoEstagio,
   resolverFunilPadrao,
 } from './crm';
+import { notificarAtividadeAtualizada, notificarAtividadeCriada } from './crmNotificacoes';
 import { invalidarCacheCarteira } from './empresasAcesso';
 import {
   aplicarFiltroEmpresa,
@@ -1363,6 +1364,11 @@ export async function createRecord(r: Resource, body: unknown, actor: Actor, ctx
       if (r.key === 'crm_leads') {
         await recalcularScoreDoLead(s, tx, Number(row.id), Number(row.empresa_id ?? escopo.empresaId), row);
       }
+      // CRM 9.2 — ciclo de vida: a atividade criada gera notificação INTERNA ao
+      // responsável, na MESMA transação (sem conector externo).
+      if (r.key === 'crm_atividades') {
+        await notificarAtividadeCriada(row, tx);
+      }
       await audit(tx, actor, 'criar', r, row.id, `${r.singular} ${labelOf(r, row)} incluído(a)`, sanitize(data), row);
       const final = (await s.get(r, row.id, tx)) ?? row;
       if (conviteLink) (final as Row).convite_link = conviteLink;
@@ -1612,6 +1618,12 @@ export async function updateRecord(r: Resource, id: number, body: unknown, actor
       // explicáveis; o motivo fica gravado junto do número).
       if (r.key === 'crm_leads') {
         await recalcularScoreDoLead(s, tx, id, Number(before.empresa_id ?? escopo.empresaId), row);
+      }
+
+      // CRM 9.2 — ciclo de vida: troca de responsável, reagendamento, conclusão
+      // e cancelamento geram notificação INTERNA (na mesma transação).
+      if (r.key === 'crm_atividades') {
+        await notificarAtividadeAtualizada(before, row, tx);
       }
 
       // Usuários: desativação/reativação/troca de perfil têm efeitos de segurança.

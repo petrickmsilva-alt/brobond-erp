@@ -26,6 +26,7 @@ import { Download, Pencil, Plus, Power, ShieldAlert, Trash2 } from 'lucide-react
 import { api, ApiError, downloadFile } from '../lib/api';
 import { useMeta, type ListResult, type ResourceMeta } from '../lib/meta';
 import { Alert, Badge, ConfirmacaoInline, EmptyState, PageHeader, Spinner, useToast } from '../components/ui';
+import { PageShell } from '../components/ui-kit-negocios';
 import { DataTable, FilterBar, SearchInput, type DataTableColumn } from '../components/ui-kit-negocios';
 import { Pagination } from '../components/ui-kit';
 import { DependenciasModal, type DiagnosticoDependencias } from '../components/DependenciasModal';
@@ -211,9 +212,9 @@ export default function CadastroComercialPage({
 
   if (!resource) {
     return (
-      <div className="p-4 sm:p-6">
+      <PageShell>
         <PageHeader title="Cadastro indisponível" description="Este recurso não está disponível para o seu perfil." />
-      </div>
+      </PageShell>
     );
   }
 
@@ -274,7 +275,7 @@ export default function CadastroComercialPage({
   const vazio = !carregando && !erro && linhas.length === 0;
 
   return (
-    <div className="p-4 sm:p-6">
+    <PageShell>
       <PageHeader
         title={resource.label}
         description={cfg.descricaoCadastro}
@@ -449,6 +450,6 @@ export default function CadastroComercialPage({
         onClose={() => setDependencias(null)}
         mensagem={cfg.mensagemVinculos}
       />
-    </div>
+    </PageShell>
   );
 }

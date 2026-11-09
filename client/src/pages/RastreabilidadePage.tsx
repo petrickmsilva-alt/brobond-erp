@@ -19,6 +19,7 @@ import { AlertTriangle, Boxes, CheckCircle2, History, Plus, RefreshCw, Search, X
 import { api, ApiError } from '../lib/api';
 import { useMeta, type ListResult, type Option } from '../lib/meta';
 import { Alert, Badge, EmptyState, PageHeader, Spinner, useToast } from '../components/ui';
+import { PageShell } from '../components/ui-kit-negocios';
 import { formatDate, formatDateTime, formatNumber } from '../lib/format';
 
 type Lote = {
@@ -188,7 +189,7 @@ export default function RastreabilidadePage() {
   const vencido = (v: string | null) => Boolean(v) && new Date(String(v)) < hoje;
 
   return (
-    <div className="p-4 pb-24 sm:p-6 md:pb-6">
+    <PageShell className="pb-24 md:pb-6">
       <PageHeader
         title={
           <span className="flex items-center gap-2.5">
@@ -419,7 +420,7 @@ export default function RastreabilidadePage() {
         O saldo do lote é calculado no servidor a partir das movimentações (entrada soma, saída subtrai, ajuste aplica o delta). Nenhuma tela grava saldo.
         {meta?.mode === 'memory' ? ' (modo demonstração)' : ''}
       </p>
-    </div>
+    </PageShell>
   );
 }
 

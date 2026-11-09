@@ -13,6 +13,7 @@ import { Loader2, RotateCcw } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { api, ApiError } from '../lib/api';
 import { Alert, PageHeader, useToast } from '../components/ui';
+import { PageShell } from '../components/ui-kit-negocios';
 
 const TIPOS = [
   { value: 'devolucao', label: 'Devolução' },
@@ -50,7 +51,7 @@ export default function DevolucaoNovaPage() {
   }
 
   return (
-    <div className="space-y-4">
+    <PageShell>
       <PageHeader
         title={
           <span className="flex items-center gap-2.5">
@@ -112,6 +113,6 @@ export default function DevolucaoNovaPage() {
           </p>
         )}
       </div>
-    </div>
+    </PageShell>
   );
 }

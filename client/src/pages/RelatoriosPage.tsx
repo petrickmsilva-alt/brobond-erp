@@ -4,6 +4,7 @@ import { BarChart3, Download, Loader2, RefreshCw, Table2 } from 'lucide-react';
 import { api, downloadFile } from '../lib/api';
 import { useAuth } from '../auth/AuthContext';
 import { Alert, PageHeader, Spinner, useToast } from '../components/ui';
+import { PageShell } from '../components/ui-kit-negocios';
 import { BarrasVerticais } from '../components/Charts';
 import { formatDate, formatMoney, formatNumber } from '../lib/format';
 
@@ -171,7 +172,7 @@ export default function RelatoriosPage() {
   }
 
   return (
-    <div className="p-4 pb-20 sm:p-6 md:pb-6">
+    <PageShell className="pb-20 md:pb-6">
       <PageHeader
         title={
           <span className="flex items-center gap-2.5">
@@ -327,7 +328,7 @@ export default function RelatoriosPage() {
           )}
         </div>
       </div>
-    </div>
+    </PageShell>
   );
 }
 

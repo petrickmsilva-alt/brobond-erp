@@ -51,7 +51,7 @@
 
 | GAP | Severidade | Ação |
 |---|---|---|
-| `sale_items` sem `empresa_id` (projeção) | P3 | herda `sales`; recorte no SQL na Fase 3 (BL-016) |
+| `sale_items` sem `empresa_id` (projeção) | P3 | herda `sales`; recorte por tenant NO SQL na Fase 9.1 (BL-016) |
 | `arquivos` polimórfico (herda do recurso) | P3 | documentado em `TENANT-GOVERNANCE.md` |
 | `cotacao_decisoes`/`portal_acessos` (herda-tenant) | P3 | classificados; FK composta é candidata futura |
 

@@ -52,7 +52,7 @@ absoluta — é o resultado das verificações de §4 e dos gates executados.
 | R-P2-07 | CRM (banco) | Integridade cross-tenant só por FK simples | GAP-P2-04 | SQL manual poderia cruzar empresa | **FECHADO na Fase 2** — FK composta E4.2 (`0104`) + `fase2-integridade-referencial.test.ts` |
 | R-P2-08 | Commerce | Dois caminhos de ingestão Woo (legado × multi-store) | `loja.ts` + `commerce/woocommerce/` | divergência de canal | runbook Agente 07 |
 | R-P2-09 | Loja nativa | Superfície pública `/loja` | ADR-0007 | duplicidade de varejo | **Fase 3** — descontinuação bloqueada por ambiente (BL-015) |
-| R-P2-10 | Projeção | `sale_items` sem `empresa_id` (over-fetch no analytics) | `commerce/analytics.ts` | custo de leitura; sem vazamento (recorte por `sale_id`) | **Fase 3** — migração aditiva (BL-016) |
+| R-P2-10 | Projeção | `sale_items` sem `empresa_id` (over-fetch no analytics) | `commerce/analytics.ts` | custo de leitura; sem vazamento (recorte por `sale_id`) | **FECHADO na Fase 9.1** — recorte por tenant NO SQL (`sale_id = ANY`); sem migração. Provas: `fase9-1-data-integrity.test.ts` + `pg/fase9-1-data-integrity.test.ts` |
 
 ## 5. Riscos P3
 

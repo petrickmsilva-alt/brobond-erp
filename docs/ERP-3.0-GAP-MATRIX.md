@@ -362,16 +362,16 @@ Ver detalhe e tabela completa em [`docs/RELATORIO-PR95-AUDITORIA-INTEGRAL.md`](R
 
 | ID | Nível | Domínio | Gap | Status |
 |---|---|---|---|---|
-| GAP-P2-21 | P2 | Ficha | `CustoPage` cria/edita a ficha técnica em `PainelInline` | registrado (residual) |
-| GAP-P2-22 | P2 | Devoluções | `Solicitar devolução` na listagem é um `PainelInline` | registrado (residual) |
-| GAP-P2-23 | P2 | Empresas | cadastro/edição de empresa em `PainelInline` | registrado (residual) |
-| GAP-P2-24 | P2 | NCM | cadastro/edição de alíquota por NCM em `PainelInline` | registrado (residual) |
-| GAP-P2-25 | P2 | Webhooks | cadastro/edição de webhook em `PainelInline` | registrado (residual) |
-| GAP-P2-26 | P2 | Inventário | `Lançar movimentação` na grade é filho do detalhe (grade é a página) | registrado — child-flow |
-| GAP-P2-27 | P2 | Compras | `RecebimentoCompraModal` é um painel de transação na compra | registrado (residual) |
-| GAP-P3-08 | P3 | Importação | `ImportModal` é um painel de carga de dados | registrado — P3 |
-| GAP-P3-09 | P3 | Impressão | agentes/terminais têm formulário em painel no `/config/impressao` | registrado — P3 |
-| GAP-P3-10 | P3 | PDV | caixa/movimentação/scanner vivem no PDV (balcão) | registrado — P3 |
+| GAP-P2-21 | P2 | Ficha | `CustoPage` cria/edita a ficha técnica em `PainelInline` | **encerrado (Fase 9.3)** — página `/custo/nova` |
+| GAP-P2-22 | P2 | Devoluções | `Solicitar devolução` na listagem é um `PainelInline` | **encerrado (Fase 9.3)** — página `/devolucoes/nova` |
+| GAP-P2-23 | P2 | Empresas | cadastro/edição de empresa em `PainelInline` | **encerrado (Fase 9.3)** — página `/empresas/:id/editar` |
+| GAP-P2-24 | P2 | NCM | cadastro/edição de alíquota por NCM em `PainelInline` | **encerrado (Fase 9.3)** — página `/ncm/novo` e `/ncm/:id/editar` |
+| GAP-P2-25 | P2 | Webhooks | cadastro/edição de webhook em `PainelInline` | **encerrado (Fase 9.3)** — página `/webhooks/novo` e `/webhooks/:id/editar` |
+| GAP-P2-26 | P2 | Inventário | `Lançar movimentação` na grade é filho do detalhe (grade é a página) | **mantido — child-flow** (não é defeito) |
+| GAP-P2-27 | P2 | Compras | `RecebimentoCompraModal` é um painel de transação na compra | **encerrado (Fase 9.3)** — página `/compras/:id/receber` |
+| GAP-P3-08 | P3 | Importação | `ImportModal` é um painel de carga de dados | **encerrado (Fase 9.3)** — página `/importar/:tipo` |
+| GAP-P3-09 | P3 | Impressão | agentes/terminais têm formulário em painel no `/config/impressao` | **encerrado (Fase 9.3)** — páginas dedicadas de terminal/agente |
+| GAP-P3-10 | P3 | PDV | caixa/movimentação/scanner vivem no PDV (balcão) | **mantido** — fluxo de balcão (não é defeito) |
 
 ### 10.6 Evidências
 

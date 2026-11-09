@@ -13,6 +13,7 @@ import { Link } from 'react-router-dom';
 import { CalendarClock, CheckCircle2, Clock, AlertTriangle, Plus } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
 import { Alert, Badge, ConfirmacaoInline, EmptyState, PageHeader, Spinner, useToast } from '../components/ui';
+import { PageShell } from '../components/ui-kit-negocios';
 
 type Atividade = {
   id: number;
@@ -112,7 +113,7 @@ export default function CrmAgendaPage() {
   }, [dados]);
 
   return (
-    <div className="p-4 sm:p-6">
+    <PageShell>
       <PageHeader
         title="Agenda do CRM"
         description="Compromissos por lembrete: o que venceu, o que é hoje e o que vem. A conclusão é registrada na própria atividade."
@@ -199,6 +200,6 @@ export default function CrmAgendaPage() {
           />
         </>
       )}
-    </div>
+    </PageShell>
   );
 }

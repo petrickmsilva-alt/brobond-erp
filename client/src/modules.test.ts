@@ -132,11 +132,12 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
     // + 1 da FASE 7 — Análise RFM (segmentação derivada, rota própria).
     // + 3 da FASE 8 — Control Tower executiva, Alertas e Regras de alerta
     //   (leitura derivada + configuração do motor de alertas).
-    expect(MODULES).toHaveLength(151);
+    // + 1 da FASE 9.2 — Caixa de entrada do CRM (avisos internos por usuário).
+    expect(MODULES).toHaveLength(152);
     const ids = MODULES.map((m) => m.id);
     const paths = MODULES.map((m) => m.path);
-    expect(new Set(ids).size).toBe(151);
-    expect(new Set(paths).size).toBe(151);
+    expect(new Set(ids).size).toBe(152);
+    expect(new Set(paths).size).toBe(152);
 
     for (const [id, pathEsperado] of Object.entries(ROTAS_CANONICAS_ESPERADAS)) {
       const mod = MODULES.find((m) => m.id === id);
@@ -165,8 +166,8 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
     }
   });
 
-  it('separa ERP CORE (126), Commerce (19), Creators (4) e Utilidades Globais (2)', () => {
-    expect(MODULES.filter((m) => m.space === 'erp')).toHaveLength(126);
+  it('separa ERP CORE (127), Commerce (19), Creators (4) e Utilidades Globais (2)', () => {
+    expect(MODULES.filter((m) => m.space === 'erp')).toHaveLength(127);
     // 4 conectores de canal + 10 módulos do BROBOND COMMERCE OS
     expect(MODULES.filter((m) => m.space === 'commerce')).toHaveLength(19);
     expect(MODULES.filter((m) => m.space === 'creators')).toHaveLength(4);
@@ -234,6 +235,7 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
       // CRM 3.0 — evolução: painel, agenda, configuração do funil e trilha
       'crm-painel',
       'crm-agenda',
+      'crm-notificacoes',
       'crm-estagio-historico',
       'crm-funis',
       'crm-etapas',
@@ -373,8 +375,9 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
       s.areas.flatMap((a) => a.groups.flatMap((g) => g.subgroups.flatMap((sub) => sub.modules.map((m) => m.id))))
     );
     expect(modulosNaArvore).toEqual(MODULES.map((m) => m.id));
-    // 24 legadas + 13 páginas Commerce (inclui notificações) + 4 páginas Creators.
-    expect(PAGES_ESPECIAIS).toHaveLength(42);
+    // 24 legadas + 13 páginas Commerce (inclui notificações) + 4 páginas Creators
+    // + 1 da FASE 9.2 (caixa de entrada do CRM).
+    expect(PAGES_ESPECIAIS).toHaveLength(43);
   });
 });
 

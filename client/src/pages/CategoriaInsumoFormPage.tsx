@@ -29,6 +29,7 @@ import { AlertTriangle, ArrowLeft, Layers, Loader2, Save, X } from 'lucide-react
 import { api, ApiError } from '../lib/api';
 import { useMeta, type ResourceMeta } from '../lib/meta';
 import { Alert, PageHeader, Spinner, useToast } from '../components/ui';
+import { PageShell } from '../components/ui-kit-negocios';
 import {
   fieldErrors,
   initialValues,
@@ -140,13 +141,13 @@ export default function CategoriaInsumoFormPage() {
 
   if (!resource) {
     return (
-      <div className="p-4 sm:p-6">
+      <PageShell>
         <PageHeader title="Categorias de Insumos" description="Cadastro das categorias de insumo." />
         <Alert tone="red">O cadastro de Categorias de Insumos não está disponível neste ambiente.</Alert>
         <Link to={BASE} className="btn-secondary mt-4 inline-flex">
           <ArrowLeft className="h-4 w-4" /> Voltar para a lista
         </Link>
-      </div>
+      </PageShell>
     );
   }
 
@@ -161,26 +162,26 @@ export default function CategoriaInsumoFormPage() {
 
   if (carregando) {
     return (
-      <div className="p-4 sm:p-6">
+      <PageShell>
         <Spinner label="Carregando categoria..." />
-      </div>
+      </PageShell>
     );
   }
 
   if (erroCarregar) {
     return (
-      <div className="p-4 sm:p-6">
+      <PageShell>
         <PageHeader title={titulo} description="Não foi possível abrir o cadastro." />
         <Alert tone="red">{erroCarregar}</Alert>
         <Link to={BASE} className="btn-secondary mt-4 inline-flex">
           <ArrowLeft className="h-4 w-4" /> Voltar para a lista
         </Link>
-      </div>
+      </PageShell>
     );
   }
 
   return (
-    <div className="p-4 sm:p-6">
+    <PageShell>
       <PageHeader
         title={
           <span className="flex items-center gap-2.5">
@@ -277,6 +278,6 @@ export default function CategoriaInsumoFormPage() {
           </button>
         </div>
       </section>
-    </div>
+    </PageShell>
   );
 }

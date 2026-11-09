@@ -15,6 +15,7 @@ import { Copy, Loader2, Plus, Save } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { api, ApiError } from '../lib/api';
 import { Alert, PageHeader, Spinner, useToast } from '../components/ui';
+import { PageShell } from '../components/ui-kit-negocios';
 import ReauthModal from '../components/ReauthModal';
 
 type Webhook = {
@@ -118,7 +119,7 @@ export default function WebhookFormPage({ modo = 'novo' }: { modo?: 'novo' | 'ed
   const podeSalvar = !!form.nome.trim() && !!form.url.trim() && form.eventos.length > 0;
 
   return (
-    <div className="p-4 sm:p-6">
+    <PageShell>
       <PageHeader
         title={modo === 'editar' ? 'Editar webhook' : 'Novo webhook'}
         description="Criar, alterar e excluir exigem a sua senha (reautenticação). Cada entrega é assinada (HMAC) e registrada no log."
@@ -236,6 +237,6 @@ export default function WebhookFormPage({ modo = 'novo' }: { modo?: 'novo' | 'ed
         }}
         titulo={reauth?.titulo || 'Autorização necessária'}
       />
-    </div>
+    </PageShell>
   );
 }

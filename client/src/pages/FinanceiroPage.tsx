@@ -4,6 +4,7 @@ import { AlertTriangle, ArrowDownRight, ArrowRightLeft, ArrowUpRight, CalendarCl
 import { api } from '../lib/api';
 import { formatMoney } from '../lib/format';
 import { Alert, Badge, PageHeader, Spinner, useToast } from '../components/ui';
+import { PageShell } from '../components/ui-kit-negocios';
 
 type Lanc = {
   id: number;
@@ -236,7 +237,7 @@ export default function FinanceiroPage() {
   const pos = (v: number) => (v >= 0 ? 'text-emerald-600' : 'text-red-600');
 
   return (
-    <div className="p-4 sm:p-6">
+    <PageShell>
       <PageHeader
         title={
           <span className="flex items-center gap-2.5">
@@ -857,7 +858,7 @@ export default function FinanceiroPage() {
           )}
         </>
       )}
-    </div>
+    </PageShell>
   );
 }
 

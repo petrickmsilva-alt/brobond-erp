@@ -4,6 +4,7 @@ import { AlertTriangle, ArrowLeftRight, Boxes, ClipboardCheck, Download, FileUp,
 import { api, downloadFile } from '../lib/api';
 import { useMeta } from '../lib/meta';
 import { Alert, Badge, ConfirmacaoInline, PainelInline, PageHeader, Spinner, useToast } from '../components/ui';
+import { PageShell } from '../components/ui-kit-negocios';
 import { rotaImportacaoDoRecurso } from '../lib/importacao';
 import { formatMoney, formatNumber } from '../lib/format';
 import { formatDateTime } from '../lib/format';
@@ -316,7 +317,7 @@ export default function EstoqueGradePage() {
   }
 
   return (
-    <div className="p-4 pb-24 sm:p-6 md:pb-6">
+    <PageShell className="pb-24 md:pb-6">
       <PageHeader
         title={
           <span className="flex items-center gap-2.5">
@@ -679,7 +680,7 @@ export default function EstoqueGradePage() {
           </>
         }
       />
-    </div>
+    </PageShell>
   );
 }
 

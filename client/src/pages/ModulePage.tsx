@@ -33,6 +33,7 @@ import { BarrasVerticais } from '../components/Charts';
 import { DETALHE_DIRETO, FORM_DIRETO, findModuleByResource, type Module } from '../modules';
 import { useAuth } from '../auth/AuthContext';
 import { Alert, ConfirmacaoInline, EmptyState, PainelInline, PageHeader, Spinner, useToast } from '../components/ui';
+import { PageLoading, PageShell } from '../components/ui-kit-negocios';
 import { DocumentPrintButton } from '../components/DocumentPrintButton';
 import { Pagination } from '../components/ui-kit';
 // Opções de referência usadas pelos FILTROS da listagem (não por formulário:
@@ -121,6 +122,7 @@ const PainelComercialPage = lazy(() => import('./PainelComercialPage'));
 // CRM 3.0 — painel comercial e agenda (páginas próprias, sem modal).
 const CrmPainelPage = lazy(() => import('./CrmPainelPage'));
 const CrmAgendaPage = lazy(() => import('./CrmAgendaPage'));
+const CrmNotificacoesPage = lazy(() => import('./CrmNotificacoesPage'));
 // ONDA 4 / D1 — painel de atendimento (indicadores de SLA e resolução).
 const ServicePainelPage = lazy(() => import('./ServicePainelPage'));
 // FASE 7 — análise RFM (segmentação derivada das compras reais).
@@ -148,7 +150,7 @@ const PAGE_SIZE = 25;
 const TAMANHOS_PAGINA = [25, 50, 100];
 
 function SubPageLoading() {
-  return <Spinner label="Carregando módulo..." />;
+  return <PageLoading label="Carregando módulo..." />;
 }
 
 export default function ModulePage({ module }: { module: Module }) {
@@ -204,6 +206,7 @@ export default function ModulePage({ module }: { module: Module }) {
   if (module.id === 'painel-comercial') return <Suspense fallback={<SubPageLoading />}><PainelComercialPage /></Suspense>;
   if (module.id === 'crm-painel') return <Suspense fallback={<SubPageLoading />}><CrmPainelPage /></Suspense>;
   if (module.id === 'crm-agenda') return <Suspense fallback={<SubPageLoading />}><CrmAgendaPage /></Suspense>;
+  if (module.id === 'crm-notificacoes') return <Suspense fallback={<SubPageLoading />}><CrmNotificacoesPage /></Suspense>;
   if (module.id === 'service-painel') return <Suspense fallback={<SubPageLoading />}><ServicePainelPage /></Suspense>;
   if (module.id === 'customer-rfm') return <Suspense fallback={<SubPageLoading />}><CustomerRfmPage /></Suspense>;
   // FASE 8 — Control Tower executiva e alertas (leitura derivada, ZERO MODAL).
@@ -718,7 +721,7 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
   const Icon = module.icon;
 
   return (
-    <div className="p-4 sm:p-6">
+    <PageShell>
       <PageHeader
         title={
           <span className="flex items-center gap-2.5">
@@ -1077,7 +1080,7 @@ function ResourceCrud({ module, resource }: { module: Module; resource: Resource
           </>
         }
       />
-    </div>
+    </PageShell>
   );
 }
 

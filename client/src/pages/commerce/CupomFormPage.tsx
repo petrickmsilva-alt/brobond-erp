@@ -6,7 +6,8 @@ import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, Save } from 'lucide-react';
 import { apiFetch, ApiError } from '../../lib/api';
-import { Alert, PageHeader, Spinner, useToast } from '../../components/ui';
+import { Alert, PageHeader, useToast } from '../../components/ui';
+import { PageLoading } from '../../components/ui-kit-negocios';
 
 type Formulario = {
   codigo: string;
@@ -97,7 +98,7 @@ export default function CommerceCupomFormPage() {
     }
   };
 
-  if (carregando) return <Spinner label="Carregando cupom…" />;
+  if (carregando) return <PageLoading label="Carregando cupom…" />;
 
   return (
     <div className="mx-auto max-w-2xl space-y-4">

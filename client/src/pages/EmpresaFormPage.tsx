@@ -14,6 +14,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { api, ApiError } from '../lib/api';
 import type { ListResult } from '../lib/meta';
 import { Alert, PageHeader, Spinner, useToast } from '../components/ui';
+import { PageShell } from '../components/ui-kit-negocios';
 
 type Empresa = {
   id: number;
@@ -116,7 +117,7 @@ export default function EmpresaFormPage({ modo = 'novo' }: { modo?: 'novo' | 'ed
   }
 
   return (
-    <div className="space-y-4">
+    <PageShell>
       <PageHeader
         title={modo === 'editar' ? `Editar ${registro?.nome ?? 'empresa'}` : 'Nova empresa'}
         description="A empresa criada aqui entra no seletor do topo assim que o acesso for concedido a alguém."
@@ -167,6 +168,6 @@ export default function EmpresaFormPage({ modo = 'novo' }: { modo?: 'novo' | 'ed
           </p>
         </div>
       )}
-    </div>
+    </PageShell>
   );
 }
