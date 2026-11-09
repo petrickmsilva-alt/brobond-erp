@@ -238,3 +238,30 @@ Todos os comandos rodaram no sandbox desta sessão, com `DATABASE_URL`
 ---
 
 *Próximo documento: [`DOMAIN-MAP.md`](DOMAIN-MAP.md).*
+
+---
+
+## 10. Revisão — Fases 9.1, 9.2 e 9.3 (2026-11-09)
+
+Executadas as Fases 9.1 (integridade de dados e performance), 9.2 (automação do
+ciclo de vida do CRM) e 9.3 (UX operacional). Detalhe, evidências e limitações em
+[`docs/FASE-9-INTEGRIDADE-CRM-UX.md`](../FASE-9-INTEGRIDADE-CRM-UX.md).
+
+Números **medidos** nesta rodada (`npm run architecture:audit`):
+
+| Dimensão | Valor |
+|---|---:|
+| Migrations SQL (`db/migrations/*.sql`) | **113** |
+| Tabelas no SQL do ERP | **222** (com `empresa_id`: **202**) |
+| Recursos de API (`RESOURCES`) | **184** (multiempresa: **166**) |
+| Módulos de navegação (`MODULES`) | **152** (áreas: 11, grupos: 35) |
+| Casos de teste (server + client) | **3772** (server 2603 · client 1169) |
+
+> Os **3772** são a contagem **declarada** do inventário (estática). Na execução
+> real desta rodada: server **2466** casos (**2373 pass · 0 fail · 93 skip**) e
+> client **1193 pass · 0 fail**. A diferença é de método (declarado × executado),
+> não de cobertura.
+
+Fechamentos: **BL-016** (over-fetch de `sale_items`), **BL-012/GAP-P2-06/P2-14**
+(notificação interna do CRM) e **BL-014** (painéis de fluxo de módulo → páginas).
+Canal **externo** do CRM permanece não ativado, conforme a doutrina da Fase 8.

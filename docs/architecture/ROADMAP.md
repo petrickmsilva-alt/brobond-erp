@@ -12,6 +12,8 @@
 | **Fase 0** | Auditar e desenhar a arquitetura-alvo | Blueprint em `docs/architecture/` + ADRs | `architecture/fase-0-blueprint` |
 | **Fase 1** | Fundação e governança | Padrões + implementação mínima + testes | `architecture/fase-1-foundation` |
 | **Fase 2** | Núcleo canônico de dados + descontinuação do `/loja` | Dados governados + retirada segura | `architecture/fase-2-canonical-erp-data` |
+| **Fases 6–8** | Commerce omnichannel, CRM/loyalty, BI/Control Tower | Motores de leitura + alertas | PRs por fase |
+| **Fases 9.1–9.3** | Integridade de dados, automação do CRM e UX operacional | Recorte tenant no SQL, caixa interna do CRM, moldura única de página | `architecture/fases-9-1-9-2-9-3` |
 
 > **Nota (revisão):** na Fase 2 o núcleo de dados foi entregue; a **retirada da
 > `/loja` NÃO foi executada** (bloqueada por ambiente/decisão — BL-015). A

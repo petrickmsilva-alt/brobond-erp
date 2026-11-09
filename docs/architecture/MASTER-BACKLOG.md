@@ -17,14 +17,15 @@ dependência · próxima fase responsável · critério de encerramento · statu
 | BL-009 | 0 | `test:pg`/`prisma validate` bloqueados no sandbox | GAP-P2-17 | P2 | evidência só no CI | CI | contínuo | CI verde nos jobs PG | **bloqueado (ambiente)** |
 | BL-010 | 0 | Fiscal sem SPED/EFD | GAP-P2-11/12 | P2 | obrigação acessória | contador | pós-Fase 2 | layout oficial validado | **aberto (externo)** |
 | BL-011 | 0 | Plano de contas sem importação | GAP-P2-13 | P2 | trabalho manual | formato acordado | pós-Fase 2 | importação CSV/SPED | **aberto** |
-| BL-012 | 0 | CRM sem notificação ativa de lembrete | GAP-P2-14 | P2 | follow-up | canal | Fase 3 | notificação disparada por `scheduled.ts` | **aberto** |
+| BL-012 | 0 | CRM sem notificação ativa de lembrete | GAP-P2-14 | P2 | follow-up | canal | Fase 3 | notificação disparada por `scheduled.ts` | **encerrado na Fase 9.2** — ver §3 |
 | BL-013 | 0 | `insumos.unidade` texto livre | GAP-P3-04 | P3 | padronização | migração de dados | pós-Fase 2 | catálogo de unidades | **aberto** |
-| BL-014 | 0 | Painéis de fluxo de módulo residuais (11) | `RELATORIO-PR95` §4.2 | P2/P3 | UX | reescrita por módulo | pós-Fase 2 | LISTA→PÁGINA em cada | **aberto** |
+| BL-014 | 0 | Painéis de fluxo de módulo residuais (11) | `RELATORIO-PR95` §4.2 | P2/P3 | UX | reescrita por módulo | pós-Fase 2 | LISTA→PÁGINA em cada | **encerrado na Fase 9.3** — ver §3 |
 | BL-015 | 2 | Descontinuação da loja nativa não executada | `NATIVE-STORE-DECOMMISSION-REPORT.md` §4 | P2 | duplicidade de varejo | PG + credenciais Woo + decisão DNS | Fase 3 | remoção executada e RETAIL validado | **aberto — impedimento externo** |
 
-> **BL-016 encerrado na Fase 9.1** — ver §3 (Pendências resolvidas). A projeção
-> continua SEM `empresa_id` (decisão de arquitetura mantida); o over-fetch foi
-> corrigido recortando o tenant no SQL.
+> **BL-016 encerrado na Fase 9.1** e **BL-014 encerrado na Fase 9.3** — ver §3
+> (Pendências resolvidas). A projeção continua SEM `empresa_id` (decisão de
+> arquitetura mantida); o over-fetch foi corrigido recortando o tenant no SQL. Os
+> fluxos de módulo em painel viraram páginas (trava `scripts/ux-guard.mjs`).
 
 ---
 
@@ -61,6 +62,8 @@ dependência · próxima fase responsável · critério de encerramento · statu
 | BL-R-08 | 2 | Documentação tratava a retirada da `/loja` como concluída, mas a superfície segue ativa | Corrigido em `SECURITY-ARCHITECTURE.md`, `TARGET-ARCHITECTURE.md`, `README.md`, `NATIVE-STORE-DECOMMISSION.md`; travado por `fase2-loja-coerencia.test.ts`. **Segunda passada:** o cabeçalho de `NATIVE-STORE-DECOMMISSION.md` ainda dizia "A retirada é executada na Fase 2" (contradizendo o relatório e o próprio rodapé) — corrigido para "execução bloqueada / superfície ativa", com teste que varre a afirmação em prosa |
 | BL-R-09 | 2 | Disponibilidade canônica sem prova de "sem dupla dedução" e dos 4 componentes | `fase2-nucleo-canonico.test.ts` (+5 casos: quatro componentes, tipo desconhecido, quantidade ≤ 0, 1× célula × total, `saldoVendavel`) |
 | BL-016 | 9.1 | Over-fetch de `sale_items` (projeção sem `empresa_id`): analytics lia `filter: {}` e recortava por `sale_id` em memória | `server/src/commerce/projecao.ts` + filtro de lista (`= ANY`) no Store (`pgstore.ts`/`memdb.ts`); `analytics.ts` recorta o tenant no SQL. Provas: `fase9-1-data-integrity.test.ts` (memória) e `pg/fase9-1-data-integrity.test.ts` (PG real: isolamento A/B + Index Scan `sale_items_sale_id_idx`). **Sem migração** — a projeção permanece sem `empresa_id` (decisão mantida) |
+| BL-012 | 9.2 | CRM sem notificação ativa de lembrete (GAP-P2-06/P2-14): só havia o carimbo CAS do agendador, sem canal interno visível | Canal INTERNO em `crm_notificacoes` (migration `0113`, aditiva) com `UNIQUE (empresa_id, chave_idempotencia)` — idempotência pelo BANCO; hooks de ciclo de vida em `services.ts` (mesma transação) e `crmNotificacoes.ts`; endpoints `GET /api/crm/notificacoes` + `/lida(s)` (caixa pessoal); tela `/crm/notificacoes`. Provas: `fase9-2-crm-lifecycle.test.ts` (19 casos) e `pg/fase9-2-crm-lifecycle.test.ts`. **Canal externo NÃO ativado** |
+| BL-014 | 9.3 | Painéis de fluxo de módulo residuais (PR95 §4.2): criação/edição de entidade escondida em `PainelInline` | Convertidos para PÁGINA (`/custo/nova`, `/devolucoes/nova`, `/empresas/:id/editar`, `/ncm/novo`, `/webhooks/novo`, `/config/impressao/…`, `/importar/:tipo`, `/usuarios/novo`, `/compras/:id/receber`, `/cotacoes-compra/novo`); trava `scripts/ux-guard.mjs` (rota + página + ausência do painel antigo). Moldura de página unificada em `PageShell`; gate `client/src/test/page-shell.test.ts`. Painéis auxiliares legítimos (leitura/child-flow) preservados |
 
 ---
 
