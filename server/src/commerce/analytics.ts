@@ -14,6 +14,7 @@ import { escopoDoAtor } from '../empresa';
 import { getResource } from '../resources';
 import type { Row } from '../store';
 import { mediaOuZero, razao, round2, tendenciaLinear, type CanalPedido } from './regras';
+import { itensDaEmpresa, itensDeVendas } from './projecao';
 
 const R_SALES = () => getResource('sales')!;
 const R_VENDAS = () => getResource('vendas')!;
@@ -55,7 +56,10 @@ export async function analyticsCommerce(req: Request, res: Response) {
     vendasDoPeriodo(escopo.empresaId, inicioMs, fimMs),
     vendasDoPeriodo(escopo.empresaId, diasAtras(dias * 2, agora), diasAtras(dias, agora)),
     s.list(R_PEDIDOS(), { page: 1, pageSize: 2000, filter: { empresa_id: escopo.empresaId } }),
-    s.list(getResource('sale_items')!, { page: 1, pageSize: 5000, filter: {} }),
+    // BL-016: `sale_items` não tem `empresa_id` — o recorte por tenant é feito
+    // NO SQL pelo conjunto de vendas da empresa (antes: itens de TODAS as
+    // empresas eram lidos e descartados em memória).
+    itensDaEmpresa(escopo.empresaId),
   ]);
 
   const pagas = periodo.filter((v) => String(v.status) === 'PAID');
@@ -90,7 +94,7 @@ export async function analyticsCommerce(req: Request, res: Response) {
   // Top produtos: itens de vendas pagas no período (GMV atribuído ao item).
   const idsVendasPagas = new Set(periodo.filter((v) => String(v.status) === 'PAID').map((v) => String(v.id)));
   const topPorProduto = new Map<number, { quantidade: number; receita: number }>();
-  for (const item of itensRecentes.rows) {
+  for (const item of itensRecentes) {
     if (!idsVendasPagas.has(String(item.sale_id))) continue;
     const pid = Number(item.product_id || 0);
     if (!pid) continue;
@@ -235,9 +239,11 @@ export async function trendsCommerce(req: Request, res: Response) {
     const mapa = new Map<number, number>();
     const ids = new Set(linhas.filter((v) => String(v.status) === 'PAID').map((v) => String(v.id)));
     if (!ids.size) return mapa;
-    const itens = await getStore().list(getResource('sale_items')!, { page: 1, pageSize: 5000, filter: {} });
-    for (const i of itens.rows) {
-      if (!ids.has(String(i.sale_id))) continue;
+    // BL-016: itens recortados pelas vendas pagas da metade (ids já scoped pelo
+    // tenant, pois vêm de `periodo`) — o filtro entra no SQL, não em JS sobre a
+    // página inteira da projeção.
+    const itens = await itensDeVendas([...ids]);
+    for (const i of itens) {
       const pid = Number(i.product_id || 0);
       if (!pid) continue;
       mapa.set(pid, (mapa.get(pid) ?? 0) + Number(i.quantity || 0));

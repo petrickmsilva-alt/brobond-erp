@@ -60,5 +60,5 @@ zero inventado para preencher a tela (`commerce/analytics.ts`).
 
 | GAP | Severidade | Ação |
 |---|---|---|
-| `sale_items` sem `empresa_id` (projeção) | P3 | herda `sales`; recorte no SQL na Fase 3 (BL-016) |
-| Analytics lê `sale_items` com `filter:{}` (over-fetch) | P3 | mesmo item acima |
+| `sale_items` sem `empresa_id` (projeção) | P3 | herda `sales`; recorte por tenant NO SQL na Fase 9.1 (BL-016) |
+| Analytics lê `sale_items` com `filter:{}` (over-fetch) | **FECHADO na Fase 9.1** — `sale_id = ANY` recorta no banco |

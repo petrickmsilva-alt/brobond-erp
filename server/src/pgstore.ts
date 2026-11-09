@@ -319,6 +319,19 @@ function searchClause(r: Resource, qtext: string | undefined, params: unknown[],
       continue;
     }
     if (!cols.has(k)) continue;
+    // Conjunto de igualdade: `{ sale_id: [idA, idB] }` → `sale_id = ANY($n)`.
+    // Permite recortar um recurso SEM `empresa_id` (ex.: `sale_items`, cujo
+    // tenant vem de `sales`) no próprio SQL, pelo conjunto de ids da empresa —
+    // nenhuma linha de outra empresa é lida para depois ser descartada em JS.
+    if (Array.isArray(v)) {
+      if (!v.length) {
+        conds.push('FALSE');
+        continue;
+      }
+      params.push(v);
+      conds.push(`t.${k} = ANY($${params.length})`);
+      continue;
+    }
     params.push(v);
     conds.push(`t.${k} = $${params.length}`);
   }

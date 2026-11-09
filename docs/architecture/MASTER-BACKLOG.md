@@ -21,7 +21,10 @@ dependência · próxima fase responsável · critério de encerramento · statu
 | BL-013 | 0 | `insumos.unidade` texto livre | GAP-P3-04 | P3 | padronização | migração de dados | pós-Fase 2 | catálogo de unidades | **aberto** |
 | BL-014 | 0 | Painéis de fluxo de módulo residuais (11) | `RELATORIO-PR95` §4.2 | P2/P3 | UX | reescrita por módulo | pós-Fase 2 | LISTA→PÁGINA em cada | **aberto** |
 | BL-015 | 2 | Descontinuação da loja nativa não executada | `NATIVE-STORE-DECOMMISSION-REPORT.md` §4 | P2 | duplicidade de varejo | PG + credenciais Woo + decisão DNS | Fase 3 | remoção executada e RETAIL validado | **aberto — impedimento externo** |
-| BL-016 | 2 | `sale_items` (projeção) sem `empresa_id`; leitura sem recorte no SQL | `commerce/analytics.ts` lê `sale_items` com `filter: {}` e recorta por `sale_id` em memória | P3 | over-fetch (não há vazamento: o item é filtrado pelo conjunto de `sales` da empresa) | migração aditiva + `test:pg` | Fase 3 | `empresa_id` na projeção + recorte no SQL | **aberto — performance** |
+
+> **BL-016 encerrado na Fase 9.1** — ver §3 (Pendências resolvidas). A projeção
+> continua SEM `empresa_id` (decisão de arquitetura mantida); o over-fetch foi
+> corrigido recortando o tenant no SQL.
 
 ---
 
@@ -57,6 +60,7 @@ dependência · próxima fase responsável · critério de encerramento · statu
 | BL-R-07 | 2 | Divergência numérica `184 × 192` (tabelas com `empresa_id`) e `174 × 176` (recursos RBAC) | Causa: falso positivo do parser (Fase 1) e contagem de linhas do `RBAC-MATRIX.md` (174 recursos + cabeçalho/separador). Docs alinhados (`CURRENT-STATE.md`, `README.md`, `ADR-0011`, `DATABASE-MIGRATION-STANDARD.md`); travado por `rbac-matrix.test.ts` (matriz × código). **Segunda passada:** o gerador `audit:menu` (`scripts/auditar-menu.ts`) ainda usava o parser ingênuo e reportava 184 — passou a consumir o parser único `tabelasComEmpresaId` de `scripts/arquitetura-sql.ts` (192, igual ao `architecture:audit`), travado por `arquitetura-audit-parser.test.ts` |
 | BL-R-08 | 2 | Documentação tratava a retirada da `/loja` como concluída, mas a superfície segue ativa | Corrigido em `SECURITY-ARCHITECTURE.md`, `TARGET-ARCHITECTURE.md`, `README.md`, `NATIVE-STORE-DECOMMISSION.md`; travado por `fase2-loja-coerencia.test.ts`. **Segunda passada:** o cabeçalho de `NATIVE-STORE-DECOMMISSION.md` ainda dizia "A retirada é executada na Fase 2" (contradizendo o relatório e o próprio rodapé) — corrigido para "execução bloqueada / superfície ativa", com teste que varre a afirmação em prosa |
 | BL-R-09 | 2 | Disponibilidade canônica sem prova de "sem dupla dedução" e dos 4 componentes | `fase2-nucleo-canonico.test.ts` (+5 casos: quatro componentes, tipo desconhecido, quantidade ≤ 0, 1× célula × total, `saldoVendavel`) |
+| BL-016 | 9.1 | Over-fetch de `sale_items` (projeção sem `empresa_id`): analytics lia `filter: {}` e recortava por `sale_id` em memória | `server/src/commerce/projecao.ts` + filtro de lista (`= ANY`) no Store (`pgstore.ts`/`memdb.ts`); `analytics.ts` recorta o tenant no SQL. Provas: `fase9-1-data-integrity.test.ts` (memória) e `pg/fase9-1-data-integrity.test.ts` (PG real: isolamento A/B + Index Scan `sale_items_sale_id_idx`). **Sem migração** — a projeção permanece sem `empresa_id` (decisão mantida) |
 
 ---
 

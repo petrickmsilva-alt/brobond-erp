@@ -50,7 +50,7 @@ manual poderia apontar um registro do CRM a um pai de outra empresa.
 
 | Caso | Motivo | Classificação |
 |---|---|---|
-| `sale_items` sem `empresa_id` | projeção do read model | P3 — herda `sales` (BL-016) |
+| `sale_items` sem `empresa_id` | projeção do read model | P3 — herda `sales`; recorte por tenant NO SQL na Fase 9.1 (BL-016) |
 | `arquivos` polimórfico | FK depende do recurso | P3 — validado no serviço |
 | `cotacao_decisoes`/`portal_acessos` | herda-tenant | P3 — classificados |
 

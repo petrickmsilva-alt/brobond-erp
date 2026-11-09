@@ -32,7 +32,7 @@ e do código de domínio. **Nenhum dado de produção foi alterado.**
 
 | ID | Problema | Severidade | Por que não nesta fase |
 |---|---|---|---|
-| BL-016 | `sale_items` sem `empresa_id` (over-fetch no analytics) | P3 | exige migração aditiva + `test:pg` (ambiente bloqueado) |
+| BL-016 | `sale_items` sem `empresa_id` (over-fetch no analytics) | ~~P3~~ | **FECHADO na Fase 9.1** — recorte por tenant no SQL (`sale_id = ANY`), sem migração; `fase9-1-data-integrity.test.ts` + `pg/fase9-1-data-integrity.test.ts` |
 | — | `insumos.unidade` texto livre | P3 | exige catálogo de unidades (decisão de dados) |
 | — | `arquivos` polimórfico | P3 | validado no serviço; FK genérica não é possível |
 
