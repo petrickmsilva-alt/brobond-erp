@@ -120,10 +120,11 @@ sair com **exit 1**; com a correção, `veredito: PASSOU` e exit 0.
 
 - **Branch:** `fix/aud-01-production-release`
 - **Base:** `main` @ `9506ed2`
-- **PR:** #126
-- **Commits:** `20f6202` (AUD-01/SEC-01/TEST-01), `5735ec6` (SEC-01 `sem_compra`)
-- **Merge SHA:** pendente
-- **HEAD da main:** pendente de CI
+- **PR:** #126 — `mergeable_state: clean`
+- **Commits:** `20f6202` (AUD-01/SEC-01/TEST-01), `5735ec6` (SEC-01 `sem_compra`), `f70f778` (docs)
+- **CI:** ✅ `verificar` success · ✅ `testes-postgres` success
+- **Merge SHA:** **NÃO EXECUTADO** (ver §H — merge implica auto-deploy sem backup comprovável)
+- **HEAD da main:** `9506ed2` (inalterado)
 
 ---
 
@@ -192,19 +193,45 @@ reais de operação.
 
 ## H. Resultado final
 
-**MERGE BLOQUEADO** neste ambiente — não por falha de código (todos os gates
-locais passaram), mas por **evidências de produção indisponíveis**: sem acesso ao
-Render, sem egress para produção e sem backup comprovável. Conforme a ordem:
-*"SE QUALQUER GATE CRÍTICO FALHAR, INTERROMPA A IMPLANTAÇÃO."*
+**MERGE BLOQUEADO** — por **evidências de produção indisponíveis**, não por falha
+de código. Todos os critérios de engenharia da Etapa 10 foram atendidos e o CI
+está verde; o PR #126 está `clean`/mergeable. Ainda assim o merge **não** foi
+executado porque, neste repositório, **não há `autoDeploy: false` no
+`render.yaml`** — ou seja, fazer merge na `main` **dispara automaticamente o
+deploy em produção**. Fazer isso agora violaria a própria ordem do Diretor:
 
-**Pendências para autorizar merge + deploy:**
+- **Etapa 6:** *"Se o backup não puder ser comprovado, interromper a implantação."*
+  Não há como comprovar backup recente/restaurável de produção neste ambiente.
+- **Etapa 11:** exige *acompanhar* build/deploy e confirmar estado `live` — sem
+  acesso ao Render (sem CLI/token) e sem egress para `brobond-erp.onrender.com`
+  (`curl /api/health` → HTTP 000), isso é impossível.
+- **Etapa 13/14:** smoke tests e critério de rollback pressupõem acesso à produção.
 
-1. CI verde no PR (jobs `verificar` e `testes-postgres`, Node 24).
-2. `npm run test:pg` com PostgreSQL 16.14 em banco **vazio**.
-3. Backup de produção recente e restaurável confirmado.
-4. Egress/painel do Render para acompanhar deploy e rodar os smoke tests.
+Como o PR **não toca migrations** (`db/migrations/*`, `schema.sql`, `bootstrap.sql`
+inalterados), o deploy é de código apenas — o risco é baixo, mas permanece
+**não verificável** aqui. Conforme *"SE QUALQUER GATE CRÍTICO FALHAR, INTERROMPA A
+IMPLANTAÇÃO. NÃO IMPROVISE."*, a liberação é interrompida no ponto do merge e
+entregue para o operador.
 
-**Critérios de código (atendidos):** AUD-01 corrigido; SEC-01 corrigido; gate
-fortalecido e aprovado; migrations revisadas (aditivas/idempotentes); zero P0; zero
-P1 conhecido; nenhuma regressão crítica; CRUD genérico continua protegido; tenant
-scope aprovado.
+**Critérios de código (TODOS atendidos):** AUD-01 corrigido; SEC-01 corrigido
+(inclusive o contador `sem_compra` do RFM); gate go-live fortalecido e aprovado;
+migrations revisadas (aditivas/idempotentes, sem operações destrutivas); zero P0;
+zero P1 conhecido; nenhuma regressão crítica; CRUD genérico continua protegido;
+tenant scope aprovado; CI verde (`verificar` + `testes-postgres`).
+
+### Ação pendente do operador (para concluir o deploy)
+
+1. **Backup de produção** recente e restaurável — comprovar antes do merge.
+2. **Merge do PR #126** na `main` (é o gatilho do auto-deploy do Render).
+3. Acompanhar o deploy no painel do Render (build `npm install --include=dev && npm run build`,
+   start `npm --workspace server start`, health `/api/health`); registrar deploy ID,
+   SHA `f70f778…` e horário.
+4. Migrations: nada novo a aplicar por este PR; o boot da API confirma as
+   `schema_migrations` pendentes (0110–0112 já presentes no schema espelhado).
+5. **Smoke tests** (login/sessão/permissões, `/alertas`, RBAC, tenant scope, logs
+   sem secrets) — **sem** transicionar alertas reais de operação.
+6. Rollback, se necessário: o deploy é só de código; a versão anterior
+   (`9506ed2`) é compatível com o schema atual (sem migration nova) → rollback de
+   código seguro, sem perda de dados.
+
+Detalhamento completo por fase em `docs/ERP-3.0-RELEASE-READINESS.md`.
