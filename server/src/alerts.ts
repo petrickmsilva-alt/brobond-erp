@@ -25,7 +25,7 @@ import { currentUser } from './auth';
 import { escopoDoAtor, escopoDeSistema } from './empresa';
 import { HttpError } from './errors';
 import { getResource } from './resources';
-import { checkAccess, getStore } from './services';
+import { checkAccess, checkFluxoEscrita, getStore } from './services';
 import { disponibilidadesPorTamanho } from './commerce/catalogo';
 import type { Row, Tx } from './store';
 
@@ -645,9 +645,15 @@ export async function painelAlertasHandler(req: Request, res: Response) {
   res.json(await painelAlertas(escopo.empresaId, { dominio, severidade, status }));
 }
 
+// AUD-01: `alert_events` tem `ops.update = false` — o CRUD genérico (PUT
+// /api/alert_events) NÃO pode editar uma ocorrência, e isso permanece fechado.
+// Reconhecer/resolver/silenciar são ENDPOINTS DE FLUXO: o caminho legítimo para
+// a transição. Por isso usam `checkFluxoEscrita`, que confere a MESMA alçada do
+// checkAccess (autenticação, minPerfil gerente/admin, RBAC comercial,
+// minPerfilEscrita) sem consultar `ops`. O CRUD genérico continua bloqueado.
 export async function reconhecerAlertaHandler(req: Request, res: Response) {
   const actor = currentUser(req);
-  checkAccess(getResource('alert_events')!, actor, 'update');
+  checkFluxoEscrita(getResource('alert_events')!, actor, 'update');
   const escopo = escopoDoAtor(actor);
   const id = Number(req.params.id);
   if (!Number.isSafeInteger(id) || id < 1) throw new HttpError(400, 'Alerta inválido.');
@@ -656,7 +662,7 @@ export async function reconhecerAlertaHandler(req: Request, res: Response) {
 
 export async function resolverAlertaHandler(req: Request, res: Response) {
   const actor = currentUser(req);
-  checkAccess(getResource('alert_events')!, actor, 'update');
+  checkFluxoEscrita(getResource('alert_events')!, actor, 'update');
   const escopo = escopoDoAtor(actor);
   const id = Number(req.params.id);
   if (!Number.isSafeInteger(id) || id < 1) throw new HttpError(400, 'Alerta inválido.');
@@ -666,7 +672,7 @@ export async function resolverAlertaHandler(req: Request, res: Response) {
 
 export async function silenciarAlertaHandler(req: Request, res: Response) {
   const actor = currentUser(req);
-  checkAccess(getResource('alert_events')!, actor, 'update');
+  checkFluxoEscrita(getResource('alert_events')!, actor, 'update');
   const escopo = escopoDoAtor(actor);
   const id = Number(req.params.id);
   if (!Number.isSafeInteger(id) || id < 1) throw new HttpError(400, 'Alerta inválido.');

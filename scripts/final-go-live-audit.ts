@@ -32,6 +32,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { auditarUx } from './ux-guard.mjs';
 import { auditarCapacidades, carregarRegistro } from './capacidades-audit';
+import { executarTestesObrigatorios } from './gate-testes.mjs';
 
 const raiz = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -75,6 +76,29 @@ for (const gate of gates) {
   if (!r.ok) {
     registrar('GATE_VERMELHO', 'P0', `Gate obrigatório falhou: ${gate.nome}`, gate.comando.join(' '));
   }
+}
+
+// ---------------------------------------------------------------------------
+// 1.1) TESTES OBRIGATÓRIOS DE AUTORIZAÇÃO/HTTP — EXECUTADOS de verdade.
+//
+// TEST-01: "existe arquivo de teste" NÃO é evidência. O gate precisa RODAR os
+// testes de autorização HTTP e reprovar quando falham. Um teste obrigatório que
+// não executou (arquivo ausente, runner que não rodou nenhum caso, timeout) é
+// FALTA DE EVIDÊNCIA — nunca aprovação.
+// ---------------------------------------------------------------------------
+const testesAutorizacao = executarTestesObrigatorios(raiz);
+if (!testesAutorizacao.ok) {
+  registrar(
+    'TESTES_AUTORIZACAO_REPROVADOS',
+    'P1',
+    `Testes obrigatórios de autorização HTTP reprovados: ${testesAutorizacao.motivo} ` +
+      `(aprovados=${testesAutorizacao.pass}, falhos=${testesAutorizacao.fail}, ignorados=${testesAutorizacao.skipped}, ` +
+      `não executados=${testesAutorizacao.naoExecutados.length})`,
+    testesAutorizacao.naoExecutados.join(', ') || 'server/test'
+  );
+}
+for (const nome of testesAutorizacao.arquivosComFalha) {
+  registrar('TESTE_AUTORIZACAO_FALHO', 'P1', `Caso de autorização HTTP falhou: ${nome}`, 'server/test');
 }
 
 // ---------------------------------------------------------------------------
@@ -342,16 +366,19 @@ const erros = [...P0, ...P1];
 const warnings = [...P2, ...P3];
 
 if (process.argv.includes('--json')) {
-  console.log(JSON.stringify({ P0, P1, P2, P3, erros, warnings, veredito: erros.length ? 'BLOCKED' : 'STRUCTURAL_CHECKS_PASSED', FULL_GO_LIVE: false }, null, 2));
+  console.log(JSON.stringify({ P0, P1, P2, P3, erros, warnings, veredito: erros.length ? 'BLOCKED' : 'STRUCTURAL_CHECKS_PASSED', FULL_GO_LIVE: false, testes_autorizacao: { ok: testesAutorizacao.ok, pass: testesAutorizacao.pass, fail: testesAutorizacao.fail, skipped: testesAutorizacao.skipped, nao_executados: testesAutorizacao.naoExecutados.length, motivo: testesAutorizacao.motivo } }, null, 2));
   process.exit(erros.length ? 1 : 0);
 }
 
 const linha = (a: Achado) => `   · [${a.id}] ${a.mensagem}${a.onde ? ` — ${a.onde}` : ''}`;
 console.log('BROBOND ERP 3.0 — VERIFICAÇÃO ESTRUTURAL\n');
-console.log('Gates executados: audit:ux · audit:menu · architecture:audit');
+console.log('Gates executados: audit:ux · audit:menu · architecture:audit · testes de autorização HTTP');
 console.log(`Fluxos de página exigidos: ${FLUXOS_ESPERADOS.length}`);
 console.log(`Cálculos críticos exigidos: ${CALCULOS.length}`);
 console.log(`Migrations verificadas: ${migrations.length}\n`);
+console.log('TESTES OBRIGATÓRIOS DE AUTORIZAÇÃO (execução real):');
+console.log(`  aprovados=${testesAutorizacao.pass} · falhos=${testesAutorizacao.fail} · ignorados=${testesAutorizacao.skipped} · não executados=${testesAutorizacao.naoExecutados.length}`);
+console.log(`  veredito: ${testesAutorizacao.ok ? 'PASSOU' : 'REPROVADO'} — ${testesAutorizacao.motivo}\n`);
 
 for (const [rotulo, lista] of [
   ['P0 (BLOQUEIA)', P0],
