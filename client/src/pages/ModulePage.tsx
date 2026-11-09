@@ -139,6 +139,9 @@ const FiscalCalendarioPage = lazy(() => import('./FiscalCalendarioPage'));
 const FinanceiroBalancetePage = lazy(() => import('./FinanceiroBalancetePage'));
 // Supply chain — rastreabilidade ponta a ponta (lote + trilha; leitura do motor canônico).
 const RastreabilidadePage = lazy(() => import('./RastreabilidadePage'));
+// FASE 8 — Control Tower executiva e painel de alertas (leitura derivada).
+const ControlTowerPage = lazy(() => import('./ControlTowerPage'));
+const AlertasPage = lazy(() => import('./AlertasPage'));
 
 const PAGE_SIZE = 25;
 /** Tamanhos de página oferecidos na listagem (server-side). */
@@ -203,6 +206,9 @@ export default function ModulePage({ module }: { module: Module }) {
   if (module.id === 'crm-agenda') return <Suspense fallback={<SubPageLoading />}><CrmAgendaPage /></Suspense>;
   if (module.id === 'service-painel') return <Suspense fallback={<SubPageLoading />}><ServicePainelPage /></Suspense>;
   if (module.id === 'customer-rfm') return <Suspense fallback={<SubPageLoading />}><CustomerRfmPage /></Suspense>;
+  // FASE 8 — Control Tower executiva e alertas (leitura derivada, ZERO MODAL).
+  if (module.id === 'ai-control-tower') return <Suspense fallback={<SubPageLoading />}><ControlTowerPage /></Suspense>;
+  if (module.id === 'alert-events') return <Suspense fallback={<SubPageLoading />}><AlertasPage /></Suspense>;
   if (module.id === 'transferencias-estoque') return <Suspense fallback={<SubPageLoading />}><EstoqueTransferenciasPage /></Suspense>;
   if (module.id === 'devolucoes-fornecedor') return <Suspense fallback={<SubPageLoading />}><DevolucoesFornecedorPage /></Suspense>;
   if (module.id === 'homologacao-fornecedores') return <Suspense fallback={<SubPageLoading />}><ComprasFornecedoresPage /></Suspense>;

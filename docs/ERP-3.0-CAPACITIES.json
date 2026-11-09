@@ -1492,6 +1492,38 @@
       "menu": false,
       "justificativa": "Visão 360 do cliente em rota própria (leitura derivada, zero modal), acessada do cadastro do cliente. Não é entrada de menu: o cliente é a entrada.",
       "teste": "client/src/pages/Customer360Page.test.tsx"
+    },
+    {
+      "id": "ai-control-tower",
+      "label": "Control Tower",
+      "tipo": "modulo",
+      "rota": "/ai/control-tower",
+      "menu": true,
+      "rbac": "gerente",
+      "teste": "server/test/fase8-alertas-control-tower.test.ts"
+    },
+    {
+      "id": "alert-events",
+      "label": "Alertas",
+      "tipo": "modulo",
+      "recurso": "alert_events",
+      "tabela": "alert_events",
+      "rota": "/alertas",
+      "menu": true,
+      "rbac": "gerente",
+      "teste": "server/test/fase8-alertas-control-tower.test.ts"
+    },
+    {
+      "id": "alert-rules",
+      "label": "Regras de alerta",
+      "tipo": "submodulo",
+      "parente": "alert-events",
+      "recurso": "alert_rules",
+      "tabela": "alert_rules",
+      "rota": "/alertas/regras",
+      "menu": true,
+      "rbac": "gerente",
+      "teste": "server/test/fase8-alertas-control-tower.test.ts"
     }
   ],
   "recursos_sem_dono_permitido": {}

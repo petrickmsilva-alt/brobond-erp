@@ -70,6 +70,7 @@ import {
   Headphones,
   Gauge,
   Timer,
+  Bell,
 } from 'lucide-react';
 
 export type ModuleSpace = 'erp' | 'commerce' | 'creators' | 'utilidades';
@@ -344,6 +345,48 @@ export const MODULES: Module[] = [
     resource: 'bi_read_models',
     minPerfil: 'gerente',
     description: 'Projeções reconstruídas dos documentos canônicos: empresa, origem, período, dimensão, métrica e timestamp.',
+  },
+{
+    id: 'ai-control-tower',
+    label: 'Control Tower',
+    icon: Gauge,
+    space: 'erp',
+    area: 'Meu Negócio',
+    group: 'Análises',
+    subgroup: 'Data e BI',
+    keywords: 'control tower torre controle executivo indicadores saude operacional previsao recomendacao pendencia critica bi ai',
+    path: '/ai/control-tower',
+    minPerfil: 'gerente',
+    description: 'Camada executiva de leitura: indicadores com definição e fórmula, saúde operacional, alertas, previsões, recomendações rastreáveis e pendências críticas. Não executa operação — recomendar não é agir.',
+  },
+{
+    id: 'alert-events',
+    label: 'Alertas',
+    icon: Bell,
+    space: 'erp',
+    area: 'Meu Negócio',
+    group: 'Análises',
+    subgroup: 'Data e BI',
+    keywords: 'alerta alertas severidade ruptura estoque vendas margem inadimplencia integracao sla pedido divergencia silenciar resolver reconhecer',
+    path: '/alertas',
+    resource: 'alert_events',
+    minPerfil: 'gerente',
+    description: 'Ocorrências detectadas por regras reais sobre dados canônicos, com severidade, evidência e histórico de reconhecimento, resolução e silenciamento.',
+  },
+{
+    id: 'alert-rules',
+    label: 'Regras de alerta',
+    icon: Bell,
+    space: 'erp',
+    area: 'Meu Negócio',
+    group: 'Análises',
+    subgroup: 'Data e BI',
+    kind: 'subitem',
+    keywords: 'regra alerta limiar severidade janela frequencia silenciamento destinatario dominio',
+    path: '/alertas/regras',
+    resource: 'alert_rules',
+    minPerfil: 'gerente',
+    description: 'Configuração das regras de alerta: detector, limiar, severidade, janela anti-spam, canal, destinatários e silenciamento.',
   },
 {
     id: 'produtos',
@@ -2520,6 +2563,8 @@ export const MODULOS_PAGINA_PROPRIA = new Set<string>([
   'contagem-ciclica-abc',
   'rastreabilidade',
   'service-painel',
+  // FASE 8 — alertas (painel próprio; a ocorrência não é CRUD editável).
+  'alert-events',
 ]);
 
 /**

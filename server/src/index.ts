@@ -253,6 +253,16 @@ import {
 } from './service';
 // FASE 7 — LGPD: exportação dos dados do titular (direito de acesso/portabilidade).
 import { exportarDadosTitular } from './lgpd';
+// FASE 8 — Alertas configuráveis (AI Control Tower).
+import {
+  avaliarAlertasHandler,
+  painelAlertasHandler,
+  reconhecerAlertaHandler,
+  resolverAlertaHandler,
+  silenciarAlertaHandler,
+} from './alerts';
+// FASE 8 — AI Control Tower (leitura executiva consolidada).
+import { painelControlTowerHandler } from './controlTower';
 import {
   apurarComissaoAfiliado,
   aprovarSop,
@@ -1127,6 +1137,14 @@ app.get('/api/bi/painel', wrap(painelBi));
 // ---- ONDAS 4–5 / D4 — AI PLATFORM ----
 app.post('/api/ai/recomendacoes/gerar', wrap(gerarRecomendacoes));
 app.post('/api/ai/recomendacoes/:id/decidir', wrap(decidirRecomendacao));
+
+// ---- FASE 8 — ALERTAS (AI CONTROL TOWER) ----
+app.post('/api/alerts/avaliar', wrap(avaliarAlertasHandler));
+app.get('/api/alerts/painel', wrap(painelAlertasHandler));
+app.post('/api/alerts/:id/reconhecer', wrap(reconhecerAlertaHandler));
+app.post('/api/alerts/:id/resolver', wrap(resolverAlertaHandler));
+app.post('/api/alerts/:id/silenciar', wrap(silenciarAlertaHandler));
+app.get('/api/control-tower/painel', wrap(painelControlTowerHandler));
 
 // ---- ONDAS 4–5 / D5 — DEMAND / SUPPLY / S&OP ----
 app.post('/api/demand/forecast/gerar', wrap(gerarForecastDemanda));

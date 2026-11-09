@@ -62,3 +62,22 @@ npm run test:pg
 ```
 
 O script `test-pg-gate.mjs` recusa banco reutilizado (`relações públicas != 0`).
+
+## Fases 6–8 (Commerce, CRM, BI/Control Tower)
+
+- **Fase 6 — Omnichannel** (`commerce_reconciliacao`): reconciliação multicanal é LEITURA;
+  nunca sobrescreve dado canônico do ERP com dado externo. Painel em `/commerce/omnichannel`.
+- **Fase 7 — CRM/Marketing/Loyalty**: RFM em `/customer-segments/rfm` (quintis reais no
+  servidor); saldo de fidelidade é SOMA dos movimentos (nunca campo editável); estorno/
+  expiração idempotentes por origem; opt-out LGPD bloqueia envio sem consentimento.
+- **Fase 8 — BI & AI Control Tower** (migration 0112): motor de alertas
+  (`server/src/alerts.ts`) + Tower (`server/src/controlTower.ts`). Regras:
+  - Alerta é IDEMPOTENTE por `fingerprint` UNIQUE `(empresa_id, fingerprint)`: reabre
+    quando volta a existir, resolve quando deixa de ser detectado. Não empilhar ocorrências.
+  - **Alertar não é agir**: nenhum detector altera preço, estoque, pagamento, pedido ou
+    campanha. A correção recomendada é texto.
+  - Detector lê SOMENTE documento canônico; sem dado → sem alerta (nunca zero enganoso).
+  - Tower é camada de LEITURA: indicador carrega `definicao`/`formula`/`origem`/`limitacoes`;
+    valor ausente é `null` + limitação declarada, nunca 0. `GET /api/control-tower/painel`.
+  - `alert_events.ops.delete = false` (histórico). Notificação externa segue interna até
+    homologação — a regra guarda o canal, mas o envio externo não é presumido.

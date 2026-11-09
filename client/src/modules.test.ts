@@ -91,6 +91,10 @@ const ROTAS_CANONICAS_ESPERADAS: Record<string, string> = {
   'commerce-omnichannel': '/commerce/omnichannel',
   'commerce-notificacoes': '/commerce/notificacoes',
   'commerce-trends': '/commerce/trends',
+  // FASE 8 — Control Tower executiva, alertas e regras de alerta.
+  'ai-control-tower': '/ai/control-tower',
+  'alert-events': '/alertas',
+  'alert-rules': '/alertas/regras',
   creators: '/creators',
   'creator-matches': '/matches',
   'outreach-ai': '/outreach-ai',
@@ -126,11 +130,13 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
     //   páginas que já existiam ou leem dado real; entram no menu, sem rota nova "Em breve".
     // + 1 da Central de Notificações (diagnóstico autenticado, somente leitura).
     // + 1 da FASE 7 — Análise RFM (segmentação derivada, rota própria).
-    expect(MODULES).toHaveLength(148);
+    // + 3 da FASE 8 — Control Tower executiva, Alertas e Regras de alerta
+    //   (leitura derivada + configuração do motor de alertas).
+    expect(MODULES).toHaveLength(151);
     const ids = MODULES.map((m) => m.id);
     const paths = MODULES.map((m) => m.path);
-    expect(new Set(ids).size).toBe(148);
-    expect(new Set(paths).size).toBe(148);
+    expect(new Set(ids).size).toBe(151);
+    expect(new Set(paths).size).toBe(151);
 
     for (const [id, pathEsperado] of Object.entries(ROTAS_CANONICAS_ESPERADAS)) {
       const mod = MODULES.find((m) => m.id === id);
@@ -159,8 +165,8 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
     }
   });
 
-  it('separa ERP CORE (123), Commerce (19), Creators (4) e Utilidades Globais (2)', () => {
-    expect(MODULES.filter((m) => m.space === 'erp')).toHaveLength(123);
+  it('separa ERP CORE (126), Commerce (19), Creators (4) e Utilidades Globais (2)', () => {
+    expect(MODULES.filter((m) => m.space === 'erp')).toHaveLength(126);
     // 4 conectores de canal + 10 módulos do BROBOND COMMERCE OS
     expect(MODULES.filter((m) => m.space === 'commerce')).toHaveLength(19);
     expect(MODULES.filter((m) => m.space === 'creators')).toHaveLength(4);
@@ -184,6 +190,10 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
       'ai-executions',
       // ONDAS 4–5 / D3 — Data e BI.
       'bi-read-models',
+      // FASE 8 — Control Tower executiva, alertas e regras de alerta.
+      'ai-control-tower',
+      'alert-events',
+      'alert-rules',
     ]);
     expect(porArea('Cadastros')).toEqual([
       'produtos',
