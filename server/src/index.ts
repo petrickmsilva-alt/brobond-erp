@@ -430,6 +430,7 @@ import {
   corrigirDivergenciaRota,
 } from './commerce/woocommerce/rotas';
 import { publicWoocommerceWebhookRouter } from './commerce/woocommerce/webhookRouter';
+import { painelOmnichannelHandler, reconciliarOmnichannelHandler } from './commerce/omnichannel';
 import { logisticsRouter } from '../../modules/logistics/api/routes';
 import { publicLogisticsWebhookRouter } from '../../modules/logistics/api/webhookRouter';
 import {
@@ -1405,6 +1406,12 @@ app.post('/api/commerce/woocommerce/lojas/:store/webhooks/:id/reprocessar', wrap
 app.post('/api/commerce/woocommerce/lojas/:store/reconciliar', wrap(executarReconciliacaoRota));
 app.get('/api/commerce/woocommerce/lojas/:store/divergencias', wrap(listarDivergenciasRota));
 app.post('/api/commerce/woocommerce/lojas/:store/divergencias/:id/corrigir', wrap(corrigirDivergenciaRota));
+
+// FASE 6 — Commerce & Omnichannel: reconciliação multicanal unificada e painel
+// operacional de sincronização (migração 0110). Reusa os documentos canônicos;
+// não sobrescreve dado do ERP e não chama rede sem credencial homologada.
+app.get('/api/commerce/omnichannel/painel', wrap(painelOmnichannelHandler));
+app.post('/api/commerce/omnichannel/reconciliar', wrap(reconciliarOmnichannelHandler));
 
 // WebSocket status
 app.get('/api/admin/ws/status', (_req, res) => res.json(wsStatus()));

@@ -88,6 +88,7 @@ const ROTAS_CANONICAS_ESPERADAS: Record<string, string> = {
   'commerce-pedidos': '/commerce/pedidos',
   'commerce-delivery': '/commerce/delivery',
   'commerce-fila': '/commerce/fila',
+  'commerce-omnichannel': '/commerce/omnichannel',
   'commerce-notificacoes': '/commerce/notificacoes',
   'commerce-trends': '/commerce/trends',
   creators: '/creators',
@@ -124,11 +125,11 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
     //   (/commerce/pagamentos) e Providers (/commerce/pagamentos/provedores) —
     //   páginas que já existiam ou leem dado real; entram no menu, sem rota nova "Em breve".
     // + 1 da Central de Notificações (diagnóstico autenticado, somente leitura).
-    expect(MODULES).toHaveLength(146);
+    expect(MODULES).toHaveLength(147);
     const ids = MODULES.map((m) => m.id);
     const paths = MODULES.map((m) => m.path);
-    expect(new Set(ids).size).toBe(146);
-    expect(new Set(paths).size).toBe(146);
+    expect(new Set(ids).size).toBe(147);
+    expect(new Set(paths).size).toBe(147);
 
     for (const [id, pathEsperado] of Object.entries(ROTAS_CANONICAS_ESPERADAS)) {
       const mod = MODULES.find((m) => m.id === id);
@@ -157,10 +158,10 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
     }
   });
 
-  it('separa ERP CORE (122), Commerce (18), Creators (4) e Utilidades Globais (2)', () => {
+  it('separa ERP CORE (122), Commerce (19), Creators (4) e Utilidades Globais (2)', () => {
     expect(MODULES.filter((m) => m.space === 'erp')).toHaveLength(122);
-    // 4 conectores de canal + 9 módulos do BROBOND COMMERCE OS
-    expect(MODULES.filter((m) => m.space === 'commerce')).toHaveLength(18);
+    // 4 conectores de canal + 10 módulos do BROBOND COMMERCE OS
+    expect(MODULES.filter((m) => m.space === 'commerce')).toHaveLength(19);
     expect(MODULES.filter((m) => m.space === 'creators')).toHaveLength(4);
     expect(MODULES.filter((m) => m.space === 'utilidades')).toHaveLength(2);
   });
@@ -345,6 +346,7 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
       'conector-nuvemshop',
       'conector-instagram',
       'commerce-fila',
+      'commerce-omnichannel',
       'commerce-notificacoes',
       'commerce-trends',
     ]);
@@ -494,7 +496,7 @@ describe('visibleModules', () => {
     expect(porGrupo('Fulfillment')).toEqual(['commerce-delivery']);
     expect(porGrupo('Pagamentos')).toEqual(['commerce-pagamentos', 'commerce-providers', 'conector-mercadopago']);
     expect(porGrupo('Canais')).toEqual(['conector-mercadolivre', 'conector-nuvemshop', 'conector-instagram']);
-    expect(porGrupo('Integrações')).toEqual(['commerce-fila', 'commerce-notificacoes']);
+    expect(porGrupo('Integrações')).toEqual(['commerce-fila', 'commerce-omnichannel', 'commerce-notificacoes']);
     expect(porGrupo('Inteligência')).toEqual(['commerce-trends']);
     // Mercado Pago saiu de Canais e vive em Pagamentos/Providers, com a rota preservada.
     const mp = MODULES.find((m) => m.id === 'conector-mercadopago')!;

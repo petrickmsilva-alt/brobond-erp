@@ -6779,6 +6779,74 @@ export const RESOURCES: Record<string, Resource> = {
     ],
     filterFields: ['store_key', 'categoria', 'status'],
   },
+  // ----------------------------------------------------------------
+  // FASE 6 — COMMERCE & OMNICHANNEL: reconciliação multicanal unificada
+  // (migração 0110). É a visão de LEITURA de divergências entre o ERP e o
+  // estado registrado de CADA canal. A trilha WooCommerce acima (0101)
+  // continua sendo o detalhe por loja; esta é a visão multicanal com
+  // gravidade e ação recomendada. Nada aqui sobrescreve dado canônico.
+  // ----------------------------------------------------------------
+  commerce_reconciliacao: {
+    key: 'commerce_reconciliacao',
+    table: 'commerce_reconciliacao',
+    empresa: true,
+    label: 'Reconciliação multicanal',
+    singular: 'Divergência multicanal',
+    labelFields: ['canal', 'tipo'],
+    minPerfil: 'gerente',
+    ops: { create: false, update: false, delete: false },
+    orderBy: { field: 'detectada_em', dir: 'desc' },
+    fields: [
+      { name: 'canal', label: 'Canal', type: 'select', readonly: true, options: [
+        { value: 'BROBOND', label: 'Site próprio', tone: 'blue' },
+        { value: 'MERCADOLIVRE', label: 'Mercado Livre', tone: 'amber' },
+        { value: 'NUVEMSHOP', label: 'Nuvemshop', tone: 'blue' },
+        { value: 'WOOCOMMERCE', label: 'WooCommerce (RETAIL/WHOLESALE)', tone: 'slate' },
+        { value: 'INSTAGRAM_SHOPPING', label: 'Instagram Shopping', tone: 'green' },
+        { value: 'MERCADOPAGO', label: 'Mercado Pago', tone: 'blue' },
+      ] },
+      { name: 'store_key', label: 'Loja', type: 'select', readonly: true, options: [
+        { value: 'RETAIL', label: 'Varejo (brobond.com.br)' },
+        { value: 'WHOLESALE', label: 'Atacado (atacado.brobond.com.br)' },
+      ] },
+      { name: 'categoria', label: 'Categoria', type: 'select', readonly: true, options: [
+        { value: 'CATALOGO', label: 'Catálogo', tone: 'blue' },
+        { value: 'PRECO', label: 'Preço', tone: 'amber' },
+        { value: 'ESTOQUE', label: 'Estoque', tone: 'green' },
+        { value: 'PEDIDOS', label: 'Pedidos', tone: 'red' },
+        { value: 'CONECTOR', label: 'Conector / fila', tone: 'slate' },
+      ] },
+      { name: 'tipo', label: 'Tipo', type: 'text', readonly: true, search: true },
+      { name: 'classificacao', label: 'Classificação', type: 'select', readonly: true, options: [
+        { value: 'LEGITIMA', label: 'Legítima (informativa)', tone: 'slate' },
+        { value: 'AUTOMATICA', label: 'Corrigível automaticamente', tone: 'amber' },
+        { value: 'HUMANA', label: 'Intervenção humana', tone: 'red' },
+      ] },
+      { name: 'severidade', label: 'Severidade', type: 'select', readonly: true, options: [
+        { value: 'baixa', label: 'Baixa', tone: 'slate' },
+        { value: 'media', label: 'Média', tone: 'blue' },
+        { value: 'alta', label: 'Alta', tone: 'amber' },
+        { value: 'critica', label: 'Crítica', tone: 'red' },
+      ] },
+      { name: 'produto_id', label: 'Produto', type: 'ref', ref: 'produtos', readonly: true },
+      { name: 'sku', label: 'SKU', type: 'text', readonly: true, search: true },
+      { name: 'referencia', label: 'Referência', type: 'text', readonly: true, search: true },
+      { name: 'detalhe', label: 'Detalhe', type: 'textarea', readonly: true, wide: true },
+      { name: 'acao_recomendada', label: 'Ação recomendada', type: 'textarea', readonly: true, wide: true, list: false },
+      { name: 'dados', label: 'Dados', type: 'json', readonly: true, list: false, form: false },
+      { name: 'fingerprint', label: 'Identidade', type: 'text', readonly: true, list: false, form: false },
+      { name: 'status', label: 'Status', type: 'select', readonly: true, options: [
+        { value: 'ABERTA', label: 'Aberta', tone: 'amber' },
+        { value: 'CORRIGIDA', label: 'Corrigida', tone: 'green' },
+        { value: 'IGNORADA', label: 'Ignorada', tone: 'slate' },
+      ] },
+      { name: 'detectada_em', label: 'Detectada em', type: 'datetime', readonly: true },
+      { name: 'resolvida_em', label: 'Resolvida em', type: 'datetime', readonly: true, list: false },
+    ],
+    filterFields: ['canal', 'categoria', 'severidade', 'status'],
+  },
+
+
 
   // ----------------------------------------------------------------
   // NOTIFICATION ORCHESTRATOR — uma linha por (evento, canal, destinatário).
