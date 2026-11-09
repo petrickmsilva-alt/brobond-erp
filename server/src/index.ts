@@ -5,7 +5,7 @@ import express, { type NextFunction, type Request, type Response } from 'express
 import cors from 'cors';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { bootFailure, dbStatus, hasDatabaseUrl, isDbConnected, isDbDegraded, migrate, migrationError } from './db';
+import { bootFailure, dbBootState, dbConnectionEstablished, dbStatus, hasDatabaseUrl, isDbConnected, isDbDegraded, migrate, migrationError } from './db';
 import {
   ADMIN_EMAIL,
   changePassword,
@@ -555,42 +555,91 @@ function resourceParam(req: Request, _res: Response, next: NextFunction) {
 }
 
 // ----------------------------------------------------------------------------
+// Estado do ciclo de vida do processo e prontidão de tráfego
+// ----------------------------------------------------------------------------
+let processStarted = false;
+let appReady = false;
+
+// ----------------------------------------------------------------------------
 // Público
 // ----------------------------------------------------------------------------
 app.get('/api/health', (_req, res) => {
-  // PROD-DB-01.2 — três estados explícitos (nunca confundir degradado com
-  // demonstração):
-  //   db:"memory"            → modo demonstração (sem DATABASE_URL);
-  //   db:"postgres"          → PostgreSQL conectado E pronto (200);
-  //   db:"postgres-degraded" → DATABASE_URL configurada, banco NÃO pronto (503).
-  // A Render usa este path como healthCheckPath: só promove a instância com 200,
-  // ou seja, apenas em `ready`. O corpo NÃO expõe o texto do erro (pode conter
-  // nomes de tabela/coluna) — ele fica no log e em `migrationError()`. A FASE
-  // que falhou (PROD-DB-02: 'bootstrap' vs 'migrations') é exposta porque é
-  // diagnóstico operacional, não dado sensível.
+  // PROD-DB-01.2 / Boot resilience — estados explícitos (nunca 200 sem banco
+  // obrigatório pronto):
+  //   • processo: 'iniciado' quando o servidor HTTP já aceitou conexões;
+  //   • banco:    'indisponivel' | 'conectado' | 'memoria' | 'ausente';
+  //   • pronto:   boolean (verdadeiro só quando pronto para tráfego);
+  //   • db:       'memory' | 'postgres' | 'postgres-degraded' | 'ausente-em-producao'.
+  // O corpo NÃO expõe mensagem bruta de erro SQL (pode conter nomes de tabela/coluna).
   const status = dbStatus();
+  const boot = dbBootState();
+  const processo = processStarted ? 'iniciado' : 'iniciando';
+
   // R-3: em produção sem banco, a instância NÃO é pronta (nunca 200 em memória).
   if (bancoAusenteEmProducao(process.env, hasDatabaseUrl())) {
-    return res.status(503).json({ ok: false, db: 'ausente-em-producao', uploads: uploadProvider(), version: VERSION });
+    return res.status(503).json({
+      ok: false,
+      estado: 'indisponivel',
+      processo,
+      banco: 'ausente',
+      pronto: false,
+      db: 'ausente-em-producao',
+      uploads: uploadProvider(),
+      version: VERSION,
+    });
   }
-  const db = status === 'demo' ? 'memory' : status === 'ready' ? 'postgres' : 'postgres-degraded';
-  const fase = status === 'degraded' ? bootFailure()?.fase : undefined;
-  const body = { ok: status !== 'degraded', db, ...(fase ? { fase } : {}), uploads: uploadProvider(), version: VERSION };
-  if (status === 'degraded') return res.status(503).json(body);
+
+  if (hasDatabaseUrl()) {
+    const bancoConectado = dbConnectionEstablished();
+    const pronto = status === 'ready' && appReady;
+    const fase = boot.failure?.fase ?? (boot.stage === 'connecting' ? 'conexao' : undefined);
+    const estado = pronto
+      ? 'pronto'
+      : boot.stage === 'connecting'
+        ? 'conectando'
+        : boot.stage === 'migrating'
+          ? 'migrando'
+          : status === 'ready'
+            ? 'inicializando'
+            : 'degradado';
+    const body = {
+      ok: pronto,
+      estado,
+      processo,
+      banco: bancoConectado ? 'conectado' : 'indisponivel',
+      pronto,
+      db: pronto ? 'postgres' : 'postgres-degraded',
+      ...(fase ? { fase } : {}),
+      ...(boot.failure?.tipo ? { erroTipo: boot.failure.tipo } : {}),
+      uploads: uploadProvider(),
+      version: VERSION,
+    };
+    if (!pronto) return res.status(503).json(body);
+    return res.json(body);
+  }
+
+  const pronto = appReady;
+  const body = {
+    ok: pronto,
+    estado: pronto ? 'pronto' : 'inicializando',
+    processo,
+    banco: 'memoria',
+    pronto,
+    db: 'memory',
+    uploads: uploadProvider(),
+    version: VERSION,
+  };
+  if (!pronto) return res.status(503).json(body);
   res.json(body);
 });
 
 // ----------------------------------------------------------------------------
 // PROD-DB-01.1 — prontidão do banco obrigatório.
 //
-// Quando DATABASE_URL existe mas o banco não está pronto (falha da cadeia
-// versionada ou bootstrap do db/schema.sql incompleto), a instância NÃO pode
-// atender negócio: serviria com schema desatualizado — foi assim que /vendas
-// respondeu 42703 em produção. O health responde 503 (a Render não promove a
-// instância) e este middleware bloqueia as rotas de negócio. Só continuam
-// respondendo o health e a autenticação (necessária para diagnóstico/acesso);
-// os webhooks dos provedores são montados antes do express.json() e seguem
-// intactos. Sem DATABASE_URL (modo demonstração) nada aqui bloqueia.
+// Quando DATABASE_URL existe mas o banco não está pronto (conectando,
+// migrando, inicializando, ou falha de conexão/bootstrap/migration), a instância
+// NÃO pode atender negócio nem cron. Só o health e a autenticação (emergência
+// diagnóstica) seguem respondendo; rotas de negócio e cron respondem 503.
 // ----------------------------------------------------------------------------
 const ROTAS_PERMITIDAS_SEM_BANCO_PRONTO = [/^\/api\/auth\//];
 function bloqueioDeProntidao(req: Request, res: Response, next: NextFunction) {
@@ -599,9 +648,15 @@ function bloqueioDeProntidao(req: Request, res: Response, next: NextFunction) {
   if (bancoAusenteEmProducao(process.env, hasDatabaseUrl())) {
     return res.status(503).json({ error: 'Banco de dados obrigatório em produção não configurado.' });
   }
-  if (!isDbDegraded()) return next();
-  if (ROTAS_PERMITIDAS_SEM_BANCO_PRONTO.some((re) => re.test(req.path))) return next();
-  return res.status(503).json({ error: 'Banco de dados não está pronto. O serviço está indisponível até a migração concluir.' });
+  if (hasDatabaseUrl() && (isDbDegraded() || !appReady)) {
+    if (ROTAS_PERMITIDAS_SEM_BANCO_PRONTO.some((re) => re.test(req.path))) return next();
+    return res.status(503).json({ error: 'Banco de dados não está pronto. O serviço está indisponível até a migração concluir.' });
+  }
+  if (!hasDatabaseUrl() && !appReady) {
+    if (ROTAS_PERMITIDAS_SEM_BANCO_PRONTO.some((re) => re.test(req.path))) return next();
+    return res.status(503).json({ error: 'Aplicação ainda está inicializando.' });
+  }
+  next();
 }
 app.use(bloqueioDeProntidao);
 app.post('/api/auth/login', loginRateLimit, wrap(login));
@@ -1630,6 +1685,7 @@ async function start() {
     httpServer.once('error', reject);
     httpServer.listen(port, '0.0.0.0', () => {
       httpServer.removeListener('error', reject);
+      processStarted = true;
       console.log(`⚡ BROBOND API rodando em http://0.0.0.0:${port}`);
       resolve();
     });
@@ -1642,43 +1698,31 @@ async function start() {
       console.error('❌ Falha ao migrar o banco:', e?.message || e);
     }
     // PROD-DB-01.1 — banco obrigatório quebrado não vira "serviço saudável".
-    // Em produção o processo encerra para a plataforma reiniciar (a recuperação
-    // é: corrigir a causa e o restart volta pronto). Fora de produção a
-    // instância segue de pé, porém com as rotas de negócio bloqueadas (503).
+    // Em produção o processo encerra após esgotar retentativas controladas (ou
+    // imediatamente em falha permanente/migration) para a plataforma reiniciar.
+    // Fora de produção a instância segue em modo degradado (503) sem iniciar
+    // workers, filas ou cron.
     if (isDbDegraded()) {
-      // PROD-DB-02 — a FASE é parte do diagnóstico: 'bootstrap' é defeito de
-      // estrutura (não se resolve corrigindo dado); 'migrations' é regra de dado
-      // (ex.: E4.2 recusando dado legado) e exige decisão humana.
       const falha = bootFailure();
       const fase = falha ? `fase=${falha.fase}` : 'fase=desconhecida';
+      const tipo = falha?.tipo ? ` tipo=${falha.tipo}` : '';
+      const detalhe = migrationError() || 'erro de inicialização sem detalhe adicional';
       if (process.env.NODE_ENV === 'production') {
-        console.error(`❌ Banco obrigatório não está pronto [${fase}] (${migrationError()}) — encerrando o processo (exit 1) para reinício pela plataforma.`);
+        console.error(
+          `❌ Banco obrigatório não está pronto [${fase}${tipo}] (${detalhe}) — encerrando o processo (exit 1) para reinício pela plataforma.`
+        );
         process.exit(1);
       }
-      console.error(`⚠️  Banco obrigatório não está pronto [${fase}] (${migrationError()}) — rotas de negócio bloqueadas (503) até a migração concluir.`);
+      console.error(
+        `⚠️  Banco obrigatório não está pronto [${fase}${tipo}] (${detalhe}) — rotas de negócio, workers e cron bloqueados (503) até a migração concluir.`
+      );
       return;
     }
   }
   // Liga o módulo de conectores ao pool do Postgres e à trilha de auditoria.
   initConnectors();
-  // Motor analítico 1. MEU NEGÓCIOS: recalcula margens/curva ABC em segundo
-  // plano (ciclo no boot + intervalo + pós-ingestão de marketplaces).
-  initNegociosEngine();
-  // Commerce OS: gancho pré-faturamento da ponte (reservas + frete do
-  // checkout), ouvinte de cobrança do gateway (pagamento → conversão) e
-  // ouvinte de ingestão (projeção + conversão automática de canais pagos).
+  // Commerce OS: hooks síncronos em memória (só executam mediante tráfego/cron).
   registrarHooksCommerce();
-  // Fila do commerce com cadência própria (backstop além do cron externo):
-  // publicações enfileiradas e conversões com retry não dependem de alguém
-  // abrir a tela. Sem efeito em teste (o runner controla o ciclo).
-  if (process.env.NODE_ENV !== 'test') {
-    const filaCommerce = setInterval(() => {
-      void processarComercioAgendado().then((result) => {
-        if (result.falhas.length) log.warn('commerce_scheduled_failures', { etapas: result.falhas });
-      }).catch(() => log.error('commerce_scheduled_unavailable'));
-    }, 60_000);
-    filaCommerce.unref?.();
-  }
   await ensureAdmin();
   await migrarSenhasLegadas();
   // Endereço público salvo no banco (Configurações › Sistema): já entra no
@@ -1686,13 +1730,34 @@ async function start() {
   // convite do processo já sair com a base certa.
   await carregarOrigemDoBanco(true);
   await limpezaPeriodica();
+
+  // Só declara prontidão para tráfego após banco conectado/migrado e bootstrap
+  // inicial concluído. Workers/filas/motores em segundo plano iniciam depois.
+  appReady = true;
+
+  // Motor analítico 1. MEU NEGÓCIOS: só inicia após a prontidão confirmada.
+  initNegociosEngine();
+  // Fila do commerce com cadência própria (backstop além do cron externo):
+  // só inicia após prontidão confirmada e pula caso o banco deixe de estar pronto.
+  if (process.env.NODE_ENV !== 'test') {
+    const filaCommerce = setInterval(() => {
+      if (hasDatabaseUrl() && !isDbConnected()) return;
+      void processarComercioAgendado().then((result) => {
+        if (result.falhas.length) log.warn('commerce_scheduled_failures', { etapas: result.falhas });
+      }).catch(() => log.error('commerce_scheduled_unavailable'));
+    }, 60_000);
+    filaCommerce.unref?.();
+  }
   // Limpeza diária de sessões encerradas e buckets de rate limit velhos.
-  const limpeza = setInterval(() => void limpezaPeriodica().catch(() => undefined), 24 * 3600_000);
+  const limpeza = setInterval(() => {
+    if (hasDatabaseUrl() && !isDbConnected()) return;
+    void limpezaPeriodica().catch(() => undefined);
+  }, 24 * 3600_000);
   limpeza.unref?.();
 
   console.log(
     isDbConnected()
-      ? '🗄️  Conectado ao Postgres.'
+      ? '🗄️  Conectado ao Postgres — aplicação pronta para tráfego.'
       : hasDatabaseUrl()
         ? '⚠️  DATABASE_URL definida, mas a migração falhou — verifique a conexão.'
         : '⚠️  Sem DATABASE_URL — MODO DEMONSTRAÇÃO (dados em memória, somem ao reiniciar).'
