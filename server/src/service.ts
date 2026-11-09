@@ -504,7 +504,7 @@ export async function analiseRfm(req: Request, res: Response) {
   linhas.sort((a, b) => b.m * 100 + b.f * 10 + b.r - (a.m * 100 + a.f * 10 + a.r));
   res.json({
     base: comCompra.length,
-    sem_compra: clientes.rows.length - comCompra.length,
+    sem_compra: visiveis.length - comCompra.length,
     cortes,
     resumo: [...resumo.values()].sort((a, b) => b.clientes - a.clientes),
     clientes: linhas.slice(0, 500),

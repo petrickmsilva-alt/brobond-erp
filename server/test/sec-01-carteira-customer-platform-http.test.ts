@@ -57,6 +57,7 @@ let REP_B1 = 0;
 let CLI_A1 = 0; // carteira REP_A1
 let CLI_A2 = 0; // carteira REP_A2
 let CLI_A_SEM = 0; // sem representante na empresa A
+let CLI_A2_SEM_COMPRA = 0; // carteira REP_A2, sem compra (discrimina `sem_compra` do RFM)
 let CLI_B1 = 0; // empresa B
 // Segmento da empresa A.
 let SEG_A = 0;
@@ -121,6 +122,8 @@ before(async () => {
   CLI_A1 = await cliente(EMPRESA_A, 'Cliente carteira A1', REP_A1);
   CLI_A2 = await cliente(EMPRESA_A, 'Cliente carteira A2', REP_A2);
   CLI_A_SEM = await cliente(EMPRESA_A, 'Cliente sem representante');
+  // Sem compra, na carteira de OUTRO representante — discrimina o `sem_compra` do RFM.
+  CLI_A2_SEM_COMPRA = await cliente(EMPRESA_A, 'Cliente A2 sem compra', REP_A2);
   CLI_B1 = await cliente(EMPRESA_B, 'Cliente empresa B', REP_B1);
 
   await venda(EMPRESA_A, CLI_A1, REP_A1, 1000);
@@ -172,6 +175,9 @@ test('SEC-01: /customer-segments/rfm recorta a carteira do representante', async
   assert.ok(ids.includes(CLI_A1), 'a compra do próprio cliente entra no RFM');
   assert.ok(!ids.includes(CLI_A2), 'a compra de outra carteira NÃO entra no RFM');
   assert.ok(!ids.includes(CLI_B1), 'a compra de outra empresa NÃO entra no RFM');
+  // O `sem_compra` também é recortado: o cliente sem compra de OUTRA carteira
+  // (CLI_A2_SEM_COMPRA) não pode ser contado.
+  assert.equal(r.body.sem_compra, 0, 'o representante A1 não tem cliente sem compra na própria carteira');
 });
 
 test('SEC-01: gerente e admin continuam vendo a empresa inteira (nada foi afrouxado nem apertado a mais)', async () => {
