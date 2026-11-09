@@ -1805,6 +1805,58 @@ export const RESOURCES: Record<string, Resource> = {
       ] },
     ],
   },
+
+  // --------------------------------------------------------------------------
+  // CRM 9.2 — CAIXA DE ENTRADA INTERNA (migration 0113)
+  //
+  // Notificação INTERNA entregue ao responsável por uma atividade (atribuição,
+  // lembrete, vencida, troca de responsável, conclusão, reagendamento, falha).
+  // É um REGISTRO de aviso — não altera a atividade e NÃO envia nada externo.
+  // A leitura pelo CRUD genérico é recortada por empresa E por usuário (cada um
+  // só vê a própria caixa); a marcação de "lida" é por endpoint próprio.
+  // --------------------------------------------------------------------------
+  crm_notificacoes: {
+    key: 'crm_notificacoes',
+    table: 'crm_notificacoes',
+    label: 'Notificações do CRM',
+    singular: 'Notificação do CRM',
+    labelFields: ['titulo'],
+    empresa: true,
+    internal: true,
+    minPerfil: 'gerente',
+    ops: READ_ONLY,
+    notice:
+      'Caixa de entrada interna do CRM. Gerada pelo ciclo de vida da atividade; a entrega é idempotente por (empresa, chave) e não dispara conector externo.',
+    fields: [
+      { name: 'atividade_id', label: 'Atividade', type: 'ref', ref: 'crm_atividades' },
+      { name: 'tipo', label: 'Tipo', type: 'select', search: true, options: [
+        { value: 'atribuicao', label: 'Atribuição', tone: 'blue' },
+        { value: 'lembrete', label: 'Lembrete', tone: 'amber' },
+        { value: 'vencida', label: 'Vencida', tone: 'red' },
+        { value: 'alteracao_responsavel', label: 'Troca de responsável', tone: 'blue' },
+        { value: 'conclusao', label: 'Conclusão', tone: 'green' },
+        { value: 'reagendamento', label: 'Reagendamento', tone: 'amber' },
+        { value: 'cancelamento', label: 'Cancelamento', tone: 'slate' },
+        { value: 'falha', label: 'Falha de processamento', tone: 'red' },
+      ] },
+      { name: 'severidade', label: 'Severidade', type: 'select', options: [
+        { value: 'baixa', label: 'Baixa', tone: 'slate' },
+        { value: 'media', label: 'Média', tone: 'blue' },
+        { value: 'alta', label: 'Alta', tone: 'amber' },
+        { value: 'critica', label: 'Crítica', tone: 'red' },
+      ] },
+      { name: 'usuario_id', label: 'Destinatário', type: 'ref', ref: 'usuarios', search: true },
+      { name: 'ator_id', label: 'Origem (usuário)', type: 'ref', ref: 'usuarios', list: false },
+      { name: 'titulo', label: 'Título', type: 'text', search: true, wide: true },
+      { name: 'detalhe', label: 'Detalhe', type: 'textarea', wide: true },
+      { name: 'payload', label: 'Contexto', type: 'json', list: false, form: false },
+      { name: 'lida_em', label: 'Lida em', type: 'datetime', readonly: true },
+      { name: 'chave_idempotencia', label: 'Chave de idempotência', type: 'text', readonly: true, list: false },
+      { name: 'criado_em', label: 'Criada em', type: 'datetime', readonly: true },
+    ],
+    orderBy: { field: 'criado_em', dir: 'desc' },
+    filterFields: ['tipo', 'severidade', 'usuario_id', 'atividade_id'],
+  },
   // --------------------------------------------------------------------------
   // PRODUÇÃO 3.0 — CALENDÁRIO PRODUTIVO (migration 0062, P2-15)
   //

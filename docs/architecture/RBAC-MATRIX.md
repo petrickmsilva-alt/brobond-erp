@@ -29,7 +29,7 @@ Regras aplicadas por `checkAccess(r, actor, op)`:
 > **O perfil vem sempre da identidade autenticada** — nunca de `role` ou
 > `empresa_id` enviados pelo cliente.
 
-## 2. Matriz por recurso (183 recursos)
+## 2. Matriz por recurso (184 recursos)
 
 Colunas: **Recurso** · **Perfil mínimo** (regra de acesso) · **Ops** (C=incluir,
 U=alterar, D=excluir no CRUD genérico; `-` = somente leitura) · **Tabela** ·
@@ -93,6 +93,7 @@ U=alterar, D=excluir no CRUD genérico; `-` = somente leitura) · **Tabela** ·
 | `crm_funis` | gerente | CUD | crm_funis | sim |
 | `crm_leads` | gerente | CUD | crm_leads | sim |
 | `crm_motivos_perda` | gerente | CUD | crm_motivos_perda | sim |
+| `crm_notificacoes` | gerente | - | crm_notificacoes | sim |
 | `crm_oportunidades` | gerente | CUD | crm_oportunidades | sim |
 | `crm_origens` | gerente | CUD | crm_origens | sim |
 | `customer_consents` | gerente | CUD | customer_consents | sim |

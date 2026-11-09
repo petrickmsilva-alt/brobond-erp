@@ -243,6 +243,11 @@ import {
   reordenarEtapasDoFunil,
 } from './crm';
 import {
+  listarNotificacoesCrm,
+  marcarNotificacaoLida,
+  marcarTodasLidas,
+} from './crmNotificacoes';
+import {
   abrirTicket,
   analiseRfm,
   avaliarSegmento,
@@ -1084,6 +1089,14 @@ app.post('/api/crm/oportunidades/:id/estagio', wrap(mudarEstagioOportunidade));
 app.get('/api/crm/oportunidades/:id/historico', wrap(historicoDaOportunidade));
 // Agenda de atividades: hoje / atrasadas / próximas / concluídas.
 app.get('/api/crm/atividades/agenda', wrap(agendaDeAtividades));
+// ---- CRM 9.2 — caixa de entrada INTERNA (migration 0113) ----
+// Notificações internas do ciclo de vida da atividade (atribuição, lembrete,
+// vencida, troca de responsável, conclusão, reagendamento, cancelamento, falha).
+// Sem conector externo: o aviso é servido dentro do ERP. Cada usuário só vê a
+// própria caixa (recorte por empresa E por usuário no servidor).
+app.get('/api/crm/notificacoes', wrap(listarNotificacoesCrm));
+app.post('/api/crm/notificacoes/lidas', wrap(marcarTodasLidas));
+app.post('/api/crm/notificacoes/:id/lida', wrap(marcarNotificacaoLida));
 // Previsão comercial ponderada por probabilidade (derivada, nunca persistida).
 app.get('/api/crm/forecast', wrap(forecastCrm));
 // Painel comercial do CRM (leads, pipeline, conversão, atividades, pessoas).

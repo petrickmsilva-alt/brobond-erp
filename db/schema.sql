@@ -9259,3 +9259,37 @@ CREATE INDEX IF NOT EXISTS alert_events_dominio_idx
   ON alert_events (empresa_id, dominio, status);
 CREATE INDEX IF NOT EXISTS alert_events_regra_idx
   ON alert_events (empresa_id, regra_chave, status);
+
+-- ============================================================================
+-- ESPELHO da migração 0113 — FASE 9.2: CAIXA DE ENTRADA INTERNA DO CRM
+-- (a autoridade é db/migrations/0113_fase9_crm_notificacoes.sql;
+--  este espelho existe para o parser de schema e o contrato de colunas)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS crm_notificacoes (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL REFERENCES empresas(id),
+  atividade_id INTEGER REFERENCES crm_atividades(id) ON DELETE SET NULL,
+  tipo TEXT NOT NULL,
+  CONSTRAINT crm_notificacoes_tipo_ck CHECK (tipo IN (
+    'atribuicao', 'lembrete', 'vencida', 'alteracao_responsavel', 'conclusao', 'reagendamento', 'cancelamento', 'falha'
+  )),
+  severidade TEXT NOT NULL DEFAULT 'media',
+  CONSTRAINT crm_notificacoes_severidade_ck CHECK (severidade IN ('baixa', 'media', 'alta', 'critica')),
+  usuario_id INTEGER REFERENCES usuarios(id) ON DELETE CASCADE,
+  ator_id INTEGER REFERENCES usuarios(id) ON DELETE SET NULL,
+  titulo TEXT NOT NULL,
+  detalhe TEXT NOT NULL DEFAULT '',
+  payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+  chave_idempotencia TEXT NOT NULL,
+  lida_em TIMESTAMPTZ,
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT crm_notificacoes_titulo_ck CHECK (TRIM(COALESCE(titulo, '')) <> '')
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_crm_notificacoes_idempotencia
+  ON crm_notificacoes (empresa_id, chave_idempotencia);
+CREATE INDEX IF NOT EXISTS crm_notificacoes_empresa_usuario_lida_idx
+  ON crm_notificacoes (empresa_id, usuario_id, lida_em);
+CREATE INDEX IF NOT EXISTS crm_notificacoes_empresa_criado_idx
+  ON crm_notificacoes (empresa_id, criado_em DESC);
+CREATE INDEX IF NOT EXISTS crm_notificacoes_atividade_idx
+  ON crm_notificacoes (atividade_id);

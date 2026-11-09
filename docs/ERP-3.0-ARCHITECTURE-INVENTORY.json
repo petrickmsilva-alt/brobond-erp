@@ -1,25 +1,25 @@
 {
-  "gerado_em": "2026-11-09T10:22:35.117Z",
+  "gerado_em": "2026-11-09T14:36:13.688Z",
   "fonte_de_verdade_do_schema": "db/schema.sql + db/migrations/*.sql (PostgreSQL); Prisma = bounded context do commerce",
   "migrations": {
-    "sql": 112,
-    "sql_com_conteudo": 112,
+    "sql": 113,
+    "sql_com_conteudo": 113,
     "prisma": 7
   },
   "tabelas": {
-    "total": 221,
-    "com_empresa_id": 201,
+    "total": 222,
+    "com_empresa_id": 202,
     "sem_empresa_id": 20,
-    "fora_do_prisma": 210
+    "fora_do_prisma": 211
   },
-  "indices": 619,
-  "constraints": 422,
+  "indices": 623,
+  "constraints": 425,
   "recursos": {
-    "total": 183,
-    "com_tabela": 183,
-    "multiempresa": 165,
-    "somente_leitura": 88,
-    "rbac_restrito": 88,
+    "total": 184,
+    "com_tabela": 184,
+    "multiempresa": 166,
+    "somente_leitura": 89,
+    "rbac_restrito": 89,
     "cobertura_tenant_pct": 90.2
   },
   "crm": [
@@ -43,6 +43,12 @@
     },
     {
       "key": "crm_atividades",
+      "empresa": true,
+      "minPerfil": "gerente",
+      "adminOnly": false
+    },
+    {
+      "key": "crm_notificacoes",
       "empresa": true,
       "minPerfil": "gerente",
       "adminOnly": false
@@ -87,10 +93,10 @@
     "com_recurso": 112
   },
   "rotas": {
-    "total": 500,
+    "total": 503,
     "por_metodo": {
-      "GET": 223,
-      "POST": 238,
+      "GET": 224,
+      "POST": 240,
       "PUT": 22,
       "DELETE": 14,
       "PATCH": 3
@@ -201,14 +207,14 @@
   },
   "testes": {
     "server": {
-      "arquivos": 311,
-      "casos": 2576
+      "arquivos": 315,
+      "casos": 2603
     },
     "client": {
       "arquivos": 138,
       "casos": 1155
     },
-    "total": 3731
+    "total": 3758
   },
   "integracoes": {
     "arquivos_modules": 81,
@@ -507,6 +513,7 @@
     "crm_funis",
     "crm_leads",
     "crm_motivos_perda",
+    "crm_notificacoes",
     "crm_oportunidade_estagio_historico",
     "crm_oportunidades",
     "crm_origens",

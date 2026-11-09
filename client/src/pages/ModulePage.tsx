@@ -121,6 +121,7 @@ const PainelComercialPage = lazy(() => import('./PainelComercialPage'));
 // CRM 3.0 — painel comercial e agenda (páginas próprias, sem modal).
 const CrmPainelPage = lazy(() => import('./CrmPainelPage'));
 const CrmAgendaPage = lazy(() => import('./CrmAgendaPage'));
+const CrmNotificacoesPage = lazy(() => import('./CrmNotificacoesPage'));
 // ONDA 4 / D1 — painel de atendimento (indicadores de SLA e resolução).
 const ServicePainelPage = lazy(() => import('./ServicePainelPage'));
 // FASE 7 — análise RFM (segmentação derivada das compras reais).
@@ -204,6 +205,7 @@ export default function ModulePage({ module }: { module: Module }) {
   if (module.id === 'painel-comercial') return <Suspense fallback={<SubPageLoading />}><PainelComercialPage /></Suspense>;
   if (module.id === 'crm-painel') return <Suspense fallback={<SubPageLoading />}><CrmPainelPage /></Suspense>;
   if (module.id === 'crm-agenda') return <Suspense fallback={<SubPageLoading />}><CrmAgendaPage /></Suspense>;
+  if (module.id === 'crm-notificacoes') return <Suspense fallback={<SubPageLoading />}><CrmNotificacoesPage /></Suspense>;
   if (module.id === 'service-painel') return <Suspense fallback={<SubPageLoading />}><ServicePainelPage /></Suspense>;
   if (module.id === 'customer-rfm') return <Suspense fallback={<SubPageLoading />}><CustomerRfmPage /></Suspense>;
   // FASE 8 — Control Tower executiva e alertas (leitura derivada, ZERO MODAL).

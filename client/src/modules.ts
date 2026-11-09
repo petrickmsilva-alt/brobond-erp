@@ -71,6 +71,7 @@ import {
   Gauge,
   Timer,
   Bell,
+  Inbox,
 } from 'lucide-react';
 
 export type ModuleSpace = 'erp' | 'commerce' | 'creators' | 'utilidades';
@@ -800,6 +801,19 @@ export const MODULES: Module[] = [
     path: '/crm/agenda',
     minPerfil: 'gerente',
     description: 'Compromissos de hoje, atrasados e próximos — com lembrete, prioridade e responsável.',
+  },
+{
+    id: 'crm-notificacoes',
+    label: 'Caixa de entrada',
+    icon: Inbox,
+    space: 'erp',
+    area: 'Vendas',
+    group: 'Comercial',
+    subgroup: 'CRM — Inteligência',
+    keywords: 'notificacao caixa entrada aviso lembrete vencida atribuicao atividade crm interno',
+    path: '/crm/notificacoes',
+    minPerfil: 'gerente',
+    description: 'Avisos internos do ciclo de vida da atividade (atribuição, lembrete, vencida, conclusão). Cada usuário vê apenas a própria caixa.',
   },
 {
     id: 'crm-estagio-historico',
@@ -2435,6 +2449,8 @@ export const PAGES_ESPECIAIS = [
   'contagem-ciclica-abc',
   // SUPPLY CHAIN — rastreabilidade ponta a ponta (lote + trilha; página própria).
   'rastreabilidade',
+  // FASE 9.2 — caixa de entrada interna do CRM (página própria, leitura por usuário).
+  'crm-notificacoes',
   // BROBOND COMMERCE OS — páginas próprias (ZERO MODAL; detalhe/novo/edição
   // sempre em rota dedicada, nunca sobreposição sobre a lista).
   'commerce-produtos',
@@ -2555,6 +2571,7 @@ export const MODULOS_PAGINA_PROPRIA = new Set<string>([
   'regras_comissao',
   'crm-painel',
   'crm-agenda',
+  'crm-notificacoes',
   'transferencias-estoque',
   'homologacao-fornecedores',
   'producao-capacidade',
