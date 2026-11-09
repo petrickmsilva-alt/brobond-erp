@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
 import { Alert, EmptyState, PageHeader, Spinner } from '../components/ui';
+import { PageShell } from '../components/ui-kit-negocios';
 import { api, ApiError } from '../lib/api';
 
 type Periodo = { id: number; competencia: string; estado: 'aberto' | 'fechando' | 'fechado'; abrangencia?: 'escrituracao' | 'financeiro'; motivo: string; atualizado_em: string | null };
@@ -54,7 +55,7 @@ export default function FinanceiroPeriodosPage({ modo }: { modo: 'lista' | 'novo
     } finally { setAguardando(false); }
   }
 
-  return <div className="space-y-5">
+  return <PageShell>
     <PageHeader title={modo === 'lista' ? 'Períodos financeiros' : modo === 'novo' ? 'Fechar período' : modo === 'reabrir' ? 'Reabrir período' : `Competência ${parametro || ''}`}
       description="Bloqueia alterações no livro financeiro, extratos e repasses da competência. Fechamentos antigos podem abranger somente escrituração; não substitui o fechamento fiscal."
       actions={<Link className="btn-secondary" to={modo === 'lista' ? '/financeiro/balancete' : '/financeiro/periodos'}>{modo === 'lista' ? 'Voltar ao balancete' : 'Voltar aos períodos'}</Link>} />
@@ -93,7 +94,7 @@ export default function FinanceiroPeriodosPage({ modo }: { modo: 'lista' | 'novo
       {detalhe.estado === 'fechado' && user?.perfil === 'admin' && <Link className="btn-secondary" to={`/financeiro/periodos/${detalhe.competencia}/reabrir`}>Reabrir período</Link>}
       {detalhe.estado === 'aberto' && <Link className="btn-secondary" to="/financeiro/periodos/novo">Fechar período</Link>}
     </section>)}
-  </div>;
+  </PageShell>;
 }
 
 function PendenciasDoPeriodo({ pendencias }: { pendencias: Pendencias }) {

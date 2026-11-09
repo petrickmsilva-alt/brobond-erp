@@ -18,6 +18,7 @@ import { api, ApiError } from '../lib/api';
 import { formatDateTime, formatMoney, formatNumber } from '../lib/format';
 import type { ListResult } from '../lib/meta';
 import { Alert, Badge, EmptyState, PainelInline, PageHeader, Spinner, useToast } from '../components/ui';
+import { PageShell } from '../components/ui-kit-negocios';
 import { useAuth } from '../auth/AuthContext';
 
 type StatusEnvio = 'pendente' | 'cotado' | 'gerado' | 'postado' | 'em_transito' | 'entregue' | 'cancelado' | 'erro';
@@ -537,7 +538,7 @@ export default function LogisticaPage() {
   // -------------------------------------------------------------------------
 
   return (
-    <div>
+    <PageShell>
       <PageHeader
         title="Logística e envios"
         description="Cotação, geração de remessa, etiqueta e rastreio. Credenciais só em configuração segura — nunca no código."
@@ -1187,6 +1188,6 @@ export default function LogisticaPage() {
           </button>
         </div>
       </PainelInline>
-    </div>
+    </PageShell>
   );
 }

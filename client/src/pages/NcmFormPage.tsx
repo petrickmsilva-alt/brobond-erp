@@ -15,6 +15,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api, ApiError } from '../lib/api';
 import type { ListResult } from '../lib/meta';
 import { Alert, PageHeader, Spinner, useToast } from '../components/ui';
+import { PageShell } from '../components/ui-kit-negocios';
 import { useAuth } from '../auth/AuthContext';
 
 type ImpostoNcm = {
@@ -135,7 +136,7 @@ export default function NcmFormPage({ modo = 'novo' }: { modo?: 'novo' | 'editar
   }
 
   return (
-    <div className="space-y-4">
+    <PageShell>
       <PageHeader
         title={modo === 'editar' ? 'Editar alíquota por NCM' : 'Nova alíquota por NCM'}
         description="A chave vazia é a alíquota PADRÃO (NCMs sem chave cadastrada). O motor de impostos usa sempre a chave mais longa que casa com o NCM do produto."
@@ -203,6 +204,6 @@ export default function NcmFormPage({ modo = 'novo' }: { modo?: 'novo' | 'editar
           </p>
         </div>
       )}
-    </div>
+    </PageShell>
   );
 }

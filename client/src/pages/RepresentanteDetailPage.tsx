@@ -37,6 +37,7 @@ import {
 } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
 import { Alert, Badge, EmptyState, PageHeader, Spinner, useToast } from '../components/ui';
+import { PageShell } from '../components/ui-kit-negocios';
 import { Card, CardHeader, StatCard } from '../components/ui-kit-negocios';
 import { formatPhone } from '../lib/format';
 
@@ -213,26 +214,26 @@ export default function RepresentanteDetailPage() {
 
   if (!id) {
     return (
-      <div className="p-4 sm:p-6">
+      <PageShell>
         <PageHeader title="Representante" description="Selecione um representante na lista." />
         <Link to="/representantes" className="btn-secondary mt-4 inline-flex">
           <ArrowLeft className="h-4 w-4" /> Voltar para a lista
         </Link>
-      </div>
+      </PageShell>
     );
   }
 
   if (carregando) {
     return (
-      <div className="p-4 sm:p-6">
+      <PageShell>
         <Spinner label="Carregando representante..." />
-      </div>
+      </PageShell>
     );
   }
 
   if (naoEncontrado) {
     return (
-      <div className="p-4 sm:p-6">
+      <PageShell>
         <PageHeader title="Representante não encontrado" description="O registro não existe ou não pertence à empresa ativa." />
         <Alert tone="amber">
           Não encontramos este representante na empresa ativa. Ele pode ter sido excluído ou pertencer a outra empresa. Volte para a lista para escolher um
@@ -241,13 +242,13 @@ export default function RepresentanteDetailPage() {
         <Link to="/representantes" className="btn-secondary mt-4 inline-flex">
           <ArrowLeft className="h-4 w-4" /> Voltar para a lista
         </Link>
-      </div>
+      </PageShell>
     );
   }
 
   if (erro || !painel) {
     return (
-      <div className="p-4 sm:p-6">
+      <PageShell>
         <PageHeader title="Representante" description="Não foi possível abrir o painel." />
         <Alert tone="red">{erro || 'Painel indisponível.'}</Alert>
         <div className="mt-4 flex flex-wrap gap-2">
@@ -258,7 +259,7 @@ export default function RepresentanteDetailPage() {
             <RefreshCw className="h-4 w-4" /> Tentar novamente
           </button>
         </div>
-      </div>
+      </PageShell>
     );
   }
 
@@ -275,7 +276,7 @@ export default function RepresentanteDetailPage() {
   const atingimento = painel.indicadores.atingimento_pct;
 
   return (
-    <div className="p-4 sm:p-6">
+    <PageShell>
       <PageHeader
         title={
           <span className="flex flex-wrap items-center gap-2.5">
@@ -553,6 +554,6 @@ export default function RepresentanteDetailPage() {
           </p>
         </Card>
       </div>
-    </div>
+    </PageShell>
   );
 }

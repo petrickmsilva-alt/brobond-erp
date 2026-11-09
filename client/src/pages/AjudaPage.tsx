@@ -4,6 +4,7 @@ import { ArrowRight, BookOpen, HelpCircle } from 'lucide-react';
 import { visibleModules, type Module } from '../modules';
 import { useAuth } from '../auth/AuthContext';
 import { PageHeader } from '../components/ui';
+import { PageShell } from '../components/ui-kit-negocios';
 
 const GUIAS: { titulo: string; modulos: string[]; passos: string[] }[] = [
   {
@@ -104,7 +105,7 @@ export default function AjudaPage() {
   const mod = (id: string): Module | undefined => visiveis.find((x) => x.id === id);
 
   return (
-    <div className="p-4 pb-16 sm:p-6">
+    <PageShell className="pb-16">
       <PageHeader
         title={
           <span className="flex items-center gap-2.5">
@@ -148,6 +149,6 @@ export default function AjudaPage() {
           </section>
         ))}
       </div>
-    </div>
+    </PageShell>
   );
 }

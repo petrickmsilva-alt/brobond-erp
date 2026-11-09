@@ -45,6 +45,7 @@ import { AlertTriangle, ArrowLeft, Factory, Loader2, Save, X } from 'lucide-reac
 import { api, ApiError } from '../lib/api';
 import { useMeta, type ResourceMeta } from '../lib/meta';
 import { Alert, PageHeader, Spinner, useToast } from '../components/ui';
+import { PageShell } from '../components/ui-kit-negocios';
 import {
   fieldErrors,
   initialValues,
@@ -169,13 +170,13 @@ export default function FornecedorFormPage() {
 
   if (!resource) {
     return (
-      <div className="p-4 sm:p-6">
+      <PageShell>
         <PageHeader title="Fornecedores" description="Cadastro de fornecedores." />
         <Alert tone="red">O cadastro de Fornecedores não está disponível neste ambiente.</Alert>
         <Link to="/fornecedores" className="btn-secondary mt-4 inline-flex">
           <ArrowLeft className="h-4 w-4" /> Voltar para a lista
         </Link>
-      </div>
+      </PageShell>
     );
   }
 
@@ -193,26 +194,26 @@ export default function FornecedorFormPage() {
 
   if (carregando) {
     return (
-      <div className="p-4 sm:p-6">
+      <PageShell>
         <Spinner label="Carregando fornecedor..." />
-      </div>
+      </PageShell>
     );
   }
 
   if (erroCarregar) {
     return (
-      <div className="p-4 sm:p-6">
+      <PageShell>
         <PageHeader title={titulo} description="Não foi possível abrir o cadastro." />
         <Alert tone="red">{erroCarregar}</Alert>
         <Link to="/fornecedores" className="btn-secondary mt-4 inline-flex">
           <ArrowLeft className="h-4 w-4" /> Voltar para a lista
         </Link>
-      </div>
+      </PageShell>
     );
   }
 
   return (
-    <div className="p-4 sm:p-6">
+    <PageShell>
       <PageHeader
         title={
           <span className="flex items-center gap-2.5">
@@ -320,6 +321,6 @@ export default function FornecedorFormPage() {
           </button>
         </div>
       </section>
-    </div>
+    </PageShell>
   );
 }

@@ -23,6 +23,7 @@ import { Layers, Pencil, Plus, Power, Trash2 } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
 import { useMeta, type ListResult } from '../lib/meta';
 import { Alert, Badge, ConfirmacaoInline, EmptyState, PageHeader, Spinner, useToast } from '../components/ui';
+import { PageShell } from '../components/ui-kit-negocios';
 import { DataTable, FilterBar, SearchInput, type DataTableColumn } from '../components/ui-kit-negocios';
 import { Dropdown, Pagination } from '../components/ui-kit';
 import { DependenciasModal, type DiagnosticoDependencias } from '../components/DependenciasModal';
@@ -257,7 +258,7 @@ export default function ColecoesPage() {
   const dependenciasAtivaAinda = !!dependencias && linhas.some((l) => Number(l.id) === Number(dependencias.id) && l.ativo !== false);
 
   return (
-    <div className="p-4 sm:p-6">
+    <PageShell>
       <PageHeader
         title="Coleções"
         description="Gerencie as coleções e temporadas utilizadas no catálogo."
@@ -408,6 +409,6 @@ export default function ColecoesPage() {
             : undefined
         }
       />
-    </div>
+    </PageShell>
   );
 }

@@ -25,6 +25,7 @@ import { api, ApiError } from '../lib/api';
 import { formatDateTime } from '../lib/format';
 import type { ListResult } from '../lib/meta';
 import { Alert, Badge, EmptyState, PageHeader, Spinner, useToast } from '../components/ui';
+import { PageShell } from '../components/ui-kit-negocios';
 import { useAuth } from '../auth/AuthContext';
 
 type Inutilizacao = {
@@ -165,7 +166,7 @@ export default function InutilizacoesPage() {
   };
 
   return (
-    <div className="space-y-4">
+    <PageShell>
       <PageHeader
         title="Inutilizações de numeração"
         description="Comunique à SEFAZ as faixas de numeração que não serão usadas. O pedido é registrado e auditado aqui; a homologação depende do provedor fiscal configurado."
@@ -350,6 +351,6 @@ export default function InutilizacoesPage() {
           </table>
         )}
       </div>
-    </div>
+    </PageShell>
   );
 }

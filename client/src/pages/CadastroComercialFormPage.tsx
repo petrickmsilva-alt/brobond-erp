@@ -20,6 +20,7 @@ import { ArrowLeft, Loader2, Save, X } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
 import { useMeta, type ResourceMeta } from '../lib/meta';
 import { Alert, PageHeader, Spinner, useToast } from '../components/ui';
+import { PageShell } from '../components/ui-kit-negocios';
 import {
   fieldErrors,
   initialValues,
@@ -129,16 +130,16 @@ export default function CadastroComercialFormPage({ recurso }: { recurso: string
 
   if (!resource) {
     return (
-      <div className="p-4 sm:p-6">
+      <PageShell>
         <PageHeader title="Cadastro indisponível" description="Este recurso não está disponível para o seu perfil." />
-      </div>
+      </PageShell>
     );
   }
 
   if (carregando) return <Spinner label={`Carregando ${resource.singular.toLowerCase()}...`} />;
 
   return (
-    <div className="p-4 sm:p-6">
+    <PageShell>
       <PageHeader
         title={editing ? rotuloEditar(recurso, resource.singular) : rotuloNovo(recurso, resource.singular)}
         description={descricaoDoCadastro(recurso) ?? resource.notice}
@@ -201,6 +202,6 @@ export default function CadastroComercialFormPage({ recurso }: { recurso: string
           </div>
         )}
       </div>
-    </div>
+    </PageShell>
   );
 }

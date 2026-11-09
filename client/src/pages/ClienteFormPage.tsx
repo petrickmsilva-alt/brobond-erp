@@ -50,6 +50,7 @@ import {
   UFS_BRASIL,
 } from '../lib/format';
 import { Alert, PageHeader, Spinner, useToast } from '../components/ui';
+import { PageShell } from '../components/ui-kit-negocios';
 
 type Pessoa = 'pf' | 'pj' | 'estrangeiro';
 
@@ -440,26 +441,26 @@ export default function ClienteFormPage() {
 
   if (carregando) {
     return (
-      <div className="p-4 sm:p-6">
+      <PageShell>
         <Spinner label="Carregando cliente..." />
-      </div>
+      </PageShell>
     );
   }
 
   if (erroCarregar) {
     return (
-      <div className="p-4 sm:p-6">
+      <PageShell>
         <PageHeader title={titulo} description="Não foi possível abrir o cadastro." />
         <Alert tone="red">{erroCarregar}</Alert>
         <Link to="/clientes" className="btn-secondary mt-4 inline-flex">
           <ArrowLeft className="h-4 w-4" /> Voltar para a lista
         </Link>
-      </div>
+      </PageShell>
     );
   }
 
   return (
-    <div className="p-4 sm:p-6">
+    <PageShell>
       <PageHeader
         title={
           <span className="flex items-center gap-2.5">
@@ -920,7 +921,7 @@ export default function ClienteFormPage() {
           </button>
         </div>
       </form>
-    </div>
+    </PageShell>
   );
 }
 

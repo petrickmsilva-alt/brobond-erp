@@ -11,7 +11,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { AlertTriangle, Activity, Bell, Gauge, Lightbulb, RefreshCw, TrendingUp } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
 import { Alert, Badge, EmptyState, PageHeader, Spinner } from '../components/ui';
-import { DataTable, StatCard, type DataTableColumn } from '../components/ui-kit-negocios';
+import { DataTable, PageShell, StatCard, type DataTableColumn } from '../components/ui-kit-negocios';
 
 type Indicador = {
   chave: string;
@@ -156,7 +156,7 @@ export default function ControlTowerPage() {
   ];
 
   return (
-    <div className="min-w-0 space-y-4">
+    <PageShell>
       <PageHeader
         title="Control Tower"
         description="Leitura executiva consolidada: indicadores com definição e fórmula, saúde operacional, alertas, previsões, recomendações rastreáveis e pendências críticas. O ERP continua sendo a autoridade — a Tower lê e recomenda, não executa."
@@ -312,6 +312,6 @@ export default function ControlTowerPage() {
           </section>
         </>
       )}
-    </div>
+    </PageShell>
   );
 }

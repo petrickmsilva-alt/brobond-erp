@@ -16,6 +16,7 @@ import { Link } from 'react-router-dom';
 import { BellOff, CheckCheck, Inbox, RefreshCw } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
 import { Alert, Badge, EmptyState, PageHeader, Spinner, useToast } from '../components/ui';
+import { PageShell } from '../components/ui-kit-negocios';
 import { formatRelative } from '../lib/format';
 import type { Tone } from '../lib/meta';
 
@@ -111,7 +112,7 @@ export default function CrmNotificacoesPage() {
   const itens = caixa?.itens ?? [];
 
   return (
-    <div className="min-w-0 space-y-4 p-4 sm:p-6">
+    <PageShell>
       <PageHeader
         title="Caixa de entrada do CRM"
         description="Avisos internos do ciclo de vida das atividades: atribuição, lembrete, vencida, troca de responsável, conclusão, reagendamento e cancelamento. Cada usuário vê apenas a própria caixa — nada é enviado por e-mail, WhatsApp ou SMS nesta fase."
@@ -212,6 +213,6 @@ export default function CrmNotificacoesPage() {
           <BellOff className="h-3.5 w-3.5" aria-hidden="true" /> Tudo lido por aqui.
         </p>
       )}
-    </div>
+    </PageShell>
   );
 }

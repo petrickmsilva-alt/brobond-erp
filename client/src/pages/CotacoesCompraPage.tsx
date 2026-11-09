@@ -34,6 +34,7 @@ import { formatDateTime, formatMoney, formatNumber } from '../lib/format';
 import type { ListResult } from '../lib/meta';
 import { useAuth } from '../auth/AuthContext';
 import { Alert, Badge, ConfirmacaoInline, EmptyState, PainelInline, PageHeader, Spinner, useToast } from '../components/ui';
+import { PageShell } from '../components/ui-kit-negocios';
 import { DocumentPrintButton } from '../components/DocumentPrintButton';
 
 // ---------------------------------------------------------------------------
@@ -400,7 +401,7 @@ export default function CotacoesCompraPage({ initialId }: { initialId?: number |
   // Render
   // -------------------------------------------------------------------------
   return (
-    <div className="space-y-4">
+    <PageShell>
       <PageHeader
         title="Cotação de compra"
         description="Peça preço a vários fornecedores, compare lado a lado e gere o pedido de compra uma única vez."
@@ -974,6 +975,6 @@ export default function CotacoesCompraPage({ initialId }: { initialId?: number |
         onConfirm={() => void removerItem()}
         onCancel={() => setItemRemover(null)}
       />
-    </div>
+    </PageShell>
   );
 }

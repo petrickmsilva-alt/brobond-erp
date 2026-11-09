@@ -15,6 +15,7 @@ import { ArrowRight, ClipboardList, Plus, RefreshCw, Search } from 'lucide-react
 import { api } from '../lib/api';
 import { useAuth } from '../auth/AuthContext';
 import { Alert, Badge, PageHeader, Spinner, useToast } from '../components/ui';
+import { PageShell } from '../components/ui-kit-negocios';
 import { formatDateTime } from '../lib/format';
 import { ContagemCiclicaView, PlanejarCiclicoPanel, podePlanejar, type Inv } from '../components/contagemCiclica';
 
@@ -80,7 +81,7 @@ export default function ContagemCiclicaPage() {
   if (aberto) return <ContagemCiclicaView inventario={aberto} onBack={() => { setAberto(null); carregar(); }} />;
 
   return (
-    <div className="p-4 pb-24 sm:p-6 md:pb-6">
+    <PageShell className="pb-24 md:pb-6">
       <PageHeader
         title={
           <span className="flex items-center gap-2.5">
@@ -176,6 +177,6 @@ export default function ContagemCiclicaPage() {
         locais={locais}
         onCriado={(inv) => { toast.success(`Plano #${inv.id} criado.`); void carregar(); abrir(inv.id); }}
       />
-    </div>
+    </PageShell>
   );
 }

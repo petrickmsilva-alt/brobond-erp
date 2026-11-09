@@ -23,6 +23,7 @@ import {
   type TerminalConfigCliente,
 } from '../lib/printAgent';
 import { Alert, PageHeader, Spinner, useToast } from '../components/ui';
+import { PageShell } from '../components/ui-kit-negocios';
 import { useAuth } from '../auth/AuthContext';
 
 const TERMINAL_VAZIO: Partial<TerminalConfigCliente> = {
@@ -134,7 +135,7 @@ export default function ImpressaoTerminalFormPage({ modo = 'novo' }: { modo?: 'n
   }
 
   return (
-    <div className="space-y-4 p-4 sm:p-6">
+    <PageShell>
       <PageHeader
         title={
           <span className="flex items-center gap-2.5">
@@ -373,6 +374,6 @@ export default function ImpressaoTerminalFormPage({ modo = 'novo' }: { modo?: 'n
           </div>
         </div>
       )}
-    </div>
+    </PageShell>
   );
 }

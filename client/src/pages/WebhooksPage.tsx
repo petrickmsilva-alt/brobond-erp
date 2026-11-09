@@ -12,6 +12,7 @@ import { CheckCircle2, FlaskConical, History, Loader2, Plus, Power, RefreshCw, R
 import { api, ApiError } from '../lib/api';
 import { formatDateTime, formatRelative } from '../lib/format';
 import { Alert, Badge, ConfirmacaoInline, EmptyState, PainelInline, PageHeader, Spinner, useToast } from '../components/ui';
+import { PageShell } from '../components/ui-kit-negocios';
 import ReauthModal from '../components/ReauthModal';
 
 type Webhook = {
@@ -137,7 +138,7 @@ export default function WebhooksPage() {
   }
 
   return (
-    <div className="p-4 sm:p-6">
+    <PageShell>
       <PageHeader
         title={
           <span className="flex items-center gap-2.5">
@@ -307,7 +308,7 @@ export default function WebhooksPage() {
         }}
         titulo={reauth?.titulo || 'Autorização necessária'}
       />
-    </div>
+    </PageShell>
   );
 }
 

@@ -787,3 +787,35 @@ export function Pagination({
     </nav>
   );
 }
+
+// ----------------------------------------------------------------------------
+// Casca de página e estados assíncronos (padrão LISTA → DETALHE → NOVO/EDIÇÃO)
+// ----------------------------------------------------------------------------
+
+/**
+ * Casca padrão de página operacional: aplica o recuo externo (`p-4 sm:p-6`) e o
+ * empilhamento vertical que os módulos vinham repetindo à mão. Alguns módulos
+ * esqueceram o recuo e a tela colava na borda; a casca elimina a diferença.
+ */
+export function PageShell({ children, className = '' }: { children: ReactNode; className?: string }) {
+  return <div className={`min-w-0 space-y-4 p-4 sm:p-6 ${className}`.trimEnd()}>{children}</div>;
+}
+
+/** Estado de carregamento de página inteira, com o mesmo recuo da casca. */
+export function PageLoading({ label = 'Carregando…' }: { label?: string }) {
+  return (
+    <PageShell>
+      <LoadingState label={label} rows={6} />
+    </PageShell>
+  );
+}
+
+/** Estado de erro de página inteira, com ação de nova tentativa. */
+export function PageError({ message, onRetry, title }: { message?: string; onRetry?: () => void; title?: string }) {
+  return (
+    <PageShell>
+      <ErrorState message={message} onRetry={onRetry} title={title} />
+    </PageShell>
+  );
+}
+

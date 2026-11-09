@@ -11,8 +11,8 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { AlertTriangle, Clock, Headphones, TrendingUp } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
-import { Alert, PageHeader, Spinner } from '../components/ui';
-import { StatCard } from '../components/ui-kit-negocios';
+import { PageHeader } from '../components/ui';
+import { PageError, PageLoading, PageShell, StatCard } from '../components/ui-kit-negocios';
 type Painel = {
   total: number;
   por_status: Record<string, number>;
@@ -36,9 +36,12 @@ export default function ServicePainelPage() {
   const [data, setData] = useState<Painel | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
+  const [tentativa, setTentativa] = useState(0);
 
   useEffect(() => {
     let ativo = true;
+    setLoading(true);
+    setError('');
     api.get<Painel>('/service/painel')
       .then((r) => { if (ativo) setData(r); })
       .catch((e: unknown) => {
@@ -46,14 +49,14 @@ export default function ServicePainelPage() {
       })
       .finally(() => { if (ativo) setLoading(false); });
     return () => { ativo = false; };
-  }, []);
+  }, [tentativa]);
 
-  if (loading) return <Spinner label="Carregando painel de atendimento…" />;
-  if (error) return <Alert tone="red">{error}</Alert>;
-  if (!data) return null;
+  if (loading) return <PageLoading label="Carregando painel de atendimento…" />;
+  if (error) return <PageError message={error} onRetry={() => setTentativa((n) => n + 1)} />;
+  if (!data) return <PageError message="Não foi possível carregar o painel." />;
 
   return (
-    <div className="min-w-0 space-y-4">
+    <PageShell>
       <PageHeader
         title="Painel de atendimento"
         description="Indicadores calculados sobre os tickets reais da empresa ativa. Atualizado a cada consulta."
@@ -89,6 +92,6 @@ export default function ServicePainelPage() {
         Total de tickets: {data.total} · gerado em {new Date(data.gerado_em).toLocaleString('pt-BR')} ·{' '}
         <Link className="text-blue-700 hover:underline" to="/service/tickets">ver tickets</Link>
       </p>
-    </div>
+    </PageShell>
   );
 }

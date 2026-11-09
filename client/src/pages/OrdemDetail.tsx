@@ -6,6 +6,7 @@ import { useMeta, type Option } from '../lib/meta';
 import { ProductSelector } from '../components/ProductSelector';
 import { useAuth } from '../auth/AuthContext';
 import { Alert, Badge, ConfirmacaoInline, PainelInline, PageHeader, Spinner, useToast } from '../components/ui';
+import { PageShell } from '../components/ui-kit-negocios';
 import { DocumentPrintButton } from '../components/DocumentPrintButton';
 import { formatDate, formatMoney, formatNumber } from '../lib/format';
 
@@ -411,12 +412,12 @@ export default function OrdemDetail() {
   if (loading) return <Spinner />;
   if (error || !ordem)
     return (
-      <div className="p-4 sm:p-6">
+      <PageShell>
         <Alert tone="red">{error}</Alert>
         <Link to="/ordens" className="btn-secondary mt-4">
           <ArrowLeft className="h-4 w-4" /> Voltar para Ordens
         </Link>
-      </div>
+      </PageShell>
     );
 
   const aberta = !['concluida', 'cancelada'].includes(status);
@@ -424,7 +425,7 @@ export default function OrdemDetail() {
   const grade = ordem.tipo === 'grade';
 
   return (
-    <div className="p-4 pb-24 sm:p-6 md:pb-6">
+    <PageShell className="pb-24 md:pb-6">
       <PageHeader
         title={
           <span className="flex items-center gap-2.5">
@@ -1019,6 +1020,6 @@ export default function OrdemDetail() {
           </button>
         </div>
       </PainelInline>
-    </div>
+    </PageShell>
   );
 }

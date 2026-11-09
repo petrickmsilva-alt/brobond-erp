@@ -25,6 +25,7 @@ import { AlertTriangle, ArrowLeft, Loader2, Plus, Save, X } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
 import { useMeta, type Option, type ResourceMeta } from '../lib/meta';
 import { Alert, PageHeader, Spinner, useToast } from '../components/ui';
+import { PageShell } from '../components/ui-kit-negocios';
 import { ImageField } from '../components/ImageField';
 import {
   fieldErrors,
@@ -238,7 +239,7 @@ export default function RegistroPage({ module, modo }: { module: Module; modo: M
   const titulo = editing ? `Editar ${resource.singular}` : `Novo cadastro: ${resource.singular}`;
 
   return (
-    <div className="p-4 sm:p-6">
+    <PageShell>
       <PageHeader
         title={titulo}
         description={
@@ -360,6 +361,6 @@ export default function RegistroPage({ module, modo }: { module: Module; modo: M
           </div>
         </div>
       )}
-    </div>
+    </PageShell>
   );
 }

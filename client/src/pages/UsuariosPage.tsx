@@ -67,6 +67,7 @@ import { imprimirFicha } from '../lib/fichaPrint';
 import { useAuth } from '../auth/AuthContext';
 import { useLocalStorageBool } from '../lib/useLocalStorage';
 import { Alert, Badge, ConfirmacaoInline, EmptyState, PainelInline, PageHeader, Spinner, useToast } from '../components/ui';
+import { PageShell } from '../components/ui-kit-negocios';
 import { DocumentPrintButton } from '../components/DocumentPrintButton';
 import ReauthModal from '../components/ReauthModal';
 
@@ -951,7 +952,7 @@ export default function UsuariosPage() {
   ];
 
   return (
-    <div className="p-4 sm:p-6">
+    <PageShell>
       <PageHeader
         title={
           <span className="flex items-center gap-2.5">
@@ -2175,7 +2176,7 @@ export default function UsuariosPage() {
       />
 
 
-    </div>
+    </PageShell>
   );
 }
 
@@ -3214,7 +3215,7 @@ export function UsuarioRegistroPage({ modo }: { modo: 'novo' | 'editar' }) {
   }, [id, modo]);
 
   return (
-    <div className="p-4 sm:p-6">
+    <PageShell>
       <PageHeader
         title={modo === 'editar' ? 'Editar usuário' : 'Novo usuário'}
         description="Perfil, permissões comerciais, alçadas e expiração de acesso. O usuário define a própria senha pelo convite."
@@ -3269,6 +3270,6 @@ export function UsuarioRegistroPage({ modo }: { modo: 'novo' | 'editar' }) {
           />
         </div>
       )}
-    </div>
+    </PageShell>
   );
 }

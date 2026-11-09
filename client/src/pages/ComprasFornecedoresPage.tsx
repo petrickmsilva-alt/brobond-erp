@@ -21,6 +21,7 @@ import { AlertTriangle, CheckCircle2, FileText, Loader2, RefreshCw, ShieldAlert,
 import { api, ApiError } from '../lib/api';
 import type { ListResult } from '../lib/meta';
 import { Alert, Badge, EmptyState, PageHeader, Spinner, useToast } from '../components/ui';
+import { PageShell } from '../components/ui-kit-negocios';
 import { StatCard } from '../components/ui-kit-negocios';
 import { formatDate } from '../lib/format';
 
@@ -178,7 +179,7 @@ export default function ComprasFornecedoresPage() {
   const vencendo = painel?.documentos_vencendo ?? [];
 
   return (
-    <div className="space-y-4">
+    <PageShell>
       <PageHeader
         title="Homologação de fornecedores"
         description="Quem pode receber pedido de compra, por quê — e como cada fornecedor vem entregando, com números calculados das compras reais."
@@ -433,6 +434,6 @@ export default function ComprasFornecedoresPage() {
           </ul>
         </section>
       )}
-    </div>
+    </PageShell>
   );
 }

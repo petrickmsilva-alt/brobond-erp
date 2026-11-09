@@ -13,7 +13,7 @@ import { useEffect, useState } from 'react';
 import { AlertTriangle, RefreshCw, Users } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
 import { Alert, Badge, EmptyState, PageHeader, Spinner } from '../components/ui';
-import { DataTable, StatCard, type DataTableColumn } from '../components/ui-kit-negocios';
+import { DataTable, PageShell, StatCard, type DataTableColumn } from '../components/ui-kit-negocios';
 
 type Linha = {
   cliente_id: number;
@@ -98,7 +98,7 @@ export default function CustomerRfmPage() {
   ];
 
   return (
-    <div className="min-w-0 space-y-4">
+    <PageShell>
       <PageHeader
         title="Análise RFM"
         description="Recência, frequência e valor monetário em quintis (1 a 5) sobre as compras reais da empresa ativa. Os cortes saem da distribuição real — clientes sem compra não recebem nota."
@@ -157,6 +157,6 @@ export default function CustomerRfmPage() {
           </p>
         </>
       )}
-    </div>
+    </PageShell>
   );
 }

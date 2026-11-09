@@ -17,6 +17,7 @@ import { Download, FileUp, Loader2, UploadCloud, X } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { api, downloadFile, lerArquivoParaImportacao, ApiError } from '../lib/api';
 import { Alert, PageHeader, useToast } from '../components/ui';
+import { PageShell } from '../components/ui-kit-negocios';
 import { IMPORT_TIPOS } from '../lib/importacao';
 
 type PreviewResp = {
@@ -148,7 +149,7 @@ export default function ImportarPage() {
   const aceita = '.csv,text/csv,.xlsx,.xls';
 
   return (
-    <div className="p-4 pb-24 sm:p-6 md:pb-6">
+    <PageShell className="pb-24 md:pb-6">
       <PageHeader
         title={`Importar ${tipoConfig.label.toLowerCase()}`}
         description="Aceita CSV (Excel pt-BR, separado por ; ou vírgula) e XLSX. A primeira linha é o cabeçalho. Nada é gravado antes de você confirmar."
@@ -314,6 +315,6 @@ export default function ImportarPage() {
           </>
         )}
       </div>
-    </div>
+    </PageShell>
   );
 }

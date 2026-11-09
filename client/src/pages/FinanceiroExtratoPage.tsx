@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { Alert, EmptyState, PageHeader, Spinner } from '../components/ui';
+import { PageShell } from '../components/ui-kit-negocios';
 import { api } from '../lib/api';
 import { formatMoney } from '../lib/format';
 
@@ -29,7 +30,7 @@ export default function FinanceiroExtratoPage({ modo }: { modo: 'lista' | 'detal
     } catch (error) { setErro(error instanceof Error ? error.message : 'Não foi possível salvar.'); }
     finally { setBusy(false); }
   }
-  return <div className="min-w-0 space-y-5">
+  return <PageShell>
     <PageHeader title={modo === 'lista' ? 'Linhas de extrato' : `Linha de extrato #${id || ''}`}
       description="Confira a identidade e a evidência bancária: valor e data, por si só, não autorizam uma baixa."
       actions={<Link className="btn-secondary" to={modo === 'lista' ? '/financeiro' : base}>{modo === 'lista' ? 'Voltar ao financeiro' : 'Voltar ao extrato'}</Link>} />
@@ -61,5 +62,5 @@ export default function FinanceiroExtratoPage({ modo }: { modo: 'lista' | 'detal
         </form>
       </div>}
     </section>}
-  </div>;
+  </PageShell>;
 }

@@ -14,6 +14,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, Box } from 'lucide-react';
 import RecebimentoCompraForm from '../components/RecebimentoCompraForm';
 import { Alert, PageHeader } from '../components/ui';
+import { PageShell } from '../components/ui-kit-negocios';
 
 export default function RecebimentoCompraPage() {
   const navigate = useNavigate();
@@ -33,7 +34,7 @@ export default function RecebimentoCompraPage() {
   }
 
   return (
-    <div className="p-4 pb-24 sm:p-6 md:pb-6">
+    <PageShell className="pb-24 md:pb-6">
       <PageHeader
         title={
           <span className="flex items-center gap-2.5">
@@ -53,6 +54,6 @@ export default function RecebimentoCompraPage() {
         onClose={() => navigate(`/compras/${compraId}`)}
         onRecebido={() => navigate(`/compras/${compraId}`)}
       />
-    </div>
+    </PageShell>
   );
 }

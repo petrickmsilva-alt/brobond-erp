@@ -14,7 +14,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { AlertTriangle, Bell, RefreshCw, ShieldAlert, Zap } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
 import { Alert, Badge, EmptyState, PageHeader, Spinner, useToast } from '../components/ui';
-import { DataTable, FilterBar, StatCard, type DataTableColumn } from '../components/ui-kit-negocios';
+import { DataTable, FilterBar, PageShell, StatCard, type DataTableColumn } from '../components/ui-kit-negocios';
 
 type Ocorrencia = {
   id: number;
@@ -186,7 +186,7 @@ export default function AlertasPage() {
   const alertas = painel?.alertas ?? [];
 
   return (
-    <div className="min-w-0 space-y-4">
+    <PageShell>
       <PageHeader
         title="Alertas"
         description="Ocorrências detectadas por regras reais sobre os dados canônicos do ERP. Cada alerta traz severidade, evidência rastreável e histórico de reconhecimento, resolução e silenciamento. Alertar não é agir: nenhum alerta altera estoque, preço, pedido ou pagamento."
@@ -334,6 +334,6 @@ export default function AlertasPage() {
           </p>
         </>
       )}
-    </div>
+    </PageShell>
   );
 }

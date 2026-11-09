@@ -13,6 +13,7 @@ import { Link } from 'react-router-dom';
 import { Activity, AlertTriangle, ArrowRight, CalendarClock, TrendingUp, Users } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
 import { Alert, Badge, EmptyState, PageHeader, Spinner } from '../components/ui';
+import { PageShell } from '../components/ui-kit-negocios';
 import { StatCard } from '../components/ui-kit-negocios';
 import { formatMoney } from '../lib/format';
 
@@ -108,7 +109,7 @@ export default function CrmPainelPage() {
   const maiorPipeline = Math.max(1, ...(dados?.pipeline.map((p) => p.forecast) ?? [1]));
 
   return (
-    <div className="p-4 sm:p-6">
+    <PageShell>
       <PageHeader
         title="Painel do CRM"
         description="Leads, pipeline, previsão ponderada, conversão por origem e desempenho comercial. Todos os números vêm de um único endpoint derivado — nada é digitado à mão."
@@ -291,6 +292,6 @@ export default function CrmPainelPage() {
           </p>
         </div>
       )}
-    </div>
+    </PageShell>
   );
 }

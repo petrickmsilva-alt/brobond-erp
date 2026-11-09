@@ -1,8 +1,9 @@
 import { useCallback, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AlertTriangle, CheckCircle2, FileUp, FileWarning, Loader2, RefreshCw, Search, TriangleAlert } from 'lucide-react';
-import { ApiError, getToken } from '../lib/api';
+import { api } from '../lib/api';
 import { Alert, Badge, EmptyState, PageHeader, Spinner, useToast } from '../components/ui';
+import { PageShell } from '../components/ui-kit-negocios';
 import { formatDate, formatMoney, formatNumber } from '../lib/format';
 
 /**
@@ -64,22 +65,14 @@ type Importado = {
   itens: ItemPrevisto[];
 };
 
-const ENDPOINT = '/api/suprimentos/compras/importar-xml';
+const ENDPOINT = '/suprimentos/compras/importar-xml';
 
 async function enviar(arquivo: File, aplicar: boolean, local?: string): Promise<Previsao | Importado> {
-  const token = getToken();
   const fd = new FormData();
   fd.append('file', arquivo, arquivo.name);
   fd.append('aplicar', aplicar ? 'true' : 'false');
   if (local) fd.append('local', local);
-  const res = await fetch(ENDPOINT, {
-    method: 'POST',
-    headers: token ? { authorization: `Bearer ${token}` } : {},
-    body: fd,
-  });
-  const dados = await res.json().catch(() => ({}));
-  if (!res.ok) throw new ApiError(res.status, dados?.error || 'Não foi possível processar o XML.', dados?.fields);
-  return dados as Previsao | Importado;
+  return api.upload<Previsao | Importado>(ENDPOINT, fd);
 }
 
 export default function ImportarNfePage() {
@@ -136,7 +129,7 @@ export default function ImportarNfePage() {
   }, [arquivo, local, toast]);
 
   return (
-    <>
+    <PageShell>
       <PageHeader
         title="Importar NF-e de entrada"
         description="Leia o XML da nota do fornecedor, confira o de-para dos SKUs e crie a compra já recebida. O estoque e o custo são aplicados pela mesma regra do recebimento manual."
@@ -310,7 +303,7 @@ export default function ImportarNfePage() {
           )}
         </div>
       )}
-    </>
+    </PageShell>
   );
 }
 

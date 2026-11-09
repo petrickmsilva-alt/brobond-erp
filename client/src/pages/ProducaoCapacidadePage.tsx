@@ -17,6 +17,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { AlertTriangle, BarChart3, Factory, Loader2, RefreshCw } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
 import { Alert, Badge, EmptyState, PageHeader, Spinner } from '../components/ui';
+import { PageShell } from '../components/ui-kit-negocios';
 import { StatCard } from '../components/ui-kit-negocios';
 import { formatDate, formatNumber } from '../lib/format';
 
@@ -124,7 +125,7 @@ export default function ProducaoCapacidadePage() {
   }, [carregar]);
 
   return (
-    <div className="space-y-5">
+    <PageShell>
       <form className="mb-4 flex flex-wrap items-end gap-3" onSubmit={async (event) => {
         event.preventDefault(); setPlanejando(true); setErro(''); setResultadoPlano('');
         try {
@@ -348,7 +349,7 @@ export default function ProducaoCapacidadePage() {
       {carregando && (
         <span className="sr-only"><Loader2 className="animate-spin" /> carregando</span>
       )}
-    </div>
+    </PageShell>
   );
 }
 

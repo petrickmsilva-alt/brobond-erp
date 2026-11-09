@@ -25,6 +25,7 @@ import { api, ApiError } from '../lib/api';
 import { maskDocument } from '../lib/format';
 import type { ListResult } from '../lib/meta';
 import { Alert, Badge, ConfirmacaoInline, EmptyState, PainelInline, PageHeader, Spinner, useToast } from '../components/ui';
+import { PageShell } from '../components/ui-kit-negocios';
 
 type Empresa = {
   id: number;
@@ -193,7 +194,7 @@ export default function EmpresasPage() {
   };
 
   return (
-    <div>
+    <PageShell>
       <PageHeader
         title="Empresas"
         description="Empresas do grupo. Cada cadastro, venda e lançamento pertence a UMA empresa — os dados nunca se misturam. Trocar a empresa ativa da sessão é no seletor do topo."
@@ -370,6 +371,6 @@ export default function EmpresasPage() {
           </div>
         )}
       </PainelInline>
-    </div>
+    </PageShell>
   );
 }

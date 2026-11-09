@@ -51,6 +51,7 @@ import { AlertTriangle, ArrowLeft, Boxes, ClipboardList, Loader2, Package, Save,
 import { api, ApiError } from '../lib/api';
 import { useMeta, type ResourceMeta, type Tone } from '../lib/meta';
 import { Alert, Badge, PageHeader, Spinner, useToast } from '../components/ui';
+import { PageShell } from '../components/ui-kit-negocios';
 import {
   fieldErrors,
   initialValues,
@@ -197,13 +198,13 @@ export default function InsumoFormPage() {
 
   if (!resource) {
     return (
-      <div className="p-4 sm:p-6">
+      <PageShell>
         <PageHeader title="Insumos" description="Cadastro de insumos da produção." />
         <Alert tone="red">O cadastro de Insumos não está disponível neste ambiente.</Alert>
         <Link to="/insumos" className="btn-secondary mt-4 inline-flex">
           <ArrowLeft className="h-4 w-4" /> Voltar para a lista
         </Link>
-      </div>
+      </PageShell>
     );
   }
 
@@ -238,26 +239,26 @@ export default function InsumoFormPage() {
 
   if (carregando) {
     return (
-      <div className="p-4 sm:p-6">
+      <PageShell>
         <Spinner label="Carregando insumo..." />
-      </div>
+      </PageShell>
     );
   }
 
   if (erroCarregar) {
     return (
-      <div className="p-4 sm:p-6">
+      <PageShell>
         <PageHeader title={titulo} description="Não foi possível abrir o cadastro." />
         <Alert tone="red">{erroCarregar}</Alert>
         <Link to="/insumos" className="btn-secondary mt-4 inline-flex">
           <ArrowLeft className="h-4 w-4" /> Voltar para a lista
         </Link>
-      </div>
+      </PageShell>
     );
   }
 
   return (
-    <div className="p-4 sm:p-6">
+    <PageShell>
       <PageHeader
         title={
           <span className="flex items-center gap-2.5">
@@ -452,6 +453,6 @@ export default function InsumoFormPage() {
           )}
         </div>
       )}
-    </div>
+    </PageShell>
   );
 }

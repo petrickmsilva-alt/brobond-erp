@@ -3,7 +3,7 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { MemoryRouter } from 'react-router-dom';
-import { Combobox, DataTable, DatePicker, DateRangePicker, DeltaBadge, ErrorState, LoadingState, Pagination, StatCard, StatusBadge, Tabs, Tooltip } from './ui-kit-negocios';
+import { Combobox, DataTable, DatePicker, DateRangePicker, DeltaBadge, ErrorState, LoadingState, PageError, PageLoading, PageShell, Pagination, StatCard, StatusBadge, Tabs, Tooltip } from './ui-kit-negocios';
 
 describe('StatusBadge', () => {
   it('mostra o texto do status (nunca só a cor)', () => {
@@ -265,5 +265,41 @@ describe('Pagination', () => {
     expect(within(nav).getByRole('button', { name: 'Página 5', current: 'page' })).toBeInTheDocument();
     // Páginas distantes da janela ficam ocultas.
     expect(within(nav).queryByRole('button', { name: 'Página 9' })).not.toBeInTheDocument();
+  });
+});
+
+describe('PageShell', () => {
+  it('aplica o espaçamento e o respiro canônicos da página (p-4 sm:p-6 + space-y-4)', () => {
+    const { container } = render(<PageShell><p>conteúdo</p></PageShell>);
+    const raiz = container.firstElementChild as HTMLElement;
+    expect(raiz.className).toContain('p-4');
+    expect(raiz.className).toContain('sm:p-6');
+    expect(raiz.className).toContain('space-y-4');
+    expect(screen.getByText('conteúdo')).toBeInTheDocument();
+  });
+
+  it('preserva classes extras de layout sem sobrescrever o padrão', () => {
+    const { container } = render(<PageShell className="pb-24 md:pb-6">x</PageShell>);
+    const raiz = container.firstElementChild as HTMLElement;
+    expect(raiz.className).toContain('pb-24');
+    expect(raiz.className).toContain('p-4');
+  });
+});
+
+describe('PageLoading e PageError', () => {
+  it('PageLoading anuncia o carregamento dentro do PageShell', () => {
+    const { container } = render(<PageLoading label="Carregando módulo…" />);
+    expect(screen.getByRole('status')).toBeInTheDocument();
+    expect(screen.getByText('Carregando módulo…')).toBeInTheDocument();
+    expect((container.firstElementChild as HTMLElement).className).toContain('p-4');
+  });
+
+  it('PageError mostra a mensagem e dispara onRetry', async () => {
+    const onRetry = vi.fn();
+    render(<PageError message="Falha de rede" onRetry={onRetry} />);
+    expect(screen.getByRole('alert')).toBeInTheDocument();
+    expect(screen.getByText('Falha de rede')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /tentar novamente/i }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
   });
 });

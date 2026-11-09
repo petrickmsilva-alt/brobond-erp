@@ -15,6 +15,7 @@ import { BarChart3, Loader2, RefreshCw } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
 import { useMeta, type Option } from '../lib/meta';
 import { Alert, Badge, EmptyState, PageHeader, useToast } from '../components/ui';
+import { PageShell } from '../components/ui-kit-negocios';
 import { Card, CardHeader, FilterBar } from '../components/ui-kit-negocios';
 import { BarrasVerticais } from '../components/Charts';
 
@@ -110,7 +111,7 @@ export default function PainelComercialPage() {
   const equipes: Option[] = (meta as any).options?.equipes_comerciais ?? [];
 
   return (
-    <div className="p-4 sm:p-6">
+    <PageShell>
       <PageHeader
         title="Painel comercial"
         description="Indicadores derivados das vendas faturadas. Nenhum número é digitado — meta, variação e atingimento são calculados no servidor."
@@ -337,6 +338,6 @@ export default function PainelComercialPage() {
           </div>
         </div>
       )}
-    </div>
+    </PageShell>
   );
 }

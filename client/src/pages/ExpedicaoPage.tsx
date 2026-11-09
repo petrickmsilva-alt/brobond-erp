@@ -14,6 +14,7 @@ import { api, ApiError } from '../lib/api';
 import { formatDateTime, formatNumber } from '../lib/format';
 import type { ListResult } from '../lib/meta';
 import { Alert, Badge, EmptyState, PainelInline, PageHeader, Spinner, useToast } from '../components/ui';
+import { PageShell } from '../components/ui-kit-negocios';
 import BarcodeScanner from '../components/BarcodeScanner';
 
 type Etapa = 'pendente' | 'separacao' | 'conferida' | 'embalada' | 'expedida';
@@ -287,7 +288,7 @@ export default function ExpedicaoPage() {
   }, [fila, busca]);
 
   return (
-    <div>
+    <PageShell>
       <PageHeader
         title="Expedição"
         description="Separação → conferência → embalagem → expedição. Divergência de conferência fica registrada e não movimenta estoque."
@@ -649,6 +650,6 @@ export default function ExpedicaoPage() {
           <X className="h-4 w-4" />
         </button>
       )}
-    </div>
+    </PageShell>
   );
 }

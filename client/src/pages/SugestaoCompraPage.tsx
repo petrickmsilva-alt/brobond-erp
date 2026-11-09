@@ -15,6 +15,7 @@ import { api, ApiError } from '../lib/api';
 import { formatMoney, formatNumber } from '../lib/format';
 import type { ListResult } from '../lib/meta';
 import { Alert, Badge, EmptyState, PageHeader, Spinner, useToast } from '../components/ui';
+import { PageShell } from '../components/ui-kit-negocios';
 
 type LinhaSugestao = {
   produto_id: number;
@@ -169,7 +170,7 @@ export default function SugestaoCompraPage() {
   };
 
   return (
-    <div>
+    <PageShell>
       <PageHeader
         title="Sugestão de compra"
         description="Estoque atual, mínimo e máximo, consumo do período, pedidos em aberto e compras em trânsito. A sugestão nunca gera pedido sozinha."
@@ -415,6 +416,6 @@ export default function SugestaoCompraPage() {
         </div>
       )}
 
-    </div>
+    </PageShell>
   );
 }

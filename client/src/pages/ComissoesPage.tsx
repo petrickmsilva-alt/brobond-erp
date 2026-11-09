@@ -22,6 +22,7 @@ import { BadgeDollarSign, CalendarRange, ClipboardCheck, Receipt, Undo2 } from '
 import { api, ApiError } from '../lib/api';
 import { formatDate, formatMoney, formatNumber, formatPct } from '../lib/format';
 import { Alert, Badge, EmptyState, PainelInline, PageHeader, Spinner, useToast } from '../components/ui';
+import { PageShell } from '../components/ui-kit-negocios';
 
 type LinhaComissao = {
   representante_id: number;
@@ -186,7 +187,7 @@ export default function ComissoesPage() {
   );
 
   return (
-    <div>
+    <PageShell>
       <PageHeader
         title="Comissões"
         description="Apuração no faturamento, efetivação conforme o RECEBIMENTO da venda. Esta tela confere e fecha o período — ela não marca comissão como paga, porque esse estado não existe: quem efetiva é o dinheiro que entra."
@@ -416,6 +417,6 @@ export default function ComissoesPage() {
           <Undo2 className="h-3 w-3" /> Venda cancelada gera evento de <strong>estorno</strong> no livro — o saldo cai junto.
         </p>
       </PainelInline>
-    </div>
+    </PageShell>
   );
 }

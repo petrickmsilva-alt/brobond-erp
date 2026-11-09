@@ -5,6 +5,7 @@ import { api, ApiError } from '../lib/api';
 import { useMeta, type Option } from '../lib/meta';
 import { useAuth } from '../auth/AuthContext';
 import { Alert, Badge, ConfirmacaoInline, PainelInline, PageHeader, Spinner, useToast } from '../components/ui';
+import { PageShell } from '../components/ui-kit-negocios';
 import { formatMoney, formatNumber } from '../lib/format';
 
 type InsumoLinha = Record<string, any> & { id: number };
@@ -178,12 +179,12 @@ export default function FichaDetail() {
   if (loading) return <Spinner />;
   if (error || !ficha)
     return (
-      <div className="p-4 sm:p-6">
+      <PageShell>
         <Alert tone="red">{error}</Alert>
         <Link to="/fichas" className="btn-secondary mt-4">
           <ArrowLeft className="h-4 w-4" /> Voltar para Fichas
         </Link>
-      </div>
+      </PageShell>
     );
 
   const ehGerente = user?.perfil === 'admin' || user?.perfil === 'gerente';
@@ -196,7 +197,7 @@ export default function FichaDetail() {
   const totalInsumos = insumos.reduce((acc, l) => acc + custoLinha(l), 0);
 
   return (
-    <div className="p-4 pb-20 sm:p-6 md:pb-6">
+    <PageShell className="pb-20 md:pb-6">
       <PageHeader
         title={
           <span className="flex items-center gap-2.5">
@@ -399,6 +400,6 @@ export default function FichaDetail() {
         onConfirm={removerInsumo}
         message={<p>O custo da ficha será recalculado sem este insumo.</p>}
       />
-    </div>
+    </PageShell>
   );
 }

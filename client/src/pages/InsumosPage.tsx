@@ -39,6 +39,7 @@ import { Package, Pencil, Plus, Power, Trash2 } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
 import { useMeta, type Field, type ListResult, type Option } from '../lib/meta';
 import { Alert, ConfirmacaoInline, EmptyState, PageHeader, Spinner, useToast } from '../components/ui';
+import { PageShell } from '../components/ui-kit-negocios';
 import { Dropdown, Pagination } from '../components/ui-kit';
 import { ListaTabela } from '../components/ListaTabela';
 import { ListaCards } from '../components/ListaCards';
@@ -345,7 +346,7 @@ export default function InsumosPage() {
   const dependenciasAtivaAinda = !!dependencias && linhas.some((l) => Number(l.id) === Number(dependencias.id) && l.ativo !== false);
 
   return (
-    <div className="p-4 sm:p-6">
+    <PageShell>
       <PageHeader
         title={
           <span className="flex items-center gap-2.5">
@@ -635,6 +636,6 @@ export default function InsumosPage() {
             : undefined
         }
       />
-    </div>
+    </PageShell>
   );
 }

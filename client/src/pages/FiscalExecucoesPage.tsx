@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 import { ArrowLeft, FilePlus2, RefreshCw, ShieldAlert } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
 import { Alert, Badge, PageHeader, Spinner, useToast } from '../components/ui';
+import { PageShell } from '../components/ui-kit-negocios';
 
 type Execucao = {
   id: number; periodo: string; status: 'PENDENTE' | 'EM_PROCESSAMENTO' | 'VALIDADO' | 'ERRO' | 'ENTREGUE' | 'NAO_SUPORTADO';
@@ -57,7 +58,7 @@ export default function FiscalExecucoesPage() {
   }
 
   if (!execucoes && !erro) return <div className="flex justify-center py-16"><Spinner /></div>;
-  return <div className="space-y-4">
+  return <PageShell>
     <PageHeader title="Execuções fiscais" description="Histórico imutável por obrigação e competência. O ERP não gera nem valida layout oficial sem fonte oficial configurada." actions={<Link className="btn-secondary" to={`/fiscal/obrigacoes/${id}`}><ArrowLeft className="h-4 w-4" /> Detalhe da obrigação</Link>} />
     {erro && <Alert tone="red">{erro}</Alert>}
     <Alert tone="amber"><ShieldAlert className="mr-2 inline h-4 w-4" />SPED/EFD não suportado nesta instalação: uma tentativa será registrada como NAO_SUPORTADO, sem arquivo ou validação inventados.</Alert>
@@ -89,5 +90,5 @@ export default function FiscalExecucoesPage() {
       <button type="button" className="btn-primary" disabled={ocupado || !form.execucao_id} onClick={() => void registrarEvidencia()}>Registrar evidência</button>
     </section>
     <section className="space-y-3"><h2 className="font-semibold">Evidências por execução</h2>{(execucoes ?? []).map((e) => <article className="card p-4" key={`e-${e.id}`}><h3 className="mb-2 font-medium">Execução #{e.id}</h3>{(evidencias[e.id] ?? []).length ? <ul className="space-y-1 text-sm">{evidencias[e.id].map((ev) => <li key={ev.id} className="break-all">{ev.arquivo_ref} · SHA-256 {ev.hash_sha256} · {ev.tamanho_bytes} bytes · {ev.resultado}</li>)}</ul> : <p className="text-sm text-slate-500">Sem evidências.</p>}</article>)}</section>
-  </div>;
+  </PageShell>;
 }

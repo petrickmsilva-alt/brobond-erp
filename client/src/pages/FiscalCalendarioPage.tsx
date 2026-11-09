@@ -14,6 +14,7 @@ import { Fragment } from 'react';
 import { CalendarClock, CheckCircle2, Loader2, RefreshCw, Upload } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
 import { Alert, Badge, EmptyState, PageHeader, Spinner, useToast } from '../components/ui';
+import { PageShell } from '../components/ui-kit-negocios';
 import { StatCard } from '../components/ui-kit-negocios';
 import { formatDate } from '../lib/format';
 
@@ -142,7 +143,7 @@ export default function FiscalCalendarioPage() {
   const linhas = useMemo(() => dados?.obrigacoes ?? [], [dados]);
 
   return (
-    <div className="space-y-4">
+    <PageShell>
       <PageHeader
         title="Calendário fiscal"
         description="Obrigações acessórias por competência: vencimento calculado, situação atual e a prova de cada entrega. O ERP controla prazo e protocolo — não calcula imposto."
@@ -274,6 +275,6 @@ export default function FiscalCalendarioPage() {
           )}
         </>
       )}
-    </div>
+    </PageShell>
   );
 }

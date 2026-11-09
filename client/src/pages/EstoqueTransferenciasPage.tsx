@@ -17,6 +17,7 @@ import { AlertTriangle, ArrowRight, ArrowRightLeft, Loader2, Plus, RefreshCw, X 
 import { api, ApiError } from '../lib/api';
 import { useMeta, type ListResult, type Option } from '../lib/meta';
 import { Alert, Badge, ConfirmacaoInline, EmptyState, PageHeader, Spinner, useToast } from '../components/ui';
+import { PageShell } from '../components/ui-kit-negocios';
 import { formatDateTime } from '../lib/format';
 
 type Status = 'solicitada' | 'aprovada' | 'em_transito' | 'recebida' | 'cancelada';
@@ -209,7 +210,7 @@ export default function EstoqueTransferenciasPage() {
   }
 
   return (
-    <div className="p-4 sm:p-6">
+    <PageShell>
       <PageHeader
         title="Transferências entre locais"
         description="Documento com aprovação e trânsito. O saldo só muda na expedição (saída na origem) e no recebimento (entrada no destino)."
@@ -462,7 +463,7 @@ export default function EstoqueTransferenciasPage() {
           {meta?.mode === 'memory' ? ' (modo demonstração)' : ''}
         </p>
       </section>
-    </div>
+    </PageShell>
   );
 }
 

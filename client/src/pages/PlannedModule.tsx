@@ -2,6 +2,7 @@ import { Link } from 'react-router-dom';
 import { CheckCircle2, Construction } from 'lucide-react';
 import { moduleOfPath, type Module } from '../modules';
 import { PageHeader } from '../components/ui';
+import { PageShell } from '../components/ui-kit-negocios';
 
 /**
  * Página para módulos ainda não implementados: mostra o que está previsto.
@@ -16,7 +17,7 @@ export default function PlannedModule({ module }: { module: Module }) {
   // Nome do destino inicial vem da fonte única de módulos (era "Dashboard").
   const inicio = moduleOfPath('/')?.label ?? 'Início';
   return (
-    <div className="p-4 sm:p-6">
+    <PageShell>
       <PageHeader
         title={
           <span className="flex items-center gap-2.5">
@@ -72,6 +73,6 @@ export default function PlannedModule({ module }: { module: Module }) {
           </div>
         </div>
       </div>
-    </div>
+    </PageShell>
   );
 }
