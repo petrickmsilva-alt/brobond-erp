@@ -5,8 +5,8 @@ import { api } from '../lib/api';
 import { useMeta, type PublicFile } from '../lib/meta';
 import { useAuth } from '../auth/AuthContext';
 import { formatDate, formatDateTime, formatMoney, formatNumber } from '../lib/format';
-import { Alert, Badge, PageHeader, Spinner } from '../components/ui';
-import { PageShell } from '../components/ui-kit-negocios';
+import { Alert, Badge, PageHeader } from '../components/ui';
+import { PageLoading, PageShell } from '../components/ui-kit-negocios';
 import { ColorDot, ImageField, Lightbox } from '../components/ImageField';
 import { LabelSheet } from '../components/LabelSheet';
 
@@ -77,7 +77,7 @@ export default function ProductDetail() {
         </Link>
       </PageShell>
     );
-  if (!data) return <Spinner />;
+  if (!data) return <PageLoading  />;
 
   const p = data.produto;
   const fotos = p.fotos || [];

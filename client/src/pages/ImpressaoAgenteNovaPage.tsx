@@ -55,13 +55,13 @@ export default function ImpressaoAgenteNovaPage() {
 
   if (!isGestor) {
     return (
-      <div className="space-y-4 p-4 sm:p-6">
+      <PageShell>
         <PageHeader title="Parear novo agente local" description="Pareamento de máquinas de impressão." />
         <Alert tone="amber">Somente gerentes e administradores pareiam agentes de impressão.</Alert>
         <button className="btn-secondary" onClick={() => navigate('/config/impressao')}>
           Voltar
         </button>
-      </div>
+      </PageShell>
     );
   }
 

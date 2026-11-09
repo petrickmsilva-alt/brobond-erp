@@ -4,8 +4,8 @@ import { ArrowLeft, ClipboardList, Loader2, Pencil, Plus, Scissors, Tag, Trash2 
 import { api, ApiError } from '../lib/api';
 import { useMeta, type Option } from '../lib/meta';
 import { useAuth } from '../auth/AuthContext';
-import { Alert, Badge, ConfirmacaoInline, PainelInline, PageHeader, Spinner, useToast } from '../components/ui';
-import { PageShell } from '../components/ui-kit-negocios';
+import { Alert, Badge, ConfirmacaoInline, PainelInline, PageHeader, useToast } from '../components/ui';
+import { PageLoading, PageShell } from '../components/ui-kit-negocios';
 import { formatMoney, formatNumber } from '../lib/format';
 
 type InsumoLinha = Record<string, any> & { id: number };
@@ -176,7 +176,7 @@ export default function FichaDetail() {
     }
   }
 
-  if (loading) return <Spinner />;
+  if (loading) return <PageLoading  />;
   if (error || !ficha)
     return (
       <PageShell>

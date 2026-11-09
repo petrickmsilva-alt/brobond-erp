@@ -46,24 +46,49 @@ type NovaNotificacao = {
 };
 
 /**
+ * O destinatário pertence ao tenant informado?
+ *
+ * A FK simples garante que o usuário EXISTE, não que ele é do MESMO tenant do
+ * aviso. A empresa padrão (`usuarios.empresa_id`) OU qualquer concessão em
+ * `usuario_empresas` cobrem o caso — um usuário com acesso a mais de uma
+ * empresa continua podendo receber a caixa da empresa ativa. O recorte por
+ * empresa é aplicado NO SQL, como manda a regra multiempresa.
+ */
+async function destinatarioDoTenant(usuarioId: number, empresaId: number, tx?: Tx): Promise<boolean> {
+  const s = getStore();
+  const usuario = await s.findOneWhere(getResource('usuarios')!, { id: usuarioId }, tx);
+  if (!usuario) return false;
+  if (Number(usuario.empresa_id) === empresaId) return true;
+  const vinculo = getResource('usuario_empresas');
+  if (!vinculo) return false;
+  const concessao = await s.findOneWhere(vinculo, { usuario_id: usuarioId, empresa_id: empresaId }, tx);
+  return concessao !== null;
+}
+
+/**
  * Cria a notificação interna de forma IDEMPOTENTE.
  *
  * O `chave_idempotencia` é `crm:<tipo>:<atividade>:<discriminador>`. O Store não
  * expõe upsert genérico, então checamos o existente por `findOneWhere` e, se já
  * houver, não duplicamos. O UNIQUE do banco é a rede de segurança para corrida.
  *
- * Retorna `true` quando criou uma notificação nova; `false` quando já existia ou
- * quando não há destinatário (não se cria aviso para ninguém).
+ * Retorna `true` quando criou uma notificação nova; `false` quando já existia,
+ * quando não há destinatário (não se cria aviso para ninguém) ou quando o
+ * destinatário NÃO pertence ao tenant informado (recusa em vez de gravar um
+ * aviso que a FK simples aceitaria).
  */
 export async function criarNotificacaoCrm(n: NovaNotificacao, tx?: Tx): Promise<boolean> {
   const usuarioId = n.usuarioId === null || n.usuarioId === undefined ? null : Number(n.usuarioId);
-  if (!usuarioId || !(Number(n.empresaId) > 0)) return false;
+  const empresaId = Number(n.empresaId);
+  if (!usuarioId || !(empresaId > 0)) return false;
   const s = getStore();
+  // Integridade multiempresa: o destinatário precisa ser do tenant do aviso.
+  if (!(await destinatarioDoTenant(usuarioId, empresaId, tx))) return false;
   const chave = `crm:${n.tipo}:${n.atividadeId ?? 'x'}:${n.discriminador}`;
-  const existente = await s.findOneWhere(R(), { empresa_id: Number(n.empresaId), chave_idempotencia: chave }, tx);
+  const existente = await s.findOneWhere(R(), { empresa_id: empresaId, chave_idempotencia: chave }, tx);
   if (existente) return false;
   await s.insert(R(), {
-    empresa_id: Number(n.empresaId),
+    empresa_id: empresaId,
     atividade_id: n.atividadeId ?? null,
     tipo: n.tipo,
     severidade: n.severidade ?? 'media',
@@ -105,7 +130,9 @@ export async function listarNotificacoesCrm(req: Request, res: Response): Promis
   if (req.query.tipo) filtro.tipo = String(req.query.tipo);
 
   const out = await s.list(R(), { page: pagina, pageSize, filter: filtro, sort: 'criado_em', dir: 'desc' });
-  const naoLidas = (await s.list(R(), { page: 1, pageSize: 500, filter: base })).rows.filter((r) => !r.lida_em).length;
+  // Contagem REAL de não lidas — não a de uma página. O `countWhere` conta no
+  // banco (IS NULL) e não tem teto silencioso de 500 como a listagem antiga.
+  const naoLidas = await s.countWhere(R(), { empresa_id: escopo.empresaId, usuario_id: destino, lida_em: null });
 
   res.json({
     itens: out.rows,
@@ -121,8 +148,11 @@ export async function listarNotificacoesCrm(req: Request, res: Response): Promis
 // ----------------------------------------------------------------------------
 /**
  * POST /api/crm/notificacoes/:id/lida — marca UMA notificação como lida.
- * Só o próprio destinatário (ou admin/gerente da empresa) pode marcar; a
- * operação é idempotente (marcar de novo não altera `lida_em`).
+ *
+ * A CAIXA É PESSOAL: só o PRÓPRIO destinatário marca. Gerente/admin NÃO marcam
+ * a caixa de outro usuário — não há política administrativa de terceiro nesta
+ * fase, e o endpoint não inventa uma. A operação é idempotente (marcar de novo
+ * não altera `lida_em`).
  */
 export async function marcarNotificacaoLida(req: Request, res: Response): Promise<void> {
   const actor = currentUser(req);
@@ -134,7 +164,9 @@ export async function marcarNotificacaoLida(req: Request, res: Response): Promis
   const atual = await s.findOneWhere(R(), { id, empresa_id: escopo.empresaId });
   if (!atual) throw new HttpError(404, 'Notificação não encontrada.');
   const destino = caixaDoAtor(Number(actor.id) || null);
-  if (destino !== null && Number(atual.usuario_id) !== destino) {
+  // Sem caixa própria (ator sem id) → não há o que autorizar: 403, nunca
+  // "sem checagem". Com caixa, o alvo precisa ser o PRÓPRIO destinatário.
+  if (destino === null || Number(atual.usuario_id) !== destino) {
     throw new HttpError(403, 'Você só pode marcar as notificações da sua caixa.');
   }
   if (!atual.lida_em) {
@@ -145,8 +177,13 @@ export async function marcarNotificacaoLida(req: Request, res: Response): Promis
 }
 
 /**
- * POST /api/crm/notificacoes/lidas — marca TODAS as notificações do usuário
- * como lidas. Idempotente. Nunca toca a caixa de outro tenant/usuário.
+ * POST /api/crm/notificacoes/lidas — marca TODAS as notificações do próprio
+ * usuário como lidas. Idempotente. Nunca toca a caixa de outro tenant/usuário.
+ *
+ * SEM teto silencioso: pagina por TODA a caixa do usuário (a listagem antiga
+ * parava em 500 e deixava o resto sem marcar). A ordenação é `id` (estável, e
+ * marcar como lida não muda `id` nem o conjunto do filtro), então a paginação
+ * por página não pula nem repete linha. Roda numa transação: o lote é atômico.
  */
 export async function marcarTodasLidas(req: Request, res: Response): Promise<void> {
   const actor = currentUser(req);
@@ -155,18 +192,22 @@ export async function marcarTodasLidas(req: Request, res: Response): Promise<voi
   const s = getStore();
   const destino = caixaDoAtor(Number(actor.id) || null);
   if (destino === null) throw new HttpError(403, 'Sua conta não tem caixa de entrada própria.');
-  const pendentes = await s.list(R(), {
-    page: 1,
-    pageSize: 500,
-    filter: { empresa_id: escopo.empresaId, usuario_id: destino },
-  });
+  const filtro = { empresa_id: escopo.empresaId, usuario_id: destino };
   const agora = new Date().toISOString();
-  let marcadas = 0;
-  for (const n of pendentes.rows) {
-    if (n.lida_em) continue;
-    await s.update(R(), Number(n.id), { lida_em: agora } as any);
-    marcadas += 1;
-  }
+  const TAMANHO_PAGINA = 500;
+  const marcadas = await s.transaction(async (tx) => {
+    let total = 0;
+    for (let page = 1; ; page += 1) {
+      const lote = await s.list(R(), { page, pageSize: TAMANHO_PAGINA, filter: filtro, sort: 'id', dir: 'asc' }, tx);
+      for (const n of lote.rows) {
+        if (n.lida_em) continue;
+        await s.update(R(), Number(n.id), { lida_em: agora } as any, tx);
+        total += 1;
+      }
+      if (lote.rows.length < TAMANHO_PAGINA) break;
+    }
+    return total;
+  });
   res.json({ ok: true, marcadas });
 }
 

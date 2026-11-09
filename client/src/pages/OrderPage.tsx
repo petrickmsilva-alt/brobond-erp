@@ -20,7 +20,7 @@ import { api } from '../lib/api';
 import { useMeta, type Option, type ResourceMeta } from '../lib/meta';
 import { useAuth } from '../auth/AuthContext';
 import { Alert, Badge, ConfirmacaoInline, PageHeader, Spinner, useToast } from '../components/ui';
-import { PageShell } from '../components/ui-kit-negocios';
+import { PageLoading, PageShell } from '../components/ui-kit-negocios';
 import { DocumentPrintButton } from '../components/DocumentPrintButton';
 import { Thumb } from '../components/ImageField';
 import { ProductSelector } from '../components/ProductSelector';
@@ -978,7 +978,7 @@ function VendaOrderEngine({ modo }: { modo?: ModoPaginaVenda }) {
     }
   }
 
-  if (loading) return <Spinner label="Carregando venda..." />;
+  if (loading) return <PageLoading label="Carregando venda..." />;
 
   if (loadError) {
     return (
@@ -2462,7 +2462,7 @@ function CompraOrderEngine() {
 
   const statusOptions = resource?.fields.find((f) => f.name === 'status')?.options || [];
 
-  if (loading) return <Spinner />;
+  if (loading) return <PageLoading  />;
   if (error) {
     return (
       <PageShell>

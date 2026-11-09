@@ -9,7 +9,8 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, Pencil, Store } from 'lucide-react';
 import { apiFetch, ApiError } from '../../lib/api';
-import { Alert, Badge, PageHeader, Spinner } from '../../components/ui';
+import { Alert, Badge, PageHeader } from '../../components/ui';
+import { PageLoading } from '../../components/ui-kit-negocios';
 import { EstadoBadge, ROTULO_PUBLICACAO, TONE_PUBLICACAO, dataHora, grana, rotuloCanal } from './shared';
 import type { Oferta } from './OfertasPage';
 
@@ -44,7 +45,7 @@ export default function CommerceOfertaDetalhePage() {
     void carregar();
   }, [carregar]);
 
-  if (carregando) return <Spinner label="Carregando oferta…" />;
+  if (carregando) return <PageLoading label="Carregando oferta…" />;
 
   if (!oferta) {
     return (

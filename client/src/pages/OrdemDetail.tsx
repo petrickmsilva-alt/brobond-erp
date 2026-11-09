@@ -5,8 +5,8 @@ import { api, ApiError } from '../lib/api';
 import { useMeta, type Option } from '../lib/meta';
 import { ProductSelector } from '../components/ProductSelector';
 import { useAuth } from '../auth/AuthContext';
-import { Alert, Badge, ConfirmacaoInline, PainelInline, PageHeader, Spinner, useToast } from '../components/ui';
-import { PageShell } from '../components/ui-kit-negocios';
+import { Alert, Badge, ConfirmacaoInline, PainelInline, PageHeader, useToast } from '../components/ui';
+import { PageLoading, PageShell } from '../components/ui-kit-negocios';
 import { DocumentPrintButton } from '../components/DocumentPrintButton';
 import { formatDate, formatMoney, formatNumber } from '../lib/format';
 
@@ -409,7 +409,7 @@ export default function OrdemDetail() {
     }
   }
 
-  if (loading) return <Spinner />;
+  if (loading) return <PageLoading  />;
   if (error || !ordem)
     return (
       <PageShell>

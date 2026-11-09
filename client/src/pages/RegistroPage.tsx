@@ -25,7 +25,7 @@ import { AlertTriangle, ArrowLeft, Loader2, Plus, Save, X } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
 import { useMeta, type Option, type ResourceMeta } from '../lib/meta';
 import { Alert, PageHeader, Spinner, useToast } from '../components/ui';
-import { PageShell } from '../components/ui-kit-negocios';
+import { PageLoading, PageShell } from '../components/ui-kit-negocios';
 import { ImageField } from '../components/ImageField';
 import {
   fieldErrors,
@@ -232,7 +232,7 @@ export default function RegistroPage({ module, modo }: { module: Module; modo: M
     }
   }
 
-  if (!resource) return <Spinner label="Carregando recurso..." />;
+  if (!resource) return <PageLoading label="Carregando recurso..." />;
 
   // Título no vocabulário do cadastro (sem inventar gênero gramatical a partir
   // do singular): "Novo cadastro: Origem" / "Editar Origem".

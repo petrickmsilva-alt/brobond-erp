@@ -33,7 +33,7 @@ import { BarrasVerticais } from '../components/Charts';
 import { DETALHE_DIRETO, FORM_DIRETO, findModuleByResource, type Module } from '../modules';
 import { useAuth } from '../auth/AuthContext';
 import { Alert, ConfirmacaoInline, EmptyState, PainelInline, PageHeader, Spinner, useToast } from '../components/ui';
-import { PageShell } from '../components/ui-kit-negocios';
+import { PageLoading, PageShell } from '../components/ui-kit-negocios';
 import { DocumentPrintButton } from '../components/DocumentPrintButton';
 import { Pagination } from '../components/ui-kit';
 // Opções de referência usadas pelos FILTROS da listagem (não por formulário:
@@ -150,7 +150,7 @@ const PAGE_SIZE = 25;
 const TAMANHOS_PAGINA = [25, 50, 100];
 
 function SubPageLoading() {
-  return <Spinner label="Carregando módulo..." />;
+  return <PageLoading label="Carregando módulo..." />;
 }
 
 export default function ModulePage({ module }: { module: Module }) {

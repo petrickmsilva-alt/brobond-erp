@@ -35,6 +35,13 @@ async function cenario() {
   const uA = Number((await s.insert(getResource('usuarios')!, { nome: `RespA ${sfx}`, email: `a.${sfx}@t.local`, perfil: 'gerente' } as any)).id);
   const uA2 = Number((await s.insert(getResource('usuarios')!, { nome: `RespA2 ${sfx}`, email: `a2.${sfx}@t.local`, perfil: 'gerente' } as any)).id);
   const uB = Number((await s.insert(getResource('usuarios')!, { nome: `RespB ${sfx}`, email: `b.${sfx}@t.local`, perfil: 'gerente' } as any)).id);
+  // Vínculo de tenant explícito: o aviso só é entregue a destinatário do MESMO
+  // tenant (integridade multiempresa — hardening 0114). Sem o vínculo, o
+  // destinatário não pertence à empresa e a entrega é recusada.
+  const R_UE = getResource('usuario_empresas')!;
+  await s.insert(R_UE, { usuario_id: uA, empresa_id: empA } as any);
+  await s.insert(R_UE, { usuario_id: uA2, empresa_id: empA } as any);
+  await s.insert(R_UE, { usuario_id: uB, empresa_id: empB } as any);
   return { sfx, empA, empB, uA, uA2, uB };
 }
 
@@ -322,4 +329,101 @@ test('falha de processamento gera aviso crítico idempotente por dia', async () 
   const ns = (await notificacoes(c.empA, c.uA)).filter((n) => n.tipo === 'falha');
   assert.equal(ns.length, 1);
   assert.equal(ns[0].severidade, 'critica');
+});
+
+// ---------------------------------------------------------------------------
+// 11. INTEGRIDADE MULTIEMPRESA DO DESTINATÁRIO (hardening 0114)
+// ---------------------------------------------------------------------------
+test('destinatário de OUTRA empresa é recusado (não se grava aviso cross-tenant)', async () => {
+  const c = await cenario();
+  // Atividade da empresa A, mas destinatário é o usuário da empresa B.
+  const at = await s.insert(R_ATIV(), atividade(c.empA, { responsavel_id: c.uB }) as any);
+  const criou = await crmN.notificarAtividadeCriada(at);
+  assert.equal(criou, false, 'entrega recusada: usuário não pertence ao tenant do aviso');
+  assert.equal((await notificacoes(c.empA, c.uB)).length, 0, 'nenhum aviso gravado');
+  assert.equal((await s.list(R_NOTIF(), { page: 1, pageSize: 100, filter: { empresa_id: c.empA } })).rows.length, 0);
+});
+
+test('destinatário SEM vínculo com o tenant também é recusado', async () => {
+  const c = await cenario();
+  // Usuário avulso (sem vínculo em usuario_empresas): não pertence a empresa alguma.
+  const orfao = Number((await s.insert(getResource('usuarios')!, { nome: `Orfao ${c.sfx}`, email: `o.${c.sfx}@t.local`, perfil: 'gerente' } as any)).id);
+  const at = await s.insert(R_ATIV(), atividade(c.empA, { responsavel_id: orfao }) as any);
+  assert.equal(await crmN.notificarAtividadeCriada(at), false);
+  assert.equal((await s.list(R_NOTIF(), { page: 1, pageSize: 100, filter: { empresa_id: c.empA } })).rows.length, 0);
+});
+
+test('destinatário com acesso a MAIS de uma empresa recebe na empresa ativa', async () => {
+  const c = await cenario();
+  // Usuário A ganha acesso à empresa B; a empresa padrão dele continua A.
+  await s.insert(getResource('usuario_empresas')!, { usuario_id: c.uA, empresa_id: c.empB } as any);
+  const at = await s.insert(R_ATIV(), atividade(c.empA, { responsavel_id: c.uA }) as any);
+  assert.equal(await crmN.notificarAtividadeCriada(at), true, 'destinatário multiempresa é aceito');
+  assert.equal((await notificacoes(c.empA, c.uA)).length, 1);
+});
+
+// ---------------------------------------------------------------------------
+// 12. RETENÇÃO — a trilha sobrevive à remoção do destinatário (SET NULL).
+// A semântica é do BANCO (FK ON DELETE SET NULL); o guard de dependências da
+// aplicação impede excluir usuário com vínculos. Por isso a prova é no PG real
+// (ver server/test/pg/fase9-2-crm-lifecycle.test.ts). Aqui garantimos apenas
+// que o recurso aceita `usuario_id` nulo (coluna nullable) — pré-requisito do
+// SET NULL.
+// ---------------------------------------------------------------------------
+test('a caixa aceita aviso sem destinatário (usuario_id nullable)', async () => {
+  const c = await cenario();
+  const at = await s.insert(R_ATIV(), atividade(c.empA, { responsavel_id: c.uA }) as any);
+  await crmN.notificarAtividadeCriada(at);
+  const n = (await notificacoes(c.empA, c.uA))[0];
+  // Simula o efeito do SET NULL: zerar o destinatário preserva a linha.
+  await s.update(R_NOTIF(), Number(n.id), { usuario_id: null } as any);
+  const depois = await s.findOneWhere(R_NOTIF(), { id: Number(n.id) });
+  assert.ok(depois, 'o aviso continua existindo');
+  assert.equal(depois!.usuario_id ?? null, null, 'usuario_id zerado, linha preservada');
+});
+
+// ---------------------------------------------------------------------------
+// 13. MARCAÇÃO EM LOTE SEM TETO SILENCIOSO (hardening 0114)
+// ---------------------------------------------------------------------------
+test('marcar todas cobre MAIS de uma página de não lidas (sem parar em 500)', async () => {
+  const c = await cenario();
+  const total = 512; // > página de 500 do lote
+  for (let i = 0; i < total; i += 1) {
+    const at = await s.insert(R_ATIV(), atividade(c.empA, { responsavel_id: c.uA }) as any);
+    await crmN.notificarAtividadeCriada(at);
+  }
+  const pendentes = () => s.countWhere(R_NOTIF(), { empresa_id: c.empA, usuario_id: c.uA, lida_em: null });
+  assert.equal(await pendentes(), total);
+  const res = resDe();
+  await crmN.marcarTodasLidas(reqDe({ id: c.uA, perfil: 'gerente', empresa_id: c.empA }), res);
+  assert.equal(res.body.marcadas, total, 'todas as 512 foram marcadas, não só as primeiras 500');
+  assert.equal(await pendentes(), 0);
+  // Idempotente: reexecutar não encontra nada pendente.
+  const res2 = resDe();
+  await crmN.marcarTodasLidas(reqDe({ id: c.uA, perfil: 'gerente', empresa_id: c.empA }), res2);
+  assert.equal(res2.body.marcadas, 0);
+});
+
+test('contagem de não lidas (nao_lidas) não é truncada pela página', async () => {
+  const c = await cenario();
+  const total = 60; // > pageSize 30 da listagem
+  for (let i = 0; i < total; i += 1) {
+    const at = await s.insert(R_ATIV(), atividade(c.empA, { responsavel_id: c.uA }) as any);
+    await crmN.notificarAtividadeCriada(at);
+  }
+  const res = resDe();
+  await crmN.listarNotificacoesCrm(reqDe({ id: c.uA, perfil: 'gerente', empresa_id: c.empA }, {}, { pageSize: '30' }), res);
+  assert.equal(res.body.itens.length, 30, 'página devolve 30 itens');
+  assert.equal(res.body.nao_lidas, total, 'nao_lidas conta a caixa inteira, não a página');
+});
+
+test('ator sem id não marca a caixa de ninguém (403, nunca "sem checagem")', async () => {
+  const c = await cenario();
+  const at = await s.insert(R_ATIV(), atividade(c.empA, { responsavel_id: c.uA }) as any);
+  await crmN.notificarAtividadeCriada(at);
+  const n = (await notificacoes(c.empA, c.uA))[0];
+  await assert.rejects(
+    () => crmN.marcarNotificacaoLida(reqDe({ perfil: 'gerente', empresa_id: c.empA }, { id: String(n.id) }), resDe()),
+    (e: any) => e.status === 403,
+  );
 });

@@ -14,7 +14,8 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { ChevronDown, ChevronRight, GitBranch, RefreshCw } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
-import { Alert, Badge, PageHeader, Spinner } from '../components/ui';
+import { Alert, Badge, PageHeader } from '../components/ui';
+import { PageLoading } from '../components/ui-kit-negocios';
 import CadastroComercialPage from './CadastroComercialPage';
 
 type No = {
@@ -114,7 +115,7 @@ function ArvoreTerritorios() {
     setAberto((atual) => ({ ...atual, [id]: !(atual[id] ?? false) }));
   }, []);
 
-  if (carregando) return <Spinner label="Carregando hierarquia..." />;
+  if (carregando) return <PageLoading label="Carregando hierarquia..." />;
   if (erro) return <Alert tone="amber">{erro}</Alert>;
   if (!arvore.length) {
     return (

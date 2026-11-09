@@ -124,13 +124,13 @@ export default function ImpressaoTerminalFormPage({ modo = 'novo' }: { modo?: 'n
 
   if (!isGestor) {
     return (
-      <div className="space-y-4 p-4 sm:p-6">
+      <PageShell>
         <PageHeader title="Terminal de impressão" description="Configuração de impressoras por terminal." />
         <Alert tone="amber">Somente gerentes e administradores configuram terminais de impressão.</Alert>
         <button className="btn-secondary" onClick={() => navigate('/config/impressao')}>
           Voltar
         </button>
-      </div>
+      </PageShell>
     );
   }
 

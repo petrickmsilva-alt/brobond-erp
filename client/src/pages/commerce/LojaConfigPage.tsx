@@ -10,7 +10,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ExternalLink, RefreshCw, Save, Store, Truck } from 'lucide-react';
 import { apiFetch, ApiError } from '../../lib/api';
-import { Alert, Badge, PageHeader, Spinner, useToast } from '../../components/ui';
+import { Alert, Badge, PageHeader, useToast } from '../../components/ui';
+import { PageLoading } from '../../components/ui-kit-negocios';
 import { useAuth } from '../../auth/AuthContext';
 
 type Config = {
@@ -130,7 +131,7 @@ export default function CommerceLojaConfigPage() {
     }
   };
 
-  if (carregando) return <Spinner label="Carregando configuração da loja…" />;
+  if (carregando) return <PageLoading label="Carregando configuração da loja…" />;
 
   const freteOk = estado?.frete_configurado === true;
 

@@ -12,7 +12,8 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, Copy, RefreshCw, Truck } from 'lucide-react';
 import { apiFetch, ApiError } from '../../lib/api';
-import { Alert, Badge, ConfirmacaoInline, PageHeader, Spinner, useToast } from '../../components/ui';
+import { Alert, Badge, ConfirmacaoInline, PageHeader, useToast } from '../../components/ui';
+import { PageLoading } from '../../components/ui-kit-negocios';
 import {
   EstadoBadge,
   ROTULO_PAGAMENTO,
@@ -251,7 +252,7 @@ export default function CommercePedidoDetalhePage() {
     }
   };
 
-  if (carregando) return <Spinner label="Carregando pedido…" />;
+  if (carregando) return <PageLoading label="Carregando pedido…" />;
   if (!visao) {
     return (
       <div className="space-y-4">

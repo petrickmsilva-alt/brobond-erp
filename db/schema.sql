@@ -9275,7 +9275,9 @@ CREATE TABLE IF NOT EXISTS crm_notificacoes (
   )),
   severidade TEXT NOT NULL DEFAULT 'media',
   CONSTRAINT crm_notificacoes_severidade_ck CHECK (severidade IN ('baixa', 'media', 'alta', 'critica')),
-  usuario_id INTEGER REFERENCES usuarios(id) ON DELETE CASCADE,
+  -- RETENÇÃO (hardening 0114): SET NULL, não CASCADE — apagar o destinatário
+  -- preserva a trilha do aviso (nunca se apaga histórico).
+  usuario_id INTEGER REFERENCES usuarios(id) ON DELETE SET NULL,
   ator_id INTEGER REFERENCES usuarios(id) ON DELETE SET NULL,
   titulo TEXT NOT NULL,
   detalhe TEXT NOT NULL DEFAULT '',
@@ -9293,3 +9295,27 @@ CREATE INDEX IF NOT EXISTS crm_notificacoes_empresa_criado_idx
   ON crm_notificacoes (empresa_id, criado_em DESC);
 CREATE INDEX IF NOT EXISTS crm_notificacoes_atividade_idx
   ON crm_notificacoes (atividade_id);
+-- HARDENING 0114 — integridade multiempresa: a atividade de origem é do MESMO
+-- tenant do aviso (FK composta, padrão E4.2 da 0104). O destinatário
+-- (`usuario_id`) não usa FK composta porque pode ter acesso a várias empresas;
+-- a checagem é da aplicação (`destinatarioDoTenant`).
+CREATE UNIQUE INDEX IF NOT EXISTS uq_e42_crm_atividades_empresa_id
+  ON crm_atividades (empresa_id, id);
+CREATE INDEX IF NOT EXISTS e42_crm_notificacoes_empresa_atividade_idx
+  ON crm_notificacoes (empresa_id, atividade_id);
+DO $e42_crm_notificacoes$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conrelid = to_regclass('public.crm_notificacoes')
+       AND conname = 'fk_e42_crm_notificacoes_empresa_atividade'
+  ) THEN
+    ALTER TABLE crm_notificacoes
+      ADD CONSTRAINT fk_e42_crm_notificacoes_empresa_atividade
+      FOREIGN KEY (empresa_id, atividade_id) REFERENCES crm_atividades (empresa_id, id)
+      NOT VALID;
+  END IF;
+  ALTER TABLE crm_notificacoes
+    VALIDATE CONSTRAINT fk_e42_crm_notificacoes_empresa_atividade;
+END
+$e42_crm_notificacoes$;

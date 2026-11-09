@@ -14,7 +14,8 @@ import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, ExternalLink, Globe, RefreshCw, Rocket, Save, Store } from 'lucide-react';
 import { apiFetch, ApiError } from '../../lib/api';
-import { Alert, Badge, PageHeader, Spinner, useToast } from '../../components/ui';
+import { Alert, Badge, PageHeader, useToast } from '../../components/ui';
+import { PageLoading } from '../../components/ui-kit-negocios';
 import { EstadoBadge, TONE_PUBLICACAO, ROTULO_PUBLICACAO, CANAIS_PUBLICACAO, grana, rotuloCanal } from './shared';
 import { useAuth } from '../../auth/AuthContext';
 import GaleriaAdminProduto from './GaleriaAdminProduto';
@@ -206,7 +207,7 @@ export default function CommerceProdutoDetalhePage() {
     }
   };
 
-  if (carregando) return <Spinner label="Carregando produto…" />;
+  if (carregando) return <PageLoading label="Carregando produto…" />;
   if (!detalhe) {
     return (
       <div className="space-y-4">

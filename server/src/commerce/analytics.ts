@@ -14,7 +14,7 @@ import { escopoDoAtor } from '../empresa';
 import { getResource } from '../resources';
 import type { Row } from '../store';
 import { mediaOuZero, razao, round2, tendenciaLinear, type CanalPedido } from './regras';
-import { itensDaEmpresa, itensDeVendas } from './projecao';
+import { itensDeVendas } from './projecao';
 
 const R_SALES = () => getResource('sales')!;
 const R_VENDAS = () => getResource('vendas')!;
@@ -52,14 +52,10 @@ export async function analyticsCommerce(req: Request, res: Response) {
   const inicioMs = diasAtras(dias, agora);
   const s = getStore();
 
-  const [periodo, periodoAnterior, pedidosPeriodo, itensRecentes] = await Promise.all([
+  const [periodo, periodoAnterior, pedidosPeriodo] = await Promise.all([
     vendasDoPeriodo(escopo.empresaId, inicioMs, fimMs),
     vendasDoPeriodo(escopo.empresaId, diasAtras(dias * 2, agora), diasAtras(dias, agora)),
     s.list(R_PEDIDOS(), { page: 1, pageSize: 2000, filter: { empresa_id: escopo.empresaId } }),
-    // BL-016: `sale_items` não tem `empresa_id` — o recorte por tenant é feito
-    // NO SQL pelo conjunto de vendas da empresa (antes: itens de TODAS as
-    // empresas eram lidos e descartados em memória).
-    itensDaEmpresa(escopo.empresaId),
   ]);
 
   const pagas = periodo.filter((v) => String(v.status) === 'PAID');
@@ -92,10 +88,12 @@ export async function analyticsCommerce(req: Request, res: Response) {
   }
 
   // Top produtos: itens de vendas pagas no período (GMV atribuído ao item).
+  // BL-016: `sale_items` não tem `empresa_id` — o recorte por tenant vai NO SQL
+  // pelo conjunto de vendas PAGAS do período (que já é da empresa do ator). Ler
+  // só os itens dessas vendas evita varrer a projeção inteira do tenant.
   const idsVendasPagas = new Set(periodo.filter((v) => String(v.status) === 'PAID').map((v) => String(v.id)));
   const topPorProduto = new Map<number, { quantidade: number; receita: number }>();
-  for (const item of itensRecentes) {
-    if (!idsVendasPagas.has(String(item.sale_id))) continue;
+  for (const item of idsVendasPagas.size ? await itensDeVendas([...idsVendasPagas]) : []) {
     const pid = Number(item.product_id || 0);
     if (!pid) continue;
     const atual = topPorProduto.get(pid) ?? { quantidade: 0, receita: 0 };

@@ -211,6 +211,7 @@ consomem `PageHeader` e ficam fora do gate. O dispatcher
 | Migration | Fase | Tipo | Conteúdo |
 |---|---|---|---|
 | `0113_fase9_crm_notificacoes.sql` | 9.2 | aditiva/idempotente | `crm_notificacoes` (canal interno) |
+| `0114_fase9_crm_notificacoes_hardening.sql` | 9.2 (revisão) | aditiva/idempotente | FK composta do tenant + retenção `SET NULL` |
 
 - Aplicada e validada no **gate PostgreSQL real** (`npm run test:pg`), em banco
   criado do zero: `🗄️ Migração aplicada: 0113_fase9_crm_notificacoes.sql`.
@@ -229,11 +230,11 @@ consomem `PageHeader` e ficam fora do gate. O dispatcher
 | Verificação | Comando | Resultado |
 |---|---|---|
 | Typecheck | `npm run typecheck` | ✅ OK (domain + server + client) |
-| Testes server | `npm --workspace server test` | ✅ **2373 pass · 0 fail · 93 skip** |
-| Testes client | `npm --workspace client test` | ✅ **1193 pass · 0 fail** (140 arquivos) |
+| Testes server | `npm --workspace server test` | ✅ **2382 pass · 0 fail · 93 skip** |
+| Testes client | `npm --workspace client test` | ✅ **1195 pass · 0 fail** (140 arquivos) |
 | Lint | `npm run lint` | ✅ **0 errors** (627 warnings — baseline) |
 | Build | `npm run build` | ✅ OK (PWA gerada) |
-| PostgreSQL real | `npm run test:pg` | ✅ **ERP-03 GATE PASS: 477 testes · 0 fail/skip/todo** |
+| PostgreSQL real | `npm run test:pg` | ✅ **ERP-03 GATE PASS: 478 testes · 0 fail/skip/todo** |
 | Fase 9.1 (PG) | dentro do `test:pg` | ✅ Index Scan `sale_items_sale_id_idx`; isolamento A/B |
 | Fase 9.2 (PG) | dentro do `test:pg` | ✅ `crm_notificacoes` idempotente e isolada |
 | Inventário | `npm run architecture:audit` | ✅ OK |
@@ -274,6 +275,82 @@ consomem `PageHeader` e ficam fora do gate. O dispatcher
 - RBAC preservado (`crm_notificacoes` `minPerfil: gerente`); nenhuma permissão
   genérica habilitada para destravar fluxo.
 - "Notificar não é agir": a notificação interna não altera estado de negócio.
+
+---
+
+## 8. Revisão corretiva — 3 pontos de auditoria
+
+A revisão endureceu três pontos sobre o PR original, sem reimplementar as fases
+nem alterar a autoridade dos dados. Cada item tem teste que falharia antes.
+
+### 8.1 Paginação determinística da projeção analítica (Fase 9.1)
+
+`server/src/commerce/projecao.ts` lia `sales`/`sale_items` com um `pageSize`
+fixo de **200.000** — um teto silencioso: uma empresa com mais linhas que o teto
+perdia registros sem erro. A correção **pagina de verdade** (`paginarTudo`),
+avançando página a página com ordenação estável por `id` até a última página
+incompleta; `itensDeVendas` deduplica e ordena os ids e os divide em lotes
+(`LOTE_IDS = 500`) para não estourar parâmetros de uma só instrução.
+`analytics.ts` passou a consumir `itensDeVendas([...idsVendasPagas])` (só os
+itens das vendas **pagas** do período), eliminando a varredura da projeção
+inteira. Cobertura: `server/test/fase9-1-data-integrity.test.ts` (memória) e
+`server/test/pg/fase9-1-data-integrity.test.ts` (PostgreSQL real — prova que a
+leitura não trunca acima de uma página).
+
+### 8.2 Integridade e retenção da caixa interna do CRM (Fase 9.2)
+
+Migration **`0114_fase9_crm_notificacoes_hardening.sql`** (aditiva/idempotente):
+
+| Endurecimento | Antes (0113) | Depois (0114) |
+|---|---|---|
+| Destinatário removido | `usuario_id` `ON DELETE CASCADE` **apagava** a trilha | `ON DELETE SET NULL` — o aviso sobrevive |
+| Atividade de origem | FK **simples** aceitava atividade de outra empresa | FK **composta** `(empresa_id, atividade_id)` — mesmo tenant |
+| Destinatário do tenant | sem checagem no app | `destinatarioDoTenant` (empresa padrão **ou** `usuario_empresas`) |
+
+Na aplicação (`server/src/crmNotificacoes.ts`): a contagem de não lidas passou a
+usar `countWhere` (sem teto de 500) e `marcarTodasLidas` pagina por **toda** a
+caixa do usuário numa transação (o teto de 500 deixava o resto sem marcar);
+marcar aviso exige caixa própria (ator sem id → 403, nunca "sem checagem").
+A FK composta usa `NOT VALID` + `VALIDATE` (protege escrita nova e confere o
+legado — linha cross-tenant faz a migração **falhar em voz alta**). Cobertura:
+`server/test/fase9-2-crm-lifecycle.test.ts` (memória, 26 casos) e
+`server/test/pg/fase9-2-crm-lifecycle.test.ts` (PG real: FK composta recusa
+aviso cross-tenant; `SET NULL` preserva a trilha).
+
+> `usuario_id` **não** recebe FK composta a `usuarios`: `usuarios` não tem
+> `(empresa_id, id)` único e um usuário pode ter acesso a várias empresas
+> (`usuario_empresas`) — a FK composta proibiria destinatário multiempresa
+> legítimo. A garantia "destinatário pertence ao tenant" é da aplicação,
+> coberta por teste.
+
+### 8.3 Gate de moldura de página ampliado (Fase 9.3)
+
+`client/src/test/page-shell.test.ts` ganhou duas provas estruturais novas (além
+de "`PageHeader` exige `PageShell`"): (B) nenhuma página reimplementa a moldura
+à mão (`<div className="… p-4 … sm:p-6 …">` como raiz de um `return`); (C)
+nenhuma página entrega `<Spinner>` cru como estado de página inteira (o estado
+canônico é `PageLoading`). Páginas fora do padrão foram convertidas para
+`PageShell`/`PageLoading` (Impressão ×3, `ConectorPage`, `dev/ComponentCatalog`
+e os `return <Spinner>` de página inteira). Suíte completa do cliente: **140
+arquivos · 1195 casos · 0 fail**.
+
+### 8.4 Evidência da revisão corretiva (executada nesta sessão)
+
+| Verificação | Comando | Resultado |
+|---|---|---|
+| Typecheck | `npm run typecheck` | ✅ OK (domain + server + client) |
+| Testes server | `npm --workspace server test` | ✅ **2382 pass · 0 fail · 93 skip** |
+| Testes client | `npm --workspace client test` | ✅ **1195 pass · 0 fail** (140 arquivos) |
+| Lint | `npm run lint` | ✅ **0 errors** (627 warnings — baseline) |
+| Build | `npm run build` | ✅ OK (PWA gerada) |
+| PostgreSQL real | `npm run test:pg` | ✅ **478 testes · 0 fail/skip/todo** |
+| Migration 0114 | `test:pg` (banco novo) | ✅ `Migração aplicada: 0114_...`; FK composta e `SET NULL` no catálogo |
+| Bootstrap | `node scripts/gerar-bootstrap.mjs` | ✅ sincronizado (sem alteração) |
+| Inventário | `npm run architecture:audit` | ✅ OK |
+| Auditoria de menu | `npm run audit:menu` | ✅ OK |
+
+> O `test:pg` rodou contra `postgres:16.14` local (`brobond-pg`, porta 5433),
+> em banco **vazio** (`brobond_gate`), conforme `AGENTS.md`.
 
 ---
 

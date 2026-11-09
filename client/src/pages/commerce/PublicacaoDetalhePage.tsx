@@ -10,7 +10,8 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, Pencil, RefreshCw, Rocket, Store } from 'lucide-react';
 import { apiFetch, ApiError } from '../../lib/api';
-import { Alert, Badge, ConfirmacaoInline, PageHeader, Spinner, useToast } from '../../components/ui';
+import { Alert, Badge, ConfirmacaoInline, PageHeader, useToast } from '../../components/ui';
+import { PageLoading } from '../../components/ui-kit-negocios';
 import { CANAIS_PUBLICACAO, EstadoBadge, ROTULO_PUBLICACAO, TONE_PUBLICACAO, dataHora, grana, rotuloCanal } from './shared';
 
 type Detalhe = {
@@ -98,7 +99,7 @@ export default function CommercePublicacaoDetalhePage() {
     }
   };
 
-  if (carregando) return <Spinner label="Carregando publicação…" />;
+  if (carregando) return <PageLoading label="Carregando publicação…" />;
   if (!detalhe) {
     return (
       <div className="space-y-4">

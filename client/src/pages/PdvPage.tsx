@@ -34,8 +34,8 @@ import {
   reimprimirCupomPdv,
 } from '../lib/printAgent';
 import { formatMoney } from '../lib/format';
-import { Alert, Badge, PainelInline, PageHeader, Spinner, useToast } from '../components/ui';
-import { PageShell } from '../components/ui-kit-negocios';
+import { Alert, Badge, PainelInline, PageHeader, useToast } from '../components/ui';
+import { PageLoading, PageShell } from '../components/ui-kit-negocios';
 import BarcodeScanner from '../components/BarcodeScanner';
 import { ProductSelector } from '../components/ProductSelector';
 import type { SearchProduct } from '../lib/productSearch';
@@ -504,7 +504,7 @@ export default function PdvPage() {
   // Render
   // -------------------------------------------------------------------------
 
-  if (carregando) return <Spinner label="Carregando PDV..." />;
+  if (carregando) return <PageLoading label="Carregando PDV..." />;
 
   return (
     <PageShell>

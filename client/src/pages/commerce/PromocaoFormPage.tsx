@@ -10,7 +10,8 @@ import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, Save, X } from 'lucide-react';
 import { apiFetch, ApiError } from '../../lib/api';
-import { Alert, PageHeader, Spinner, useToast } from '../../components/ui';
+import { Alert, PageHeader, useToast } from '../../components/ui';
+import { PageLoading } from '../../components/ui-kit-negocios';
 
 type Escopo = 'pedido' | 'produto' | 'categoria';
 type Canal = 'todos' | 'varejo' | 'atacado';
@@ -206,7 +207,7 @@ export default function CommercePromocaoFormPage() {
       categorias: f.categorias.includes(categoriaId) ? f.categorias.filter((x) => x !== categoriaId) : [...f.categorias, categoriaId],
     }));
 
-  if (carregando) return <Spinner label="Carregando promoção…" />;
+  if (carregando) return <PageLoading label="Carregando promoção…" />;
 
   return (
     <div className="mx-auto max-w-2xl space-y-4">

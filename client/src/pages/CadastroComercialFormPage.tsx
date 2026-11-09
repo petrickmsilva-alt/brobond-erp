@@ -19,8 +19,8 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, Loader2, Save, X } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
 import { useMeta, type ResourceMeta } from '../lib/meta';
-import { Alert, PageHeader, Spinner, useToast } from '../components/ui';
-import { PageShell } from '../components/ui-kit-negocios';
+import { Alert, PageHeader, useToast } from '../components/ui';
+import { PageLoading, PageShell } from '../components/ui-kit-negocios';
 import {
   fieldErrors,
   initialValues,
@@ -136,7 +136,7 @@ export default function CadastroComercialFormPage({ recurso }: { recurso: string
     );
   }
 
-  if (carregando) return <Spinner label={`Carregando ${resource.singular.toLowerCase()}...`} />;
+  if (carregando) return <PageLoading label={`Carregando ${resource.singular.toLowerCase()}...`} />;
 
   return (
     <PageShell>

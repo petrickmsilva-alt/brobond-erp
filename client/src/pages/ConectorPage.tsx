@@ -38,6 +38,7 @@ import {
 import { api, ApiError } from '../lib/api';
 import type { Module } from '../modules';
 import { Badge, Spinner, useToast } from '../components/ui';
+import { PageShell } from '../components/ui-kit-negocios';
 import ConnectorBrand, { CONNECTOR_BRAND_LABELS, isConnectorBrandId } from '../components/ConnectorBrand';
 
 // ----------------------------------------------------------------------------
@@ -393,7 +394,7 @@ export default function ConectorPage({ module }: { module: Module }) {
   const syncing = busy === 'sync';
 
   return (
-    <div className="min-h-full space-y-4 bg-slate-950/35 p-4 sm:p-6">
+    <PageShell className="min-h-full space-y-4 bg-slate-950/35">
       {/* ---------------------------------------------------------------- */}
       {/* Cabeçalho do canal: logomarca oficial + pulsação live            */}
       {/* ---------------------------------------------------------------- */}
@@ -639,6 +640,6 @@ export default function ConectorPage({ module }: { module: Module }) {
           </Panel>
         </>
       )}
-    </div>
+    </PageShell>
   );
 }

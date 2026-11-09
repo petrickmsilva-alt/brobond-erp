@@ -28,7 +28,7 @@ delete process.env.DATABASE_URL;
 
 const { RESOURCES } = await import('../src/resources');
 const { getStore } = await import('../src/services');
-const { itensDaEmpresa, itensDeVendas } = await import('../src/commerce/projecao');
+const { itensDaEmpresa, itensDeVendas, idsDeVendasDaEmpresa } = await import('../src/commerce/projecao');
 const { analyticsCommerce, trendsCommerce } = await import('../src/commerce/analytics');
 
 const s = getStore();
@@ -139,5 +139,82 @@ describe('Fase 9.1 — projeção `sale_items` recortada por tenant no SQL', () 
   test('sale_items continua SEM empresa_id (projeção — sem coluna redundante)', () => {
     assert.equal(RESOURCES.sale_items.empresa, false);
     assert.ok(!RESOURCES.sale_items.fields.some((f) => f.name === 'empresa_id'), 'nenhuma empresa_id redundante');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// REVISÃO CORRETIVA — PAGINAÇÃO DETERMINÍSTICA (sem teto silencioso)
+//
+// Os limites fixos de 200.000 eram um TETO SILENCIOSO: acima deles a leitura
+// omitia registros sem erro. Agora a leitura PAGINA de verdade (passo de 1.000,
+// lote de 500 ids por `= ANY`). Estes casos ultrapassam DELIBERADAMENTE uma
+// página e provam que nada é omitido nem duplicado.
+// ---------------------------------------------------------------------------
+describe('Fase 9.1 — paginação da projeção não trunca (revisão corretiva)', () => {
+  test('itensDeVendas pagina acima de uma página: nenhum item omitido nem duplicado', async () => {
+    const total = 2_500; // > passo de página (1.000) → exige 3 páginas
+    const saleId = `F91P-${Date.now()}`;
+    await s.insert(RESOURCES.sales, {
+      id: saleId,
+      empresa_id: 1,
+      status: 'PAID',
+      amount_cents: 1,
+      currency: 'BRL',
+      channel: 'BROBOND',
+      occurred_at: new Date().toISOString(),
+    });
+    const esperados = new Set<string>();
+    for (let i = 0; i < total; i += 1) {
+      const id = `${saleId}-I${String(i).padStart(5, '0')}`;
+      esperados.add(id);
+      await s.insert(RESOURCES.sale_items, {
+        id,
+        sale_id: saleId,
+        product_id: 9_990,
+        quantity: 1,
+        unit_price_cents: 1,
+        discount_cents: 0,
+        subtotal_cents: 1,
+      });
+    }
+    const itens = await itensDeVendas([saleId]);
+    assert.equal(itens.length, total, 'todos os itens da venda (nenhuma omissão)');
+    assert.equal(new Set(itens.map((i) => String(i.id))).size, total, 'sem duplicata');
+    assert.ok(itens.every((i) => esperados.has(String(i.id))), 'somente os itens da venda pedida');
+  });
+
+  test('itensDaEmpresa pagina vendas E itens acima de uma página e de um lote de ids', async () => {
+    const total = 1_200; // > passo de página (1.000) e > 2 lotes de ids (500)
+    const prefixo = `F91PV-${Date.now()}`;
+    for (let i = 0; i < total; i += 1) {
+      const saleId = `${prefixo}-${String(i).padStart(5, '0')}`;
+      await s.insert(RESOURCES.sales, {
+        id: saleId,
+        empresa_id: 3,
+        status: 'PAID',
+        amount_cents: 1,
+        currency: 'BRL',
+        channel: 'BROBOND',
+        occurred_at: new Date().toISOString(),
+      });
+      await s.insert(RESOURCES.sale_items, {
+        id: `${saleId}-I`,
+        sale_id: saleId,
+        product_id: 9_991,
+        quantity: 1,
+        unit_price_cents: 1,
+        discount_cents: 0,
+        subtotal_cents: 1,
+      });
+    }
+    const ids = (await idsDeVendasDaEmpresa(3)).filter((id) => id.startsWith(prefixo));
+    assert.equal(ids.length, total, 'todas as vendas do tenant (nenhuma omissão)');
+    assert.equal(new Set(ids).size, total, 'sem venda duplicada');
+
+    const itens = (await itensDaEmpresa(3)).filter((i) => String(i.sale_id).startsWith(prefixo));
+    assert.equal(itens.length, total, 'todos os itens do tenant (nenhuma omissão)');
+    assert.equal(new Set(itens.map((i) => String(i.id))).size, total, 'sem item duplicado');
+    // Nenhum item de outro tenant entrou no lote.
+    assert.ok(itens.every((i) => String(i.sale_id).startsWith(prefixo)), 'somente itens do tenant');
   });
 });

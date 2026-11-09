@@ -251,17 +251,26 @@ Números **medidos** nesta rodada (`npm run architecture:audit`):
 
 | Dimensão | Valor |
 |---|---:|
-| Migrations SQL (`db/migrations/*.sql`) | **113** |
+| Migrations SQL (`db/migrations/*.sql`) | **114** |
 | Tabelas no SQL do ERP | **222** (com `empresa_id`: **202**) |
 | Recursos de API (`RESOURCES`) | **184** (multiempresa: **166**) |
 | Módulos de navegação (`MODULES`) | **152** (áreas: 11, grupos: 35) |
-| Casos de teste (server + client) | **3772** (server 2603 · client 1169) |
+| Casos de teste (server + client) | **3783** (server 2613 · client 1170) |
 
-> Os **3772** são a contagem **declarada** do inventário (estática). Na execução
-> real desta rodada: server **2466** casos (**2373 pass · 0 fail · 93 skip**) e
-> client **1193 pass · 0 fail**. A diferença é de método (declarado × executado),
-> não de cobertura.
+> Os **3783** são a contagem **declarada** do inventário (estática). Na execução
+> real desta rodada (revisão corretiva): server **2475** casos (**2382 pass · 0
+> fail · 93 skip**) e client **1195 pass · 0 fail**. A diferença é de método
+> (declarado × executado), não de cobertura.
 
 Fechamentos: **BL-016** (over-fetch de `sale_items`), **BL-012/GAP-P2-06/P2-14**
 (notificação interna do CRM) e **BL-014** (painéis de fluxo de módulo → páginas).
 Canal **externo** do CRM permanece não ativado, conforme a doutrina da Fase 8.
+
+> **Revisão corretiva (3 pontos de auditoria).** Sobre o PR das Fases 9.1–9.3,
+> a revisão endureceu: (1) paginação determinística da projeção analítica
+> (`projecao.ts`, sem teto silencioso) e consumo por `itensDeVendas`;
+> (2) integridade/retenção da caixa interna do CRM (migration **0114**: FK
+> composta do tenant, `usuario_id` `ON DELETE SET NULL`, guarda de destinatário
+> do tenant, contagem/marcação sem teto de 500); (3) gate de moldura de página
+> ampliado (`page-shell.test.ts`: moldura manual e `Spinner` de página inteira).
+> Detalhe em [`docs/FASE-9-INTEGRIDADE-CRM-UX.md`](../FASE-9-INTEGRIDADE-CRM-UX.md) §7.
