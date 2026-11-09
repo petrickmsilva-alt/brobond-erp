@@ -120,7 +120,8 @@ sair com **exit 1**; com a correção, `veredito: PASSOU` e exit 0.
 
 - **Branch:** `fix/aud-01-production-release`
 - **Base:** `main` @ `9506ed2`
-- **PR:** a abrir
+- **PR:** #126
+- **Commits:** `20f6202` (AUD-01/SEC-01/TEST-01), `5735ec6` (SEC-01 `sem_compra`)
 - **Merge SHA:** pendente
 - **HEAD da main:** pendente de CI
 
