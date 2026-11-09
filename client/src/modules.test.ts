@@ -125,11 +125,12 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
     //   (/commerce/pagamentos) e Providers (/commerce/pagamentos/provedores) —
     //   páginas que já existiam ou leem dado real; entram no menu, sem rota nova "Em breve".
     // + 1 da Central de Notificações (diagnóstico autenticado, somente leitura).
-    expect(MODULES).toHaveLength(147);
+    // + 1 da FASE 7 — Análise RFM (segmentação derivada, rota própria).
+    expect(MODULES).toHaveLength(148);
     const ids = MODULES.map((m) => m.id);
     const paths = MODULES.map((m) => m.path);
-    expect(new Set(ids).size).toBe(147);
-    expect(new Set(paths).size).toBe(147);
+    expect(new Set(ids).size).toBe(148);
+    expect(new Set(paths).size).toBe(148);
 
     for (const [id, pathEsperado] of Object.entries(ROTAS_CANONICAS_ESPERADAS)) {
       const mod = MODULES.find((m) => m.id === id);
@@ -158,8 +159,8 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
     }
   });
 
-  it('separa ERP CORE (122), Commerce (19), Creators (4) e Utilidades Globais (2)', () => {
-    expect(MODULES.filter((m) => m.space === 'erp')).toHaveLength(122);
+  it('separa ERP CORE (123), Commerce (19), Creators (4) e Utilidades Globais (2)', () => {
+    expect(MODULES.filter((m) => m.space === 'erp')).toHaveLength(123);
     // 4 conectores de canal + 10 módulos do BROBOND COMMERCE OS
     expect(MODULES.filter((m) => m.space === 'commerce')).toHaveLength(19);
     expect(MODULES.filter((m) => m.space === 'creators')).toHaveLength(4);
@@ -243,6 +244,8 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
       'service-sla',
       'service-categorias',
       'customer-segments',
+      // FASE 7 — análise RFM (segmentação derivada).
+      'customer-rfm',
       'customer-consents',
       'customer-preferences',
       // ONDAS 4–5 / D2 — fidelidade e afiliados.

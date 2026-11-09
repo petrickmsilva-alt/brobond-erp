@@ -244,12 +244,15 @@ import {
 } from './crm';
 import {
   abrirTicket,
+  analiseRfm,
   avaliarSegmento,
   customer360,
   interagirTicket,
   painelAtendimento,
   transicionarTicket,
 } from './service';
+// FASE 7 — LGPD: exportação dos dados do titular (direito de acesso/portabilidade).
+import { exportarDadosTitular } from './lgpd';
 import {
   apurarComissaoAfiliado,
   aprovarSop,
@@ -257,6 +260,8 @@ import {
   creditarPontosVenda,
   decidirRecomendacao,
   dispararAutomacao,
+  estornarPontosVenda,
+  expirarPontosFidelidade,
   forecastCenario,
   gerarForecastDemanda,
   gerarPlanoSuprimento,
@@ -1092,6 +1097,10 @@ app.get('/api/service/painel', wrap(painelAtendimento));
 app.get('/api/customer360/:id', wrap(customer360));
 // Avaliação de segmento (contagem e clientes que casam a regra).
 app.get('/api/customer-segments/:id/avaliar', wrap(avaliarSegmento));
+// Análise RFM da base (quintis reais de recência, frequência e valor).
+app.get('/api/customer-segments/rfm', wrap(analiseRfm));
+// FASE 7 — LGPD: exportação dos dados do titular (direito de acesso/portabilidade).
+app.get('/api/clientes/:id/dados-lgpd', wrap(exportarDadosTitular));
 
 // ---- ONDAS 4–5 / D2 — GROWTH (marketing, loyalty, affiliate, ROI) ----
 // Dispara uma automação (execução idempotente por Idempotency-Key).
@@ -1100,6 +1109,10 @@ app.post('/api/marketing-automations/:id/disparar', wrap(dispararAutomacao));
 app.post('/api/loyalty/creditar-venda', wrap(creditarPontosVenda));
 // Saldo e extrato de pontos do cliente (saldo = soma dos movimentos).
 app.get('/api/loyalty/clientes/:clienteId/saldo', wrap(saldoFidelidade));
+// Expira os pontos vencidos (idempotente por crédito; nunca deixa saldo negativo).
+app.post('/api/loyalty/expirar', wrap(expirarPontosFidelidade));
+// Estorna os pontos de uma venda cancelada/devolvida (idempotente por origem).
+app.post('/api/loyalty/estornar-venda', wrap(estornarPontosVenda));
 // Apura comissões de afiliado a partir da ATRIBUIÇÃO real (sem duplicar).
 app.post('/api/affiliate/parcerias/:partnershipId/apurar', wrap(apurarComissaoAfiliado));
 // Encaminha uma comissão apurada ao financeiro existente.

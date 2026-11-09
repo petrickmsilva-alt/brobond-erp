@@ -123,6 +123,8 @@ const CrmPainelPage = lazy(() => import('./CrmPainelPage'));
 const CrmAgendaPage = lazy(() => import('./CrmAgendaPage'));
 // ONDA 4 / D1 — painel de atendimento (indicadores de SLA e resolução).
 const ServicePainelPage = lazy(() => import('./ServicePainelPage'));
+// FASE 7 — análise RFM (segmentação derivada das compras reais).
+const CustomerRfmPage = lazy(() => import('./CustomerRfmPage'));
 // Estoque 3.0 — transferência formal (documento + estados) e reservas.
 const EstoqueTransferenciasPage = lazy(() => import('./EstoqueTransferenciasPage'));
 // Supply chain — devolução ao fornecedor (documento com estados; baixa na expedição).
@@ -200,6 +202,7 @@ export default function ModulePage({ module }: { module: Module }) {
   if (module.id === 'crm-painel') return <Suspense fallback={<SubPageLoading />}><CrmPainelPage /></Suspense>;
   if (module.id === 'crm-agenda') return <Suspense fallback={<SubPageLoading />}><CrmAgendaPage /></Suspense>;
   if (module.id === 'service-painel') return <Suspense fallback={<SubPageLoading />}><ServicePainelPage /></Suspense>;
+  if (module.id === 'customer-rfm') return <Suspense fallback={<SubPageLoading />}><CustomerRfmPage /></Suspense>;
   if (module.id === 'transferencias-estoque') return <Suspense fallback={<SubPageLoading />}><EstoqueTransferenciasPage /></Suspense>;
   if (module.id === 'devolucoes-fornecedor') return <Suspense fallback={<SubPageLoading />}><DevolucoesFornecedorPage /></Suspense>;
   if (module.id === 'homologacao-fornecedores') return <Suspense fallback={<SubPageLoading />}><ComprasFornecedoresPage /></Suspense>;

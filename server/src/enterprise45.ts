@@ -94,8 +94,29 @@ export async function dispararAutomacao(req: Request, res: Response) {
     const condicao = typeof auto.condicao === 'string' ? JSON.parse(String(auto.condicao || '{}')) : (auto.condicao || {});
     const exigeConsent = String(auto.acao_tipo) === 'enviar_mensagem' || (condicao as Row).consentimento_marketing;
     if (exigeConsent && clienteId) {
-      const consent = await s.findOneWhere(getResource('customer_consents')!, { empresa_id: escopo.empresaId, cliente_id: clienteId, finalidade: 'marketing', concedido: true }, tx);
-      if (!consent) throw new HttpError(409, 'Cliente sem consentimento de marketing — envio bloqueado.', { cliente_id: clienteId });
+      // Opt-out explícito (LGPD): o registro `concedido = false` vence o envio,
+      // mesmo que outra finalidade esteja liberada. Sem linha, também bloqueia
+      // (o silêncio nunca é consentimento para marketing).
+      const consent = await s.findOneWhere(getResource('customer_consents')!, { empresa_id: escopo.empresaId, cliente_id: clienteId, finalidade: 'marketing' }, tx);
+      if (!consent || !consent.concedido) {
+        throw new HttpError(409, 'Cliente sem consentimento de marketing (opt-out) — envio bloqueado.', { cliente_id: clienteId });
+      }
+    }
+
+    // Limite de frequência (anti-spam): no máximo UMA execução desta automação
+    // para o mesmo cliente dentro da janela configurada. Sem a janela, nada muda.
+    // A checagem é determinística sobre a trilha append-only, então uma falha de
+    // processamento (que NÃO grava execução) nunca vira "mensagem repetida".
+    const janelaDias = Number(auto.limite_frequencia_dias || 0);
+    if (janelaDias > 0 && clienteId) {
+      const desde = new Date(Date.now() - janelaDias * 86_400_000).toISOString();
+      const execucoes = await listarTudo(s, 'marketing_automation_runs', escopo.empresaId, { automacao_id: automacaoId, cliente_id: clienteId }, tx);
+      const recente = execucoes.find((r) => String(r.criado_em || '') >= desde);
+      if (recente) {
+        throw new HttpError(429, 'Limite de frequência atingido para este cliente.', {
+          automacao_id: automacaoId, cliente_id: clienteId, janela_dias: janelaDias, ultima_execucao: recente.criado_em,
+        });
+      }
     }
 
     const run = await s.insert(getResource('marketing_automation_runs')!, {
@@ -198,6 +219,119 @@ export async function saldoFidelidade(req: Request, res: Response) {
     return { programa_id: Number(p.id), nome: p.nome, saldo, movimentos: doPrograma.length };
   });
   res.json({ cliente_id: clienteId, programas: porPrograma, gerado_em: new Date().toISOString() });
+}
+
+/**
+ * Expira os pontos vencidos de um cliente/programa (ou de toda a empresa).
+ *
+ * Regras:
+ *   • cada crédito tem `expira_em` (derivado de `loyalty_programs.validade_dias`);
+ *   • a expiração de UM crédito é idempotente por chave determinística
+ *     (`expiracao:<movimento_id>`), então reprocessar não expira duas vezes;
+ *   • a expiração NUNCA deixa o saldo negativo: o que se expira é limitado pelo
+ *     saldo remanescente (consumo FIFO por ordem de vencimento);
+ *   • a expiração é um MOVIMENTO (tipo `expiracao`, pontos negativos) — o saldo
+ *     continua sendo a soma dos movimentos, nunca uma coluna.
+ */
+export async function expirarPontosFidelidade(req: Request, res: Response) {
+  const actor = currentUser(req);
+  checkAccess(getResource('loyalty_movements')!, actor, 'read');
+  const escopo = escopoDe(req);
+  const s = getStore();
+  const body = (req.body ?? {}) as Row;
+  const clienteId = body.cliente_id ? idDe(body.cliente_id, 'Cliente') : null;
+  const programaId = body.programa_id ? idDe(body.programa_id, 'Programa') : null;
+  const agora = new Date();
+
+  const expirados = await s.transaction(async (tx) => {
+    const filtro: Row = {};
+    if (clienteId) filtro.cliente_id = clienteId;
+    if (programaId) filtro.programa_id = programaId;
+    const movs = await listarTudo(s, 'loyalty_movements', escopo.empresaId, filtro, tx);
+    // Créditos vencidos ainda não expirados, agrupados por cliente+programa.
+    const creditos = movs
+      .filter((m) => String(m.tipo) === 'credito' && m.expira_em && new Date(String(m.expira_em)).getTime() <= agora.getTime())
+      .sort((a, b) => String(a.expira_em).localeCompare(String(b.expira_em)));
+    const chaves = new Set(movs.map((m) => String(m.chave_idempotencia)));
+    const saldoPorChave = new Map<string, number>();
+    for (const m of movs) {
+      const k = `${m.programa_id}:${m.cliente_id}`;
+      saldoPorChave.set(k, (saldoPorChave.get(k) || 0) + Number(m.pontos || 0));
+    }
+    const gerados: Row[] = [];
+    for (const c of creditos) {
+      const chave = `expiracao:${Number(c.id)}`;
+      if (chaves.has(chave)) continue; // já expirado — idempotente
+      const k = `${c.programa_id}:${c.cliente_id}`;
+      const saldo = saldoPorChave.get(k) || 0;
+      if (saldo <= 0) continue; // nada a expirar (tudo já consumido)
+      const pontosCredito = Number(c.pontos || 0);
+      const aExpirar = Math.min(pontosCredito, saldo);
+      if (aExpirar <= 0) continue;
+      const mov = await s.insert(getResource('loyalty_movements')!, {
+        empresa_id: escopo.empresaId, programa_id: Number(c.programa_id), cliente_id: Number(c.cliente_id),
+        tipo: 'expiracao', pontos: -aExpirar, expira_em: null, chave_idempotencia: chave,
+        descricao: `Expiração do crédito #${Number(c.id)}`.slice(0, 300),
+      }, tx);
+      saldoPorChave.set(k, saldo - aExpirar);
+      gerados.push(mov);
+    }
+    if (gerados.length) {
+      await s.audit({ empresa_id: escopo.empresaId, usuario_id: actor.id || null, usuario: actor.name || null,
+        acao: 'ajuste', recurso: 'loyalty_movements', registro_id: null,
+        descricao: 'Expiração de pontos processada', dados: { total: gerados.length, cliente_id: clienteId, programa_id: programaId } }, tx);
+    }
+    return gerados;
+  });
+  res.status(201).json({ expirados: expirados.length, movimentos: expirados, gerado_em: new Date().toISOString() });
+}
+
+/**
+ * Estorna os pontos creditados por uma venda (cancelamento/devolução).
+ *
+ * Regras:
+ *   • o estorno é PROPORCIONAL à origem: parte do crédito REAL daquela venda
+ *     (`venda-<vendaId>-<clienteId>-<programaId>`);
+ *   • idempotente por chave determinística (`estorno-venda:...`) — um estorno por
+ *     origem, nunca dois;
+ *   • limitado pelo saldo remanescente: nunca deixa saldo negativo indevido
+ *     (se o cliente já resgatou, estorna o que resta e informa a diferença);
+ *   • é um MOVIMENTO (`estorno`, pontos negativos); o saldo segue derivado.
+ */
+export async function estornarPontosVenda(req: Request, res: Response) {
+  const actor = currentUser(req);
+  checkAccess(getResource('loyalty_movements')!, actor, 'read');
+  const escopo = escopoDe(req);
+  const s = getStore();
+  const body = (req.body ?? {}) as Row;
+  const programaId = idDe(body.programa_id, 'Programa');
+  const clienteId = idDe(body.cliente_id, 'Cliente');
+  const vendaId = idDe(body.venda_id, 'Venda');
+  const chaveCredito = `venda-${vendaId}-${clienteId}-${programaId}`;
+  const chaveEstorno = `estorno-venda:${vendaId}:${clienteId}:${programaId}`;
+
+  const resultado = await s.transaction(async (tx) => {
+    const programa = await s.findOneWhere(getResource('loyalty_programs')!, { id: programaId, empresa_id: escopo.empresaId }, tx);
+    if (!programa) throw new HttpError(404, 'Programa não encontrado nesta empresa.');
+    const jaEstornado = await s.findOneWhere(getResource('loyalty_movements')!, { empresa_id: escopo.empresaId, chave_idempotencia: chaveEstorno }, tx);
+    if (jaEstornado) return { movimento: jaEstornado, idempotente: true };
+    const credito = await s.findOneWhere(getResource('loyalty_movements')!, { empresa_id: escopo.empresaId, chave_idempotencia: chaveCredito }, tx);
+    if (!credito) throw new HttpError(409, 'Nenhum crédito de pontos para esta venda — nada a estornar.');
+    const saldo = await saldoPontos(s, escopo.empresaId, programaId, clienteId, tx);
+    const devido = Number(credito.pontos || 0);
+    const aEstornar = Math.min(devido, Math.max(0, saldo));
+    if (aEstornar <= 0) throw new HttpError(409, 'Saldo insuficiente para estornar — pontos já consumidos.', { devido, saldo });
+    const mov = await s.insert(getResource('loyalty_movements')!, {
+      empresa_id: escopo.empresaId, programa_id: programaId, cliente_id: clienteId,
+      tipo: 'estorno', pontos: -aEstornar, expira_em: null, chave_idempotencia: chaveEstorno,
+      venda_id: vendaId, descricao: `Estorno dos pontos da venda #${vendaId}`.slice(0, 300),
+    }, tx);
+    await s.audit({ empresa_id: escopo.empresaId, usuario_id: actor.id || null, usuario: actor.name || null,
+      acao: 'editar', recurso: 'loyalty_movements', registro_id: Number(mov.id),
+      descricao: `Estorno de pontos da venda #${vendaId}`, dados: { devido, estornado: aEstornar, saldo } }, tx);
+    return { movimento: mov, idempotente: false, devido, estornado: aEstornar, saldo_apos: saldo - aEstornar };
+  });
+  res.status(resultado.idempotente ? 200 : 201).json(resultado);
 }
 
 // ============================================================================

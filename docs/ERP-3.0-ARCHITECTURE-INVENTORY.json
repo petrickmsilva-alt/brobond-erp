@@ -1,9 +1,9 @@
 {
-  "gerado_em": "2026-11-09T00:18:03.364Z",
+  "gerado_em": "2026-11-09T00:38:06.004Z",
   "fonte_de_verdade_do_schema": "db/schema.sql + db/migrations/*.sql (PostgreSQL); Prisma = bounded context do commerce",
   "migrations": {
-    "sql": 110,
-    "sql_com_conteudo": 110,
+    "sql": 111,
+    "sql_com_conteudo": 111,
     "prisma": 7
   },
   "tabelas": {
@@ -12,8 +12,8 @@
     "sem_empresa_id": 20,
     "fora_do_prisma": 208
   },
-  "indices": 612,
-  "constraints": 412,
+  "indices": 613,
+  "constraints": 413,
   "recursos": {
     "total": 181,
     "com_tabela": 181,
@@ -79,18 +79,18 @@
     }
   ],
   "modulos": {
-    "total": 147,
-    "navegaveis": 147,
+    "total": 148,
+    "navegaveis": 148,
     "planejados": 0,
     "areas": 11,
     "grupos": 35,
     "com_recurso": 110
   },
   "rotas": {
-    "total": 490,
+    "total": 494,
     "por_metodo": {
-      "GET": 219,
-      "POST": 232,
+      "GET": 221,
+      "POST": 234,
       "PUT": 22,
       "DELETE": 14,
       "PATCH": 3
@@ -201,14 +201,14 @@
   },
   "testes": {
     "server": {
-      "arquivos": 307,
-      "casos": 2534
+      "arquivos": 308,
+      "casos": 2545
     },
     "client": {
-      "arquivos": 135,
-      "casos": 1148
+      "arquivos": 136,
+      "casos": 1150
     },
-    "total": 3682
+    "total": 3695
   },
   "integracoes": {
     "arquivos_modules": 81,
@@ -394,11 +394,6 @@
       "nivel": "AVISO",
       "regra": "TENANT_SEM_TESTE",
       "mensagem": "O recurso \"service_tickets\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
-    },
-    {
-      "nivel": "AVISO",
-      "regra": "TENANT_SEM_TESTE",
-      "mensagem": "O recurso \"customer_preferences\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
     },
     {
       "nivel": "AVISO",
