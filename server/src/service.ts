@@ -18,7 +18,7 @@ import { getResource } from './resources';
 import { checkAccess } from './services';
 import { currentUser } from './auth';
 import type { AuthUser } from './auth';
-import { escopoDoAtor, type EscopoEmpresa } from './empresa';
+import { escopoDoAtor, foraDaCarteira, idCarteiraDoEscopo, type EscopoEmpresa } from './empresa';
 import { domainLock } from './domainLock';
 import { HttpError } from './errors';
 import { round2 } from './utils';
@@ -28,6 +28,21 @@ const DIAS_MS = 86_400_000;
 
 function escopoDe(req: Request): EscopoEmpresa {
   return escopoDoAtor(currentUser(req) as unknown as AuthUser);
+}
+
+/**
+ * SEC-01 — recorte de CARTEIRA do representante no Customer Platform.
+ *
+ * As telas de RFM/segmentação e o Customer 360 leem `clientes` diretamente e
+ * filtravam apenas por `empresa_id`, ignorando `escopo.carteira`. O mesmo
+ * recorte que `listRecords` aplica em `/api/clientes` (A06-14) passa a valer
+ * aqui: o representante enxerga só os clientes da PRÓPRIA carteira; admin,
+ * gerente, consolidado e operador sem vínculo não são recortados.
+ */
+function clientesDaCarteira(escopo: EscopoEmpresa, rows: Row[]): Row[] {
+  const carteira = idCarteiraDoEscopo(escopo);
+  if (carteira === null) return rows;
+  return rows.filter((c) => Number(c.representante_id) === carteira);
 }
 
 /** Data/hora ISO do prazo: agora + N horas. */
@@ -288,8 +303,11 @@ export async function customer360(req: Request, res: Response) {
   const escopo = escopoDe(req);
   const clienteId = Number(req.params.id);
   const s = getStore();
+  // SEC-01: o representante não abre o Customer 360 de cliente fora da carteira.
   const cliente = await s.findOneWhere(getResource('clientes')!, { id: clienteId, empresa_id: escopo.empresaId });
-  if (!cliente) throw new HttpError(404, 'Cliente não encontrado nesta empresa.');
+  if (!cliente || foraDaCarteira(getResource('clientes')!, cliente, escopo)) {
+    throw new HttpError(404, 'Cliente não encontrado nesta empresa.');
+  }
 
   const metricas = (await metricasPorCliente(escopo.empresaId)).get(clienteId);
 
@@ -365,6 +383,8 @@ export async function avaliarSegmento(req: Request, res: Response) {
 
   const metricas = await metricasPorCliente(escopo.empresaId);
   const clientes = await s.list(getResource('clientes')!, { page: 1, pageSize: 20000, filter: { empresa_id: escopo.empresaId } });
+  // SEC-01: o segmento só avalia clientes da carteira do representante.
+  const clientesVisiveis = clientesDaCarteira(escopo, clientes.rows);
 
   // Consentimento de marketing por cliente (quando exigido pela regra).
   let consentidos: Set<number> | null = null;
@@ -374,7 +394,7 @@ export async function avaliarSegmento(req: Request, res: Response) {
   }
 
   const selecionados: Row[] = [];
-  for (const c of clientes.rows) {
+  for (const c of clientesVisiveis) {
     const cid = Number(c.id);
     const m = metricas.get(cid);
     const receita = m?.receita_total ?? 0;
@@ -423,11 +443,14 @@ export async function analiseRfm(req: Request, res: Response) {
   const s = getStore();
   const metricas = await metricasPorCliente(escopo.empresaId);
   const clientes = await s.list(getResource('clientes')!, { page: 1, pageSize: 20000, filter: { empresa_id: escopo.empresaId } });
-  const nomePorId = new Map(clientes.rows.map((c) => [Number(c.id), String(c.nome)]));
+  // SEC-01: o RFM só considera clientes da carteira do representante.
+  const visiveis = clientesDaCarteira(escopo, clientes.rows);
+  const idsVisiveis = new Set(visiveis.map((c) => Number(c.id)));
+  const nomePorId = new Map(visiveis.map((c) => [Number(c.id), String(c.nome)]));
 
-  const comCompra = [...metricas.values()].filter((m) => m.pedidos > 0 && m.ultima_compra);
+  const comCompra = [...metricas.values()].filter((m) => idsVisiveis.has(m.cliente_id) && m.pedidos > 0 && m.ultima_compra);
   if (!comCompra.length) {
-    res.json({ base: 0, sem_compra: clientes.rows.length, cortes: null, clientes: [], resumo: [], gerado_em: new Date().toISOString() });
+    res.json({ base: 0, sem_compra: visiveis.length, cortes: null, clientes: [], resumo: [], gerado_em: new Date().toISOString() });
     return;
   }
 
@@ -481,7 +504,7 @@ export async function analiseRfm(req: Request, res: Response) {
   linhas.sort((a, b) => b.m * 100 + b.f * 10 + b.r - (a.m * 100 + a.f * 10 + a.r));
   res.json({
     base: comCompra.length,
-    sem_compra: clientes.rows.length - comCompra.length,
+    sem_compra: visiveis.length - comCompra.length,
     cortes,
     resumo: [...resumo.values()].sort((a, b) => b.clientes - a.clientes),
     clientes: linhas.slice(0, 500),
