@@ -274,3 +274,45 @@ Canal **externo** do CRM permanece não ativado, conforme a doutrina da Fase 8.
 > do tenant, contagem/marcação sem teto de 500); (3) gate de moldura de página
 > ampliado (`page-shell.test.ts`: moldura manual e `Spinner` de página inteira).
 > Detalhe em [`docs/FASE-9-INTEGRIDADE-CRM-UX.md`](../FASE-9-INTEGRIDADE-CRM-UX.md) §7.
+
+---
+
+## 11. Revisão — Fases 9.4, 9.5 e 9.6 (2026-11-09)
+
+Executadas as Fases 9.4 (fechamento da arquitetura comercial), 9.5 (maturidade
+financeira e fiscal) e 9.6 (validação empresarial). Branch
+`architecture/fases-9-4-9-5-9-6` (base `main` `7c665b5`). Documentos:
+
+- **9.4** — [`COMMERCIAL-ARCHITECTURE.md`](COMMERCIAL-ARCHITECTURE.md),
+  [`WOOCOMMERCE-INTEGRATION.md`](WOOCOMMERCE-INTEGRATION.md),
+  [`COMMERCIAL-IDENTITY.md`](COMMERCIAL-IDENTITY.md),
+  [`NATIVE-STORE-DECOMMISSION.md`](NATIVE-STORE-DECOMMISSION.md) §8.
+- **9.5** — [`finance/CHART-OF-ACCOUNTS.md`](../finance/CHART-OF-ACCOUNTS.md),
+  [`finance/ACCOUNTING-INTEGRATION.md`](../finance/ACCOUNTING-INTEGRATION.md),
+  [`fiscal/SPED-EFD-ARCHITECTURE.md`](../fiscal/SPED-EFD-ARCHITECTURE.md),
+  [`fiscal/FISCAL-VALIDATION.md`](../fiscal/FISCAL-VALIDATION.md),
+  [`fiscal/REGULATORY-SOURCES.md`](../fiscal/REGULATORY-SOURCES.md),
+  [`data/UNIT-OF-MEASURE-GOVERNANCE.md`](../data/UNIT-OF-MEASURE-GOVERNANCE.md).
+- **9.6** — [`testing/ENTERPRISE-VALIDATION.md`](../testing/ENTERPRISE-VALIDATION.md)
+  e as cinco matrizes em `docs/testing/`.
+
+Números **medidos** nesta rodada (`npm run architecture:audit`):
+
+| Dimensão | Valor |
+|---|---:|
+| Migrations SQL (`db/migrations/*.sql`) | **115** |
+| Tabelas no SQL do ERP | **223** (com `empresa_id`: **202**) |
+| Recursos de API (`RESOURCES`) | **185** (multiempresa: **166**) |
+| Módulos de navegação (`MODULES`) | **153** (áreas: 11, grupos: 35) |
+| Índices / constraints | **627** / **431** |
+
+> Execução real desta rodada: server em memória **2504 casos** (**2411 pass · 0
+> fail · 93 skip**) e client **1195 pass · 0 fail**. Gate PostgreSQL real:
+> **484 pass · 0 fail · 0 skip · 0 todo** (inclui o novo
+> `pg/fase9-6-enterprise-validation.test.ts`). Typecheck 0 erros; lint 0 errors.
+
+Fechamentos: **BL-011** (importação de plano de contas) e **BL-002/BL-010/BL-013**
+em estado **parcial** com pendência externa registrada (**BL-017** conector de
+representantes; **BL-018** homologação fiscal no PVA). A retirada da `/loja`
+nativa permanece **BLOQUEADA** (BL-001/BL-015, I-1..I-4): esta rodada entrega a
+**matriz de rotas** e o comportamento HTTP aprovado, sem executar cutover.

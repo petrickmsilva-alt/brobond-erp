@@ -58,6 +58,7 @@ export const TABELAS_SEM_EMPRESA_ID: Record<string, ClassificacaoTenancy> = {
   categorias: { categoria: 'referencia', motivo: 'Categoria de produto, referência global compartilhada.' },
   cores: { categoria: 'referencia', motivo: 'Cor de produto, referência global compartilhada.' },
   impostos_ncm: { categoria: 'referencia', motivo: 'Alíquota por NCM: tabela fiscal nacional, igual para todas as empresas.' },
+  fiscal_layouts: { categoria: 'referencia', motivo: 'Registro versionado de leiautes SPED/EFD (Fase 9.5): referência nacional por versão/vigência, igual para todas as empresas. Semeada por migração; só leitura.' },
 
   // --- Isolamento herdado do pai (FK tenant-owned) ---------------------
   catalogo_compartilhamentos: { categoria: 'herda-tenant', motivo: 'FK para catalogos(id), que tem empresa_id.', herdaDe: 'catalogos' },

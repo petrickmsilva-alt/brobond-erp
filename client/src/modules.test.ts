@@ -133,11 +133,12 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
     // + 3 da FASE 8 — Control Tower executiva, Alertas e Regras de alerta
     //   (leitura derivada + configuração do motor de alertas).
     // + 1 da FASE 9.2 — Caixa de entrada do CRM (avisos internos por usuário).
-    expect(MODULES).toHaveLength(152);
+    // + 1 da FASE 9.5 — Leiautes SPED/EFD (registro versionado, leitura).
+    expect(MODULES).toHaveLength(153);
     const ids = MODULES.map((m) => m.id);
     const paths = MODULES.map((m) => m.path);
-    expect(new Set(ids).size).toBe(152);
-    expect(new Set(paths).size).toBe(152);
+    expect(new Set(ids).size).toBe(153);
+    expect(new Set(paths).size).toBe(153);
 
     for (const [id, pathEsperado] of Object.entries(ROTAS_CANONICAS_ESPERADAS)) {
       const mod = MODULES.find((m) => m.id === id);
@@ -166,8 +167,8 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
     }
   });
 
-  it('separa ERP CORE (127), Commerce (19), Creators (4) e Utilidades Globais (2)', () => {
-    expect(MODULES.filter((m) => m.space === 'erp')).toHaveLength(127);
+  it('separa ERP CORE (128), Commerce (19), Creators (4) e Utilidades Globais (2)', () => {
+    expect(MODULES.filter((m) => m.space === 'erp')).toHaveLength(128);
     // 4 conectores de canal + 10 módulos do BROBOND COMMERCE OS
     expect(MODULES.filter((m) => m.space === 'commerce')).toHaveLength(19);
     expect(MODULES.filter((m) => m.space === 'creators')).toHaveLength(4);
@@ -340,6 +341,8 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
       // FISCAL 3.0 — obrigações acessórias: cadastro da regra + calendário
       'fiscal-obrigacoes',
       'fiscal-calendario',
+      // FASE 9.5 — registro versionado de leiautes SPED/EFD (leitura).
+      'fiscal-layouts',
     ]);
     expect(porArea('Administração')).toEqual(['empresas', 'usuarios', 'auditoria', 'webhooks']);
     expect(porArea('Commerce')).toEqual([
@@ -471,6 +474,8 @@ describe('visibleModules', () => {
       // FISCAL 3.0 — obrigações acessórias continuam em Fiscal (casa canônica).
       'fiscal-obrigacoes',
       'fiscal-calendario',
+      // FASE 9.5 — leiautes SPED/EFD.
+      'fiscal-layouts',
     ]);
     expect(MODULES.filter((m) => m.area === 'Vendas').map((m) => m.id)).not.toContain('documentos-fiscais');
     expect(MODULES.filter((m) => m.area === 'Vendas').map((m) => m.id)).not.toContain('regras-fiscais');

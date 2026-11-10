@@ -2741,6 +2741,38 @@ export const RESOURCES: Record<string, Resource> = {
     orderBy: { field: 'prioridade', dir: 'desc' },
   },
 
+  // Registro VERSIONADO de leiautes SPED/EFD (migration 0115, Fase 9.5).
+  // Tabela de REFERÊNCIA GLOBAL (não é dado de empresa): diz qual COD_VER é
+  // válido em cada período. Só leitura pelo CRUD genérico — a carga é a
+  // migração versionada. Escrita por empresa não faz sentido aqui.
+  fiscal_layouts: {
+    key: 'fiscal_layouts',
+    table: 'fiscal_layouts',
+    label: 'Leiautes fiscais (SPED/EFD)',
+    singular: 'Leiaute fiscal',
+    labelFields: ['sistema', 'codigo_versao'],
+    ops: READ_ONLY,
+    minPerfil: 'gerente',
+    notice:
+      'Tabela de referência versionada: cada linha diz o código COD_VER, a versão do leiaute, o ato normativo que a instituiu e a vigência. Fonte oficial em fonte_url. NÃO gera, assina nem transmite arquivo fiscal — apenas governa qual versão vale em cada período.',
+    fields: [
+      { name: 'sistema', label: 'Sistema', type: 'text', readonly: true, search: true },
+      { name: 'codigo_versao', label: 'Código (COD_VER)', type: 'text', readonly: true, search: true },
+      { name: 'versao_leiaute', label: 'Versão do leiaute', type: 'text', readonly: true },
+      { name: 'ato_normativo', label: 'Ato normativo', type: 'text', readonly: true },
+      { name: 'vigencia_inicio', label: 'Vigência — início', type: 'date', readonly: true },
+      { name: 'vigencia_fim', label: 'Vigência — fim', type: 'date', readonly: true },
+      { name: 'fonte_url', label: 'Fonte oficial', type: 'text', readonly: true },
+      { name: 'consultado_em', label: 'Consultado em', type: 'date', readonly: true },
+      { name: 'registros', label: 'Registros do leiaute', type: 'json', list: false, form: false, readonly: true },
+      ativo,
+      // Referência global semeada por migração: só `criado_em` (não há
+      // `atualizado_em` — a linha não é editada pelo CRUD).
+      { name: 'criado_em', label: 'Criado em', type: 'datetime', readonly: true, list: false },
+    ],
+    orderBy: { field: 'sistema', dir: 'asc' },
+  },
+
   // Configuração de emissão por empresa. Os tokens ficam CIFRADOS e nunca
   // voltam pela API — por isso só a API dedicada (/api/fiscal/config) escreve
   // aqui; o CRUD genérico fica fora de alcance (internal).

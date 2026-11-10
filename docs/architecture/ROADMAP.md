@@ -14,6 +14,7 @@
 | **Fase 2** | Núcleo canônico de dados + descontinuação do `/loja` | Dados governados + retirada segura | `architecture/fase-2-canonical-erp-data` |
 | **Fases 6–8** | Commerce omnichannel, CRM/loyalty, BI/Control Tower | Motores de leitura + alertas | PRs por fase |
 | **Fases 9.1–9.3** | Integridade de dados, automação do CRM e UX operacional | Recorte tenant no SQL, caixa interna do CRM, moldura única de página | `architecture/fases-9-1-9-2-9-3` |
+| **Fases 9.4–9.6** | Fechamento da arquitetura comercial, maturidade financeira/fiscal e validação empresarial | Visão unificada dos canais, plano de contas + leiautes SPED/EFD versionados, matriz de tenancy/RBAC e baseline de desempenho | `architecture/fases-9-4-9-5-9-6` |
 
 > **Nota (revisão):** na Fase 2 o núcleo de dados foi entregue; a **retirada da
 > `/loja` NÃO foi executada** (bloqueada por ambiente/decisão — BL-015). A
@@ -109,6 +110,19 @@ integridade validada; implementação testada; PR independente.
 > A retirada da loja nativa foi **conscientemente** deixada para a Fase 3: o §6.8
 > do PROMPT MASTER manda entregar o plano e registrar o impedimento quando a
 > remoção não puder ser feita com segurança. Ver BL-015 / DEC-004.
+
+---
+
+## 4.1. Fases 9.4–9.6 — fechamento comercial, maturidade financeira/fiscal e validação
+
+| Fase | Entrega | Documentação | Status |
+|---|---|---|---|
+| **9.4** | Identidade comercial canônica, visão unificada dos canais, matriz de rotas `/loja` | `COMMERCIAL-ARCHITECTURE.md`, `WOOCOMMERCE-INTEGRATION.md`, `COMMERCIAL-IDENTITY.md`, `NATIVE-STORE-DECOMMISSION.md` §8 | **PASS** (retirada da `/loja` segue **BLOQUEADA** — I-1..I-4) |
+| **9.5** | Plano de contas hierárquico + importação segura, integração contábil, leiautes SPED/EFD versionados + validador estrutural, governança de unidades | `finance/CHART-OF-ACCOUNTS.md`, `finance/ACCOUNTING-INTEGRATION.md`, `fiscal/SPED-EFD-ARCHITECTURE.md`, `fiscal/FISCAL-VALIDATION.md`, `fiscal/REGULATORY-SOURCES.md`, `data/UNIT-OF-MEASURE-GOVERNANCE.md` | **PASS** (homologação fiscal externa pendente) |
+| **9.6** | Matriz de integração entre domínios, tenancy, RBAC, desempenho, gates de regressão | `testing/ENTERPRISE-VALIDATION.md`, `testing/DOMAIN-INTEGRATION-MATRIX.md`, `testing/TENANCY-TEST-MATRIX.md`, `testing/RBAC-TEST-MATRIX.md`, `testing/PERFORMANCE-BASELINE.md`, `testing/REGRESSION-GATES.md` | **PASS** |
+
+Gate PostgreSQL real: **484** testes, 0 fail/skip/todo (inclui o novo
+`pg/fase9-6-enterprise-validation.test.ts`).
 
 ---
 

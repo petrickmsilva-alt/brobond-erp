@@ -50,6 +50,17 @@ const PAINEL = {
   gerado_em: '2026-10-28T12:00:00.000Z',
 };
 
+const CANAIS = {
+  empresa_id: 1,
+  testado: false,
+  canais: [
+    { canal: 'RETAIL', rotulo: 'Varejo', plataforma: 'WooCommerce', endereco: 'https://brobond.com.br', loja: 'RETAIL', preco_fonte: 'preco_venda', canal_venda: 'varejo', estado: 'configurado', conexao: null, ultima_sincronizacao: null, ultimo_erro: null, pendencia: 'Conexão não testada nesta consulta.', evidencia: 'Loja RETAIL habilitada.' },
+    { canal: 'WHOLESALE', rotulo: 'Atacado', plataforma: 'WooCommerce', endereco: 'https://atacado.brobond.com.br', loja: 'WHOLESALE', preco_fonte: 'preco_atacado', canal_venda: 'atacado', estado: 'configurado', conexao: null, ultima_sincronizacao: null, ultimo_erro: null, pendencia: null, evidencia: 'Loja WHOLESALE habilitada.' },
+    { canal: 'REPRESENTATIVES', rotulo: 'Representantes', plataforma: 'Portal de representantes', endereco: 'https://catalogo.brobond.com.br', loja: null, preco_fonte: null, canal_venda: 'representante', estado: 'nao_homologado', conexao: null, ultima_sincronizacao: null, ultimo_erro: null, pendencia: 'Sem conector no repositório.', evidencia: 'Nada é presumido.' },
+  ],
+  nota: 'RETAIL e WHOLESALE são WooCommerce; REPRESENTATIVES é canal próprio.',
+};
+
 function renderPagina() {
   return render(
     <ToastProvider>
@@ -63,23 +74,32 @@ function renderPagina() {
   );
 }
 
+/** Responde por caminho: painel omnichannel × painel de canais (Fase 9.4). */
+function responderPorCaminho(painel: unknown) {
+  return async (path: string) => (String(path).includes('/commerce/canais') ? CANAIS : painel);
+}
+
 describe('Commerce — Omnichannel (/commerce/omnichannel)', () => {
   beforeEach(() => {
     fetchMock.mockReset();
   });
 
   it('renderiza as divergências REAIS e a saúde dos conectores', async () => {
-    fetchMock.mockResolvedValue(PAINEL);
+    fetchMock.mockImplementation(responderPorCaminho(PAINEL) as any);
     renderPagina();
     expect(await screen.findByText('Publicação rejeitada pelo canal MERCADOLIVRE.')).toBeInTheDocument();
     expect(screen.getByText('Produto publicado no canal BROBOND com estoque disponível zerado.')).toBeInTheDocument();
     expect(screen.getByText('gateway 502')).toBeInTheDocument();
-    expect(fetchMock.mock.calls[0][0]).toContain('/commerce/omnichannel/painel');
+    expect(fetchMock.mock.calls.some(([p]) => String(p).includes('/commerce/omnichannel/painel'))).toBe(true);
+    // Fase 9.4 — canais oficiais com estado REAL (REPRESENTATIVES não conectado).
+    expect(await screen.findByText('Canais comerciais oficiais')).toBeInTheDocument();
+    expect(screen.getByText('Homologação pendente')).toBeInTheDocument();
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 
   it('reconcilia com confirmação inline (nunca modal)', async () => {
     fetchMock.mockImplementation(async (path: string) => {
+      if (String(path).includes('/commerce/canais')) return CANAIS;
       if (String(path).includes('/painel')) return PAINEL;
       return { detectadas: 2, abertas: 0, reabertas: 0, fechadas: 1 };
     });
@@ -96,7 +116,7 @@ describe('Commerce — Omnichannel (/commerce/omnichannel)', () => {
   });
 
   it('estado vazio é honesto: sem divergências abertas', async () => {
-    fetchMock.mockResolvedValue({ ...PAINEL, totais: { abertas: 0, por_categoria: {}, por_canal: {}, por_severidade: {} }, divergencias: [], woocommerce_lojas: [] });
+    fetchMock.mockImplementation(responderPorCaminho({ ...PAINEL, totais: { abertas: 0, por_categoria: {}, por_canal: {}, por_severidade: {} }, divergencias: [], woocommerce_lojas: [] }) as any);
     renderPagina();
     expect(await screen.findByText('Sem divergências abertas')).toBeInTheDocument();
   });

@@ -9319,3 +9319,34 @@ BEGIN
     VALIDATE CONSTRAINT fk_e42_crm_notificacoes_empresa_atividade;
 END
 $e42_crm_notificacoes$;
+
+-- ============================================================================
+-- ESPELHO da migração 0115 — FASE 9.5: REGISTRO VERSIONADO DE LEIAUTES FISCAIS
+-- (a autoridade é db/migrations/0115_fase9_5_fiscal_layouts.sql; este espelho
+-- mantém db/schema.sql coerente para o bootstrap de banco novo).
+-- Tabela de REFERÊNCIA global (não tem empresa_id): diz qual COD_VER é válido
+-- em cada período de apuração, com fonte oficial e ato normativo. Não gera,
+-- assina nem transmite arquivo fiscal.
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS fiscal_layouts (
+  id SERIAL PRIMARY KEY,
+  sistema TEXT NOT NULL,
+  codigo_versao TEXT NOT NULL,
+  versao_leiaute TEXT NOT NULL,
+  ato_normativo TEXT,
+  vigencia_inicio DATE NOT NULL,
+  vigencia_fim DATE,
+  fonte_url TEXT NOT NULL,
+  consultado_em DATE NOT NULL,
+  registros JSONB NOT NULL DEFAULT '[]'::jsonb,
+  ativo BOOLEAN NOT NULL DEFAULT TRUE,
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT fiscal_layouts_sistema_valido CHECK (sistema IN ('EFD_ICMS_IPI', 'EFD_CONTRIBUICOES')),
+  CONSTRAINT fiscal_layouts_vigencia_coerente CHECK (vigencia_fim IS NULL OR vigencia_fim >= vigencia_inicio),
+  CONSTRAINT fiscal_layouts_versao_nao_vazia CHECK (btrim(codigo_versao) <> ''),
+  CONSTRAINT fiscal_layouts_registros_array CHECK (jsonb_typeof(registros) = 'array')
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_fiscal_layouts_sistema_versao
+  ON fiscal_layouts (sistema, codigo_versao);
+CREATE INDEX IF NOT EXISTS fiscal_layouts_sistema_vigencia_idx
+  ON fiscal_layouts (sistema, ativo, vigencia_inicio);

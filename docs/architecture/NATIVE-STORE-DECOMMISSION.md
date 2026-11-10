@@ -176,3 +176,58 @@ bloqueada** por ambiente/decisão (impedimentos I-1..I-4) — ver
 [`NATIVE-STORE-DECOMMISSION-REPORT.md`](NATIVE-STORE-DECOMMISSION-REPORT.md).
 A retirada está **pendente para a Fase 3** (BL-015 / DEC-004); a superfície
 nativa **ainda está ativa**.
+
+---
+
+## 8. Matriz de rotas (Fase 9.4 — inventário, sem remoção)
+
+A tabela abaixo é o **inventário explícito** de cada rota `/loja` (SPA) e
+`/api/loja/*` (servidor), com a **classificação** e o **comportamento HTTP
+aprovado** para a retirada. Nesta fase **nada é removido**: a loja nativa
+permanece **ativa**. A matriz existe para que a Fase 3 (retirada) não precise
+reconstruir o inventário.
+
+### 8.1 Rotas públicas da SPA (`client/src/App.tsx`)
+
+| Rota | Tipo | Comportamento aprovado | Destino |
+|---|---|---|---|
+| `/loja` | pública | **301** para `STOREFRONT_REDIRECT_URL`; sem a variável → **410** | RETAIL WooCommerce |
+| `/loja/produto/:slug` | pública | **301** para RETAIL quando houver produto equivalente; senão **404** | RETAIL WooCommerce |
+| `/loja/carrinho` | pública | **410** (sem equivalente — carrinho é do WooCommerce) | — |
+| `/loja/checkout` | pública | **410** (checkout migra para o WooCommerce) | — |
+| `/loja/pedido/:token` | pública | **410** (pedido nativo descontinuado); o histórico **permanece** no ERP | — |
+
+### 8.2 Rotas `/api/loja/*` (servidor)
+
+| Rota | Tipo | Comportamento aprovado |
+|---|---|---|
+| `/api/loja/config` | serviço público | remover na Fase 3 (substituído pela config da loja WooCommerce) |
+| `/api/loja/produtos`, `/api/loja/produtos/:slug` | serviço público | remover na Fase 3 (catálogo passa a ser lido do ERP/WooCommerce) |
+| `/api/loja/preview`, `/api/loja/carrinho/quantidade` | serviço público | remover na Fase 3 |
+| `/api/loja/payment-methods` | serviço público | remover na Fase 3 |
+| `/api/loja/checkout`, `/api/loja/checkout/:chave` | serviço público | remover na Fase 3 (**serviços financeiros compartilhados preservados**) |
+| `/api/loja/pedidos/:token` | serviço público | remover na Fase 3 (**pedidos históricos preservados**) |
+
+### 8.3 O que NÃO é removido
+
+- Rotas **administrativas** que porventura contenham `/loja` no caminho.
+- Serviços **compartilhados**: pedido, cliente, frete, pagamento, reserva,
+  `commerce_configuracoes` (lido por `frete.ts`/`estado-loja.ts`/`services.ts`).
+- `/api/marketplace/loja/*` e `/api/commerce/woocommerce/lojas/*` (integração).
+
+### 8.4 SEO — regras
+
+- **301** só quando há **destino equivalente e permanente** (sem cadeia/loop).
+- **410** quando o conteúdo foi removido **definitivamente** e **não** há
+  substituto equivalente.
+- **404** quando a rota nunca deveria existir ou não há conteúdo correspondente.
+- A camada SEO (`storefront-seo.ts`) já resolve produto por tenant com **404
+  real** (inexistente/não publicado/outro tenant). O cutover de URL (301/410) é
+  **externo** (DNS/edge) e permanece **bloqueado** até a decisão DEC-001.
+
+### 8.5 Testes
+
+A remoção e o comportamento de URL são cobertos por testes da Fase 3 (a serem
+criados junto da execução). Nesta fase, a matriz acima é a especificação; os
+testes de não-regressão do RETAIL e das URLs legadas ficam registrados como
+**BLOQUEADOS** até existirem credenciais e decisão (I-1..I-4).

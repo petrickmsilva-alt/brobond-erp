@@ -403,6 +403,7 @@ import {
   registrarEntregaFiscal,
 } from './fiscalObrigacoes';
 import { listarEvidenciasFiscais, listarExecucoesFiscais, executarObrigacaoFiscal, registrarEvidenciaFiscal } from './fiscalExecucoes';
+import { listarLayouts, layoutVigente, validarArquivoEfd } from './fiscalEfd';
 import { balanceteFinanceiro, resumoPlanoContas } from './financeiroContabil';
 import { listarPeriodos, obterPeriodo, alterarPeriodo } from './financeiroPeriodos';
 import {
@@ -450,6 +451,7 @@ import {
   corrigirDivergenciaRota,
 } from './commerce/woocommerce/rotas';
 import { publicWoocommerceWebhookRouter } from './commerce/woocommerce/webhookRouter';
+import { listarCanaisComerciais } from './commerce/canaisComerciais';
 import { painelOmnichannelHandler, reconciliarOmnichannelHandler } from './commerce/omnichannel';
 import { logisticsRouter } from '../../modules/logistics/api/routes';
 import { publicLogisticsWebhookRouter } from '../../modules/logistics/api/webhookRouter';
@@ -1335,6 +1337,12 @@ app.get('/api/fiscal/obrigacoes/:id/execucoes', wrap(listarExecucoesFiscais));
 app.post('/api/fiscal/obrigacoes/:id/execucoes', wrap(executarObrigacaoFiscal));
 app.get('/api/fiscal/execucoes/:id/evidencias', wrap(listarEvidenciasFiscais));
 app.post('/api/fiscal/execucoes/:id/evidencias', wrap(registrarEvidenciaFiscal));
+// ---- FASE 9.5: leiaute vigente e validação ESTRUTURAL do arquivo EFD ----
+// Referência versionada (fonte oficial) + validador de gramática. Não transmite
+// nem assina arquivo fiscal; homologação externa é pendente (ver docs/fiscal).
+app.get('/api/fiscal/layouts', wrap(listarLayouts));
+app.get('/api/fiscal/layouts/vigente', wrap(layoutVigente));
+app.post('/api/fiscal/efd/validar', wrap(validarArquivoEfd));
 
 // ---- FINANCEIRO 3.0: estrutura contábil (não é contabilidade) ----
 // Balancete e resumo do plano de contas leem o MESMO livro-caixa; não existe
@@ -1436,6 +1444,10 @@ app.post('/api/marketplace/loja/estoque', wrap(sincronizarEstoqueLoja));
 // O fluxo single-store acima (WOOCOMMERCE_*) continua valendo quando o modo
 // multi-loja está desligado; estas rotas são o painel e as ações POR LOJA.
 app.get('/api/commerce/woocommerce/status', wrap(statusLojas));
+// FASE 9.4 — visão unificada dos canais oficiais (RETAIL/WHOLESALE/REPRESENTATIVES).
+// Somente LEITURA: `?testar=1` faz o teste autenticado das lojas Woo; nada é
+// publicado/sincronizado e nenhum conector é ativado.
+app.get('/api/commerce/canais', wrap(listarCanaisComerciais));
 app.get('/api/commerce/woocommerce/lojas', wrap(painelLojas));
 app.get('/api/commerce/woocommerce/lojas/:store', wrap(painelLoja));
 app.get('/api/commerce/woocommerce/lojas/:store/reconciliacao', wrap(reconciliarLojaRota));
