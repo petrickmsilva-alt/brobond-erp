@@ -403,6 +403,7 @@ import {
   registrarEntregaFiscal,
 } from './fiscalObrigacoes';
 import { listarEvidenciasFiscais, listarExecucoesFiscais, executarObrigacaoFiscal, registrarEvidenciaFiscal } from './fiscalExecucoes';
+import { listarLayouts, layoutVigente, validarArquivoEfd } from './fiscalEfd';
 import { balanceteFinanceiro, resumoPlanoContas } from './financeiroContabil';
 import { listarPeriodos, obterPeriodo, alterarPeriodo } from './financeiroPeriodos';
 import {
@@ -1336,6 +1337,12 @@ app.get('/api/fiscal/obrigacoes/:id/execucoes', wrap(listarExecucoesFiscais));
 app.post('/api/fiscal/obrigacoes/:id/execucoes', wrap(executarObrigacaoFiscal));
 app.get('/api/fiscal/execucoes/:id/evidencias', wrap(listarEvidenciasFiscais));
 app.post('/api/fiscal/execucoes/:id/evidencias', wrap(registrarEvidenciaFiscal));
+// ---- FASE 9.5: leiaute vigente e validação ESTRUTURAL do arquivo EFD ----
+// Referência versionada (fonte oficial) + validador de gramática. Não transmite
+// nem assina arquivo fiscal; homologação externa é pendente (ver docs/fiscal).
+app.get('/api/fiscal/layouts', wrap(listarLayouts));
+app.get('/api/fiscal/layouts/vigente', wrap(layoutVigente));
+app.post('/api/fiscal/efd/validar', wrap(validarArquivoEfd));
 
 // ---- FINANCEIRO 3.0: estrutura contábil (não é contabilidade) ----
 // Balancete e resumo do plano de contas leem o MESMO livro-caixa; não existe

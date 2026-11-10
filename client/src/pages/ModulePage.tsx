@@ -137,6 +137,8 @@ const ComprasFornecedoresPage = lazy(() => import('./ComprasFornecedoresPage'));
 const ProducaoCapacidadePage = lazy(() => import('./ProducaoCapacidadePage'));
 // Fiscal 3.0 — calendário de obrigações acessórias (prazo e prova, sem imposto).
 const FiscalCalendarioPage = lazy(() => import('./FiscalCalendarioPage'));
+// FASE 9.5 — registro versionado de leiautes SPED/EFD + validação estrutural.
+const FiscalLayoutsPage = lazy(() => import('./FiscalLayoutsPage'));
 // Financeiro 3.0 — balancete/classificação contábil (leitura do mesmo livro).
 const FinanceiroBalancetePage = lazy(() => import('./FinanceiroBalancetePage'));
 // Supply chain — rastreabilidade ponta a ponta (lote + trilha; leitura do motor canônico).
@@ -217,6 +219,7 @@ export default function ModulePage({ module }: { module: Module }) {
   if (module.id === 'homologacao-fornecedores') return <Suspense fallback={<SubPageLoading />}><ComprasFornecedoresPage /></Suspense>;
   if (module.id === 'producao-capacidade') return <Suspense fallback={<SubPageLoading />}><ProducaoCapacidadePage /></Suspense>;
   if (module.id === 'fiscal-calendario') return <Suspense fallback={<SubPageLoading />}><FiscalCalendarioPage /></Suspense>;
+  if (module.id === 'fiscal-layouts') return <Suspense fallback={<SubPageLoading />}><FiscalLayoutsPage /></Suspense>;
   if (module.id === 'balancete') return <Suspense fallback={<SubPageLoading />}><FinanceiroBalancetePage /></Suspense>;
   if (module.id === 'equipes_comerciais') return <Suspense fallback={<SubPageLoading />}><CadastroComercialPage recurso="equipes_comerciais" /></Suspense>;
   if (module.id === 'equipe_membros') return <Suspense fallback={<SubPageLoading />}><CadastroComercialPage recurso="equipe_membros" /></Suspense>;

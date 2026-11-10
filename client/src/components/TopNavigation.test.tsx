@@ -274,10 +274,11 @@ describe('TopNavigation — Master Top Navigation (UX-05)', () => {
     // Cada módulo da fonte única aparece exatamente uma vez no menu superior.
     // 146 módulos existentes + painel Omnichannel (Fase 6) + Análise RFM (Fase 7)
     // + Control Tower, Alertas e Regras de alerta (Fase 8)
-    // + Caixa de entrada do CRM (Fase 9.2).
+    // + Caixa de entrada do CRM (Fase 9.2)
+    // + Leiautes SPED/EFD (Fase 9.5).
     // `modules.test.ts` trava o mesmo número e a lista canônica — aqui só se
     // confirma que o menu não perde nem duplica a fonte única.
-    expect(MODULES).toHaveLength(152);
+    expect(MODULES).toHaveLength(153);
     unmount();
   });
 

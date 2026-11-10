@@ -994,6 +994,77 @@ async function validarCategoriaPai(r: Resource, data: Row, before: Row | null, t
 }
 
 // ----------------------------------------------------------------------------
+/**
+ * PLANO DE CONTAS — hierarquia, sem ciclo e tipo coerente.
+ *
+ * Regras que o banco não expressa sozinho (a FK simples não impede ciclo nem
+ * exige pai sintético):
+ *   1. a conta não pode ser pai de si mesma;
+ *   2. o pai precisa existir NO MESMO tenant (a FK simples não isola empresa);
+ *   3. subir a cadeia de pais não pode voltar à própria conta (ciclo);
+ *   4. o pai precisa ser SINTÉTICA — conta com filhas só agrupa;
+ *   5. uma conta que já tem filhas não pode virar ANALÍTICA.
+ * Nunca inventa um pai: sem pai informado, a conta é raiz.
+ */
+async function validarContaContabil(data: Row, before: Row | null, empresaId: number, tx: Tx): Promise<void> {
+  const s = getStore();
+  const r = getResource('plano_contas')!;
+  const temPai = data.pai_id !== undefined && data.pai_id !== null && data.pai_id !== '';
+  const idAtual = before ? Number(before.id) : null;
+  const tipo = String(data.tipo ?? before?.tipo ?? 'analitica');
+
+  if (temPai) {
+    const paiId = Number(data.pai_id);
+    if (idAtual !== null && paiId === idAtual) {
+      throw new HttpError(400, 'A conta não pode ser pai de si mesma.', { pai_id: 'Escolha outra conta' });
+    }
+    const pai = await s.findOneWhere(r, { id: paiId, empresa_id: empresaId }, tx);
+    if (!pai) throw new HttpError(404, 'Conta-pai não encontrada nesta empresa.', { pai_id: 'Conta inexistente' });
+    if (String(pai.tipo) !== 'sintetica') {
+      throw new HttpError(400, `A conta-pai “${String(pai.codigo)} ${String(pai.nome)}” é analítica — conta com filhas precisa ser sintética.`, { pai_id: 'Precisa ser sintética' });
+    }
+    // Ciclo: sobe a cadeia de pais; se chegar à conta atual, formaria um ciclo.
+    const visitados = new Set<number>();
+    let cursor: Row | null = pai;
+    while (cursor) {
+      const cursorId = Number(cursor.id);
+      if (idAtual !== null && cursorId === idAtual) {
+        throw new HttpError(400, 'Hierarquia inválida: a conta-pai escolhida descende desta conta (ciclo).', { pai_id: 'Criaria um ciclo' });
+      }
+      if (visitados.has(cursorId)) break; // plano já corrompido a montante: não trava aqui
+      visitados.add(cursorId);
+      const paiDeCursor: unknown = cursor.pai_id;
+      const proximoId: number | null = paiDeCursor === undefined || paiDeCursor === null || paiDeCursor === '' ? null : Number(paiDeCursor);
+      cursor = proximoId === null ? null : (await s.findOneWhere(r, { id: proximoId, empresa_id: empresaId }, tx)) ?? null;
+    }
+  }
+
+  if (before && tipo === 'analitica') {
+    const filhas = await s.countWhere(r, { empresa_id: empresaId, pai_id: idAtual }, tx);
+    if (filhas > 0) {
+      throw new HttpError(409, `A conta tem ${filhas} conta(s) filha(s) — uma conta com filhas não pode ser analítica.`, { tipo: 'Mantenha sintética enquanto tiver filhas' });
+    }
+  }
+}
+
+// ----------------------------------------------------------------------------
+/**
+ * LANÇAMENTO — classificação contábil coerente.
+ * A conta contábil (quando informada no formulário genérico) precisa existir no
+ * plano DA EMPRESA e ser ANALÍTICA: lançar em conta sintética é erro de
+ * escrituração. A conta e a natureza andam juntas (o banco confere os dois).
+ */
+async function validarClassificacaoLancamento(data: Row, empresaId: number, tx: Tx): Promise<void> {
+  const contaId = data.conta_contabil_id;
+  if (contaId === undefined || contaId === null || contaId === '') return;
+  const conta = await getStore().findOneWhere(getResource('plano_contas')!, { id: Number(contaId), empresa_id: empresaId }, tx);
+  if (!conta) throw new HttpError(404, 'Conta contábil não encontrada nesta empresa.', { conta_contabil_id: 'Conta inexistente' });
+  if (String(conta.tipo) !== 'analitica') {
+    throw new HttpError(422, `A conta "${String(conta.codigo)} ${String(conta.nome)}" é sintética — só conta analítica recebe lançamento.`, { conta_contabil_id: 'Precisa ser analítica' });
+  }
+}
+
+// ----------------------------------------------------------------------------
 // CLIENTES — regras PF/PJ do cadastro profissional.
 //
 // O modelo (pessoa + cnpj_cpf + razao_social/nome_fantasia) já existe desde a
@@ -1261,7 +1332,9 @@ export async function createRecord(r: Resource, body: unknown, actor: Actor, ctx
       if (r.key === 'ordens') await validarOrdemPayload(data, null);
       // Lançamento: taxa da operadora → líquido calculado antes de gravar
       if (r.key === 'lancamentos_financeiros') hookTaxaLancamento(data, null);
+      if (r.key === 'lancamentos_financeiros') await validarClassificacaoLancamento(data, escopo.empresaId, tx);
       if (r.key === 'categorias_financeiras') await validarCategoriaPai(r, data, null, tx);
+      if (r.key === 'plano_contas') await validarContaContabil(data, null, escopo.empresaId, tx);
       if (r.key === 'clientes') await validarRegrasCliente(data, null, Number(data.empresa_id ?? escopo.empresaId), { body, tx });
       // REPRESENTANTE 2.0 — código comercial, PF/PJ, documento único por
       // empresa, contato/endereço canônicos e status × desligamento.
@@ -1572,7 +1645,9 @@ export async function updateRecord(r: Resource, id: number, body: unknown, actor
       if (r.key === 'representantes') await validarRegrasRepresentante(s, data, before, Number(before.empresa_id ?? escopo.empresaId), { body, tx });
       // Lançamento: edição de valor/taxa recalcula o líquido
       if (r.key === 'lancamentos_financeiros') hookTaxaLancamento(data, before);
+      if (r.key === 'lancamentos_financeiros') await validarClassificacaoLancamento({ ...before, ...data }, escopo.empresaId, tx);
       if (r.key === 'categorias_financeiras') await validarCategoriaPai(r, data, before, tx);
+      if (r.key === 'plano_contas') await validarContaContabil(data, before, escopo.empresaId, tx);
       if (r.key === 'transferencias_financeiras') {
         const origem = Number(data.conta_origem_id ?? before.conta_origem_id ?? 0);
         const destino = Number(data.conta_destino_id ?? before.conta_destino_id ?? 0);
@@ -1868,6 +1943,14 @@ export async function deleteRecord(r: Resource, id: number, actor: Actor, escopo
           (await s.countWhere(getResource('recorrencias_financeiras')!, { centro_custo_id: id }, tx));
         if (emUso > 0) {
           throw new HttpError(409, `O centro de custo "${String(before.nome)}" está em uso por ${emUso} lançamento(s)/recorrência(s). Desative-o em vez de excluir.`);
+        }
+      }
+      if (r.key === 'plano_contas') {
+        const filhas = await s.countWhere(r, { empresa_id: escopo.empresaId, pai_id: id }, tx);
+        const emUso = await s.countWhere(getResource('lancamentos_financeiros')!, { conta_contabil_id: id }, tx);
+        if (filhas > 0 || emUso > 0) {
+          const motivo = filhas > 0 ? `${filhas} conta(s) filha(s)` : `${emUso} lançamento(s) classificado(s)`;
+          throw new HttpError(409, `A conta "${String(before.codigo)} ${String(before.nome)}" está em uso por ${motivo}. Desative-a em vez de excluir — a estrutura e o histórico contábil dependem dela.`);
         }
       }
       if (r.key === 'transferencias_financeiras' && String(before.status) !== 'cancelado') {
