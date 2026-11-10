@@ -92,6 +92,8 @@ test('Rate limit: buckets PERSISTENTES acumulam contagem corretamente', async ()
 
 test('assertProductionSecrets: não bloqueia fora de produção', async () => {
   const originalEnv = process.env.NODE_ENV;
+  const originalJwt = process.env.JWT_SECRET;
+  const originalAdmin = process.env.ADMIN_PASSWORD;
   process.env.NODE_ENV = 'test';
   delete process.env.JWT_SECRET;
   delete process.env.ADMIN_PASSWORD;
@@ -102,6 +104,13 @@ test('assertProductionSecrets: não bloqueia fora de produção', async () => {
   assert.doesNotThrow(() => assertProductionSecrets());
 
   process.env.NODE_ENV = originalEnv;
+  // Restaura o ambiente: `auth.ts` fixa o segredo na carga do módulo. Deletar
+  // JWT_SECRET sem restaurar faz o teste de `signToken` (mais adiante, mesmo
+  // arquivo) reassinar com um segredo efêmero diferente do já capturado.
+  if (originalJwt === undefined) delete process.env.JWT_SECRET;
+  else process.env.JWT_SECRET = originalJwt;
+  if (originalAdmin === undefined) delete process.env.ADMIN_PASSWORD;
+  else process.env.ADMIN_PASSWORD = originalAdmin;
 });
 
 test('normalizeEmail: trim e lowercase', async () => {

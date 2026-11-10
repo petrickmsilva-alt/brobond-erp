@@ -1,26 +1,26 @@
 {
-  "gerado_em": "2026-11-09T19:54:47.961Z",
+  "gerado_em": "2026-11-10T10:32:30.466Z",
   "fonte_de_verdade_do_schema": "db/schema.sql + db/migrations/*.sql (PostgreSQL); Prisma = bounded context do commerce",
   "migrations": {
-    "sql": 114,
-    "sql_com_conteudo": 114,
+    "sql": 115,
+    "sql_com_conteudo": 115,
     "prisma": 7
   },
   "tabelas": {
-    "total": 222,
+    "total": 223,
     "com_empresa_id": 202,
-    "sem_empresa_id": 20,
-    "fora_do_prisma": 211
+    "sem_empresa_id": 21,
+    "fora_do_prisma": 212
   },
-  "indices": 625,
-  "constraints": 427,
+  "indices": 627,
+  "constraints": 431,
   "recursos": {
-    "total": 184,
-    "com_tabela": 184,
+    "total": 185,
+    "com_tabela": 185,
     "multiempresa": 166,
-    "somente_leitura": 89,
-    "rbac_restrito": 89,
-    "cobertura_tenant_pct": 90.2
+    "somente_leitura": 90,
+    "rbac_restrito": 90,
+    "cobertura_tenant_pct": 89.7
   },
   "crm": [
     {
@@ -85,18 +85,18 @@
     }
   ],
   "modulos": {
-    "total": 152,
-    "navegaveis": 152,
+    "total": 153,
+    "navegaveis": 153,
     "planejados": 0,
     "areas": 11,
     "grupos": 35,
-    "com_recurso": 112
+    "com_recurso": 113
   },
   "rotas": {
-    "total": 503,
+    "total": 507,
     "por_metodo": {
-      "GET": 224,
-      "POST": 240,
+      "GET": 227,
+      "POST": 241,
       "PUT": 22,
       "DELETE": 14,
       "PATCH": 3
@@ -207,14 +207,14 @@
   },
   "testes": {
     "server": {
-      "arquivos": 315,
-      "casos": 2613
+      "arquivos": 319,
+      "casos": 2648
     },
     "client": {
       "arquivos": 140,
       "casos": 1170
     },
-    "total": 3783
+    "total": 3818
   },
   "integracoes": {
     "arquivos_modules": 81,
@@ -443,6 +443,7 @@
     "cron_job_locks",
     "cron_work_items",
     "empresas",
+    "fiscal_layouts",
     "grade_tamanhos",
     "grades",
     "impostos_ncm",
@@ -557,6 +558,7 @@
     "fin_periodos_travas_empresa",
     "fiscal_execucao_evidencias",
     "fiscal_execucoes",
+    "fiscal_layouts",
     "fiscal_obrigacao_entregas",
     "fiscal_obrigacoes",
     "fornecedor_contatos",
