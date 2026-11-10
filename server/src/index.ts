@@ -450,6 +450,7 @@ import {
   corrigirDivergenciaRota,
 } from './commerce/woocommerce/rotas';
 import { publicWoocommerceWebhookRouter } from './commerce/woocommerce/webhookRouter';
+import { listarCanaisComerciais } from './commerce/canaisComerciais';
 import { painelOmnichannelHandler, reconciliarOmnichannelHandler } from './commerce/omnichannel';
 import { logisticsRouter } from '../../modules/logistics/api/routes';
 import { publicLogisticsWebhookRouter } from '../../modules/logistics/api/webhookRouter';
@@ -1436,6 +1437,10 @@ app.post('/api/marketplace/loja/estoque', wrap(sincronizarEstoqueLoja));
 // O fluxo single-store acima (WOOCOMMERCE_*) continua valendo quando o modo
 // multi-loja está desligado; estas rotas são o painel e as ações POR LOJA.
 app.get('/api/commerce/woocommerce/status', wrap(statusLojas));
+// FASE 9.4 — visão unificada dos canais oficiais (RETAIL/WHOLESALE/REPRESENTATIVES).
+// Somente LEITURA: `?testar=1` faz o teste autenticado das lojas Woo; nada é
+// publicado/sincronizado e nenhum conector é ativado.
+app.get('/api/commerce/canais', wrap(listarCanaisComerciais));
 app.get('/api/commerce/woocommerce/lojas', wrap(painelLojas));
 app.get('/api/commerce/woocommerce/lojas/:store', wrap(painelLoja));
 app.get('/api/commerce/woocommerce/lojas/:store/reconciliacao', wrap(reconciliarLojaRota));

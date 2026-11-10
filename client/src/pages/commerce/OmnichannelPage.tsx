@@ -18,6 +18,7 @@ import { Alert, Badge, ConfirmacaoInline, EmptyState, PageHeader, Spinner, useTo
 import { DataTable, FilterBar, type DataTableColumn } from '../../components/ui-kit-negocios';
 import { useAuth } from '../../auth/AuthContext';
 import { dataHora, rotuloCanal } from './shared';
+import CanaisComerciaisPanel from './CanaisComerciaisPanel';
 
 type Divergencia = {
   id: number;
@@ -218,6 +219,9 @@ export default function CommerceOmnichannelPage() {
               </div>
             ))}
           </div>
+
+          {/* Canais comerciais oficiais (Fase 9.4) — identidade e conexão REAIS. */}
+          <CanaisComerciaisPanel />
 
           {/* Saúde por conector. */}
           <section className="rounded-xl border border-line bg-surface p-4">
