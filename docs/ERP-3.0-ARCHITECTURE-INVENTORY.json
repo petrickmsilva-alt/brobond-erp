@@ -1,26 +1,26 @@
 {
-  "gerado_em": "2026-11-11T13:23:07.565Z",
+  "gerado_em": "2026-11-11T18:59:18.316Z",
   "fonte_de_verdade_do_schema": "db/schema.sql + db/migrations/*.sql (PostgreSQL); Prisma = bounded context do commerce",
   "migrations": {
-    "sql": 116,
-    "sql_com_conteudo": 116,
+    "sql": 118,
+    "sql_com_conteudo": 118,
     "prisma": 7
   },
   "tabelas": {
-    "total": 223,
-    "com_empresa_id": 202,
+    "total": 227,
+    "com_empresa_id": 206,
     "sem_empresa_id": 21,
-    "fora_do_prisma": 212
+    "fora_do_prisma": 216
   },
-  "indices": 628,
-  "constraints": 431,
+  "indices": 635,
+  "constraints": 441,
   "recursos": {
-    "total": 185,
-    "com_tabela": 185,
-    "multiempresa": 166,
-    "somente_leitura": 90,
-    "rbac_restrito": 90,
-    "cobertura_tenant_pct": 89.7
+    "total": 189,
+    "com_tabela": 189,
+    "multiempresa": 170,
+    "somente_leitura": 91,
+    "rbac_restrito": 93,
+    "cobertura_tenant_pct": 89.9
   },
   "crm": [
     {
@@ -93,10 +93,10 @@
     "com_recurso": 112
   },
   "rotas": {
-    "total": 503,
+    "total": 505,
     "por_metodo": {
       "GET": 223,
-      "POST": 241,
+      "POST": 243,
       "PUT": 22,
       "DELETE": 14,
       "PATCH": 3
@@ -207,14 +207,14 @@
   },
   "testes": {
     "server": {
-      "arquivos": 317,
-      "casos": 2635
+      "arquivos": 319,
+      "casos": 2654
     },
     "client": {
       "arquivos": 130,
       "casos": 1100
     },
-    "total": 3735
+    "total": 3754
   },
   "integracoes": {
     "arquivos_modules": 81,
@@ -399,6 +399,26 @@
     {
       "nivel": "AVISO",
       "regra": "TENANT_SEM_TESTE",
+      "mensagem": "O recurso \"condicoes_pagamento\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TENANT_SEM_TESTE",
+      "mensagem": "O recurso \"produto_precos_condicao\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TENANT_SEM_TESTE",
+      "mensagem": "O recurso \"politica_preco_minimo\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TENANT_SEM_TESTE",
+      "mensagem": "O recurso \"precificacao_memoria\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TENANT_SEM_TESTE",
       "mensagem": "O recurso \"devolucoes_fornecedor\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
     },
     {
@@ -493,6 +513,7 @@
     "compra_recebimento_itens",
     "compra_recebimentos",
     "compras",
+    "condicoes_pagamento",
     "configuracoes",
     "contas_financeiras",
     "cores",
@@ -626,8 +647,10 @@
     "pdv_pagamentos",
     "plano_contas",
     "planos_comissao",
+    "politica_preco_minimo",
     "politicas_comerciais",
     "portal_acessos",
+    "precificacao_memoria",
     "print_agent_nonces",
     "print_agents",
     "print_jobs",
@@ -636,6 +659,7 @@
     "producao_recursos",
     "produto_composicao",
     "produto_fornecedor_skus",
+    "produto_precos_condicao",
     "proposta_eventos",
     "proposta_itens",
     "propostas",

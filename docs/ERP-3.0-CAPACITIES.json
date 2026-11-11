@@ -196,6 +196,42 @@
       "rbac": "gerente"
     },
     {
+      "id": "cap-condicoes_pagamento",
+      "label": "Condições de pagamento",
+      "tipo": "submodulo",
+      "recurso": "condicoes_pagamento",
+      "tabela": "condicoes_pagamento",
+      "menu": false,
+      "justificativa": "Cadastro estrutural de condições de pagamento (pix/boleto/cartão). Consumido pelo motor de preços por condição; sem superfície de produto própria."
+    },
+    {
+      "id": "cap-produto_precos_condicao",
+      "label": "Preços por condição de pagamento",
+      "tipo": "submodulo",
+      "recurso": "produto_precos_condicao",
+      "tabela": "produto_precos_condicao",
+      "menu": false,
+      "justificativa": "Preço oficial do produto por canal e condição de pagamento. Alimentado pela carga da política comercial; consumido pela simulação/rentabilidade."
+    },
+    {
+      "id": "cap-politica_preco_minimo",
+      "label": "Preço mínimo e alçada",
+      "tipo": "submodulo",
+      "recurso": "politica_preco_minimo",
+      "tabela": "politica_preco_minimo",
+      "menu": false,
+      "justificativa": "Parâmetro de bloqueio por empresa (margem mínima/desconto máximo), desligado por padrão. Consumido pelo motor de preços."
+    },
+    {
+      "id": "cap-precificacao_memoria",
+      "label": "Memória de precificação",
+      "tipo": "submodulo",
+      "recurso": "precificacao_memoria",
+      "tabela": "precificacao_memoria",
+      "menu": false,
+      "justificativa": "Trilha append-only da origem de cada preço aplicado (auditoria). Sem superfície de produto própria."
+    },
+    {
       "id": "territorios",
       "label": "Territórios",
       "tipo": "modulo",

@@ -509,6 +509,9 @@ export const RELACOES_FK: RelacaoFkDeclarada[] = [
   // OMS (0109): a trilha de estado do pedido aponta para a venda. CASCADE no
   // banco, mas é histórico — a política abaixo protege a exclusão.
   { alvo: 'vendas', tabela: 'vendas_status_historico', colunas: ['venda_id'], acao: 'CASCADE' },
+  // Commerce Engine (0118): a memória de precificação guarda a venda em que o
+  // preço foi aplicado (SET NULL — o cálculo sobrevive ao cancelamento).
+  { alvo: 'vendas', tabela: 'precificacao_memoria', colunas: ['venda_id'], acao: 'SET_NULL' },
 
   // compras — todas as FKs de entrada
   { alvo: 'compras', tabela: 'itens_compra', colunas: ['compra_id'], acao: 'CASCADE' },

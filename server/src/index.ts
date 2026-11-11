@@ -70,6 +70,7 @@ import { listarEventosTerceirizacao, registrarEventoTerceirizacao } from './terc
 import { relatorio } from './relatorios';
 import { exportarRecurso } from './export';
 import { confirmarImportacao, modeloImportacao, previewImportacao } from './importacao';
+import { confirmarCarga, previewCarga } from './cargaPoliticaComercial';
 import {
   aplicarPrecoFicha,
   cancelarOrdem,
@@ -1524,6 +1525,10 @@ app.get('/api/relatorios/:nome', wrap(async (req, res) => relatorio(req, res, re
 app.post('/api/importar/preview', wrap(previewImportacao));
 app.post('/api/importar/confirmar', wrap(confirmarImportacao));
 app.get('/api/importar/modelo', wrap(modeloImportacao));
+// Carga oficial da política comercial (planilha-base do cadastro mestre).
+// Prévia antes de gravar; a confirmação RE-LÊ o arquivo e é idempotente.
+app.post('/api/carga/politica-comercial/preview', wrap(previewCarga));
+app.post('/api/carga/politica-comercial/confirmar', wrap(confirmarCarga));
 app.get('/api/:resource/export', wrap(async (req, res) => exportarRecurso(req, res, req.params.resource)));
 
 // Fase 6 — backup (admin)

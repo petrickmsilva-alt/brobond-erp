@@ -103,3 +103,22 @@ O script `test-pg-gate.mjs` recusa banco reutilizado (`relações públicas != 0
   estados e quebrava quando já havia linha `BLOQUEADO`/`OBSOLETO` (o gate PROD-DB-01 pega isso).
   Mesmo defeito que a 0094 documentou para `commerce_outbox_tipo_ck`. Ao adicionar estado novo,
   atualize o CHECK em `schema.sql`, na migração que o criou **e** em toda migração que o reinstala.
+
+## Commerce Engine — precificação (migration 0118)
+
+- **A planilha é FONTE DE CADASTRO e de preços OFICIAIS de ENTRADA; o ERP governa o
+  cálculo.** O importador (`server/src/cargaPoliticaComercial.ts`) grava os preços
+  "à vista/boleto/cartão" em `produto_precos_condicao` como DADO, nunca fórmula; a BASE
+  do canal (`preco_atacado`/`preco_venda`) só é preenchida quando está ZERADA (nunca
+  sobrescreve preço já definido). Estoque NÃO é importado.
+- `server/src/commerce/motorPrecos.ts` **orquestra** os serviços canônicos
+  (`listasPreco.precoDe`, `politicasComerciais`) — não duplica tabelas nem regras. Ordem
+  de resolução: base do canal → lista vigente → preço por condição → desconto da política.
+  Preço ausente é `null`, nunca chute.
+- `politica_preco_minimo.bloqueio_ativo` nasce **DESLIGADO**: sem bloqueio ligado, margem
+  e desconto são apenas INFORMADOS; nenhum limite é inventado. `precificacao_memoria` é
+  append-only (grava a origem do cálculo para auditoria).
+- O `regras` da memória é JSONB e precisa de campo `type: 'json'` no recurso, senão o
+  memdb (e o PG) não serializam o objeto.
+- Auditoria de recurso: todo recurso novo exige linha em `docs/architecture/RBAC-MATRIX.md`
+  (o teste `rbac-matrix` trava a contagem e o cabeçalho "(N recursos)").
