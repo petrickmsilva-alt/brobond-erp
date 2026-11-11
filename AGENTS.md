@@ -112,12 +112,27 @@ O script `test-pg-gate.mjs` recusa banco reutilizado (`relações públicas != 0
   do canal (`preco_atacado`/`preco_venda`) só é preenchida quando está ZERADA (nunca
   sobrescreve preço já definido). Estoque NÃO é importado.
 - `server/src/commerce/motorPrecos.ts` **orquestra** os serviços canônicos
-  (`listasPreco.precoDe`, `politicasComerciais`) — não duplica tabelas nem regras. Ordem
-  de resolução: base do canal → lista vigente → preço por condição → desconto da política.
-  Preço ausente é `null`, nunca chute.
+  (`listasPreco.precoDe`, `politicasComerciais`) — não duplica tabelas nem regras.
+  Ordem de resolução: **preço OFICIAL por condição (FINAL) → lista vigente → base do
+  canal**, e o desconto da política só incide onde é autorizado. Preço ausente é
+  `null`, nunca chute; canal ATACADO sem `preco_atacado` NÃO cai para o varejo.
+- **Cumulatividade é EXPLÍCITA (0119):** o preço da condição é FINAL por padrão. Um
+  desconto adicional só incide com `politicas_comerciais.autoriza_cumulativo` OU uma
+  regra de `politica_comercial_descontos_cumulativos` que case (escopo/canal/cliente/
+  condição/prioridade/limite). Nada de "desconto sobre desconto" silencioso.
+- **Preço por condição é VERSIONADO (0119):** `produto_precos_condicao` tem vigência
+  (`vigencia_inicio`/`vigencia_fim`) e uma única linha vigente (`vigencia_fim IS NULL`)
+  por (empresa, produto, canal, condição). Reimportar com valor diferente FECHA a
+  vigência anterior (vira histórico) e abre a nova, registrando em
+  `produto_precos_condicao_historico`; reimportar o mesmo valor não versiona (idempotência).
+  A memória de preço é histórico: FK `produto_id`/`empresa_id` é RESTRICT (produto se
+  desativa, não se exclui).
 - `politica_preco_minimo.bloqueio_ativo` nasce **DESLIGADO**: sem bloqueio ligado, margem
   e desconto são apenas INFORMADOS; nenhum limite é inventado. `precificacao_memoria` é
   append-only (grava a origem do cálculo para auditoria).
+- Ordem de declaração em `db/schema.sql` importa: `empresas` só nasce na linha ~1410,
+  então tabela nova com `REFERENCES empresas(id)` precisa entrar DEPOIS dela (bloco
+  Commerce Engine, ~2440) — senão o bootstrap aborta e a cadeia versionada inteira falha.
 - O `regras` da memória é JSONB e precisa de campo `type: 'json'` no recurso, senão o
   memdb (e o PG) não serializam o objeto.
 - Auditoria de recurso: todo recurso novo exige linha em `docs/architecture/RBAC-MATRIX.md`

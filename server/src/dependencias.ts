@@ -550,6 +550,13 @@ export const RELACOES_FK: RelacaoFkDeclarada[] = [
   { alvo: 'produtos', tabela: 'produto_abc', colunas: ['produto_id'], acao: 'CASCADE' },
   { alvo: 'produtos', tabela: 'catalogo_eventos', colunas: ['produto_id'], acao: 'SET_NULL' },
   { alvo: 'produtos', tabela: 'sale_items', colunas: ['product_id'], acao: 'SET_NULL' },
+  // Commerce Engine (0118/0119): o preço OFICIAL por condição e a MEMÓRIA de
+  // precificação são dados comerciais/histórico do produto — apagar o produto
+  // não pode apagá-los em silêncio (RESTRICT; o produto se desativa).
+  { alvo: 'produtos', tabela: 'produto_precos_condicao', colunas: ['produto_id'], acao: 'RESTRICT' },
+  { alvo: 'produtos', tabela: 'produto_precos_condicao_historico', colunas: ['produto_id'], acao: 'RESTRICT' },
+  { alvo: 'produtos', tabela: 'precificacao_memoria', colunas: ['produto_id'], acao: 'RESTRICT' },
+  { alvo: 'produtos', tabela: 'politica_comercial_descontos_cumulativos', colunas: ['produto_id'], acao: 'CASCADE' },
 
   // fornecedores / categorias / coleções / grades / medidas
   { alvo: 'fornecedores', tabela: 'fornecedor_contatos', colunas: ['fornecedor_id'], acao: 'CASCADE' },
@@ -606,6 +613,9 @@ export const RELACOES_FK: RelacaoFkDeclarada[] = [
   { alvo: 'empresas', tabela: 'empresa_fiscal_config', colunas: ['empresa_id'], acao: 'CASCADE' },
   { alvo: 'empresas', tabela: 'regras_fiscais', colunas: ['empresa_id'], acao: 'CASCADE' },
   { alvo: 'empresas', tabela: 'auditoria', colunas: ['empresa_id'], acao: 'NO_ACTION' },
+  // Commerce Engine (0119): a MEMÓRIA de precificação é histórico da empresa —
+  // apagar a empresa não pode apagá-la em silêncio (RESTRICT).
+  { alvo: 'empresas', tabela: 'precificacao_memoria', colunas: ['empresa_id'], acao: 'RESTRICT' },
 ];
 
 /** Código `confdeltype` do PostgreSQL → ação referencial. */

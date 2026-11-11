@@ -678,11 +678,16 @@ export async function confirmarCarga(req: Request, res: Response) {
 // ---------------------------------------------------------------------------
 async function executarCarga(plano: Plano, actor: { id?: number; name?: string }, escopo: Escopo, tx: Tx) {
   const s = getStore();
+  // Autoria: só grava o id se o usuário existir de fato. Em banco novo (ou no
+  // modo demonstração) o ator é sintético e uma FK inválida rejeitaria TODA a
+  // gravação de preço — preferimos a autoria ausente à carga inteira perdida.
+  const autorId = actor.id != null && (await s.get(RESOURCES.usuarios, Number(actor.id), tx)) ? Number(actor.id) : null;
   let produtos = 0;
   let variacoes = 0;
   let ignorados = 0;
   let precosGravados = 0;
   let precosIgnorados = 0;
+  let precosVersionados = 0;
   let basePrecoDefinida = 0;
   const conflitosPreco: string[] = [];
   const rejeitados: { linha: number; motivo: string }[] = [];
@@ -752,29 +757,54 @@ async function executarCarga(plano: Plano, actor: { id?: number; name?: string }
 
   /**
    * Grava os preços OFICIAIS (dados de ENTRADA) do item em
-   * `produto_precos_condicao`. Idempotente: reimportar ATUALIZA a linha do
-   * mesmo (produto, canal, condição) — nunca duplica. Divergência de valor
-   * vira registro no relatório (transparência), não descarte silencioso.
+   * `produto_precos_condicao`, VERSIONANDO o preço anterior — nunca o apagando.
+   *
+   *   • sem preço vigente → cria a linha vigente (`vigencia_fim IS NULL`);
+   *   • valor igual       → nada muda (idempotência: reimportar não versiona);
+   *   • valor diferente   → FECHA a vigência anterior e abre uma nova; a linha
+   *     fechada permanece como HISTÓRICO, e a mudança entra em
+   *     `produto_precos_condicao_historico` (auditável).
+   *
+   * Divergência de valor vira registro no relatório (transparência), não
+   * descarte silencioso.
    */
   async function gravarPrecos(produtoId: number, it: ItemNormalizado): Promise<void> {
+    const hoje = new Date().toISOString().slice(0, 10);
     for (const preco of it.precos) {
-      const existente = await s.findOneWhere(
+      const valor = round2(preco.preco);
+      const { rows } = await s.list(
         RESOURCES.produto_precos_condicao,
-        { empresa_id: escopo.empresaId, produto_id: produtoId, canal: preco.canal, condicao: preco.condicao },
+        { page: 1, pageSize: 500, filter: { empresa_id: escopo.empresaId, produto_id: produtoId, canal: preco.canal, condicao: preco.condicao } },
         tx
       );
-      const valor = round2(preco.preco);
-      if (!existente) {
+      const vigente = rows.find((r) => r.vigencia_fim === null || r.vigencia_fim === undefined) ?? null;
+
+      if (!vigente) {
         await s.insert(RESOURCES.produto_precos_condicao, {
-          empresa_id: escopo.empresaId, produto_id: produtoId, canal: preco.canal, condicao: preco.condicao, preco: valor, origem: 'planilha',
+          empresa_id: escopo.empresaId, produto_id: produtoId, canal: preco.canal, condicao: preco.condicao, preco: valor,
+          origem: 'planilha', vigencia_inicio: hoje, vigencia_fim: null, criado_por: autorId, atualizado_por: autorId,
+        }, tx);
+        await s.insert(RESOURCES.produto_precos_condicao_historico, {
+          empresa_id: escopo.empresaId, produto_id: produtoId, canal: preco.canal, condicao: preco.condicao,
+          preco_anterior: null, preco_novo: valor, vigencia_inicio: hoje, vigencia_fim: null, origem: 'planilha', usuario_id: autorId,
         }, tx);
         precosGravados++;
-      } else if (round2(Number(existente.preco)) !== valor) {
-        await s.update(RESOURCES.produto_precos_condicao, Number(existente.id), { preco: valor, origem: 'planilha' }, tx);
-        precosGravados++;
-        conflitosPreco.push(`${it.codigo_industria}|${preco.canal}|${preco.condicao}: ${Number(existente.preco)} → ${valor}`);
-      } else {
+      } else if (round2(Number(vigente.preco)) === valor) {
         precosIgnorados++;
+      } else {
+        // Fecha a vigência anterior (histórico) e abre a nova. Um dia de
+        // sobreposição é aceitável; o motor resolve pela vigência mais recente.
+        await s.update(RESOURCES.produto_precos_condicao, Number(vigente.id), { vigencia_fim: hoje, atualizado_por: autorId }, tx);
+        await s.insert(RESOURCES.produto_precos_condicao, {
+          empresa_id: escopo.empresaId, produto_id: produtoId, canal: preco.canal, condicao: preco.condicao, preco: valor,
+          origem: 'planilha', vigencia_inicio: hoje, vigencia_fim: null, criado_por: autorId, atualizado_por: autorId,
+        }, tx);
+        await s.insert(RESOURCES.produto_precos_condicao_historico, {
+          empresa_id: escopo.empresaId, produto_id: produtoId, canal: preco.canal, condicao: preco.condicao,
+          preco_anterior: round2(Number(vigente.preco)), preco_novo: valor, vigencia_inicio: hoje, vigencia_fim: null, origem: 'planilha', usuario_id: autorId,
+        }, tx);
+        precosVersionados++;
+        conflitosPreco.push(`${it.codigo_industria}|${preco.canal}|${preco.condicao}: ${Number(vigente.preco)} → ${valor}`);
       }
     }
   }
@@ -897,8 +927,8 @@ async function executarCarga(plano: Plano, actor: { id?: number; name?: string }
       acao: 'importar',
       recurso: 'produtos',
       registro_id: null,
-      descricao: `Carga da política comercial: ${produtos} produto(s)-pai, ${variacoes} variação(ões), ${ignorados} ignorado(s), ${precosGravados} preço(s) oficial(is) gravado(s), ${rejeitados.length} rejeitado(s). Nenhuma quantidade física importada; nenhuma margem/fórmula do ERP sobrescrita.`,
-      dados: { produtos, variacoes, ignorados, precos_gravados: precosGravados, precos_ignorados: precosIgnorados, base_preco_definida: basePrecoDefinida, conflitos_preco: conflitosPreco.slice(0, 100), rejeitados: rejeitados.slice(0, 100), ids: ids.slice(0, 100) },
+      descricao: `Carga da política comercial: ${produtos} produto(s)-pai, ${variacoes} variação(ões), ${ignorados} ignorado(s), ${precosGravados} preço(s) oficial(is) gravado(s), ${precosVersionados} preço(s) versionado(s), ${rejeitados.length} rejeitado(s). Nenhuma quantidade física importada; nenhuma margem/fórmula do ERP sobrescrita.`,
+      dados: { produtos, variacoes, ignorados, precos_gravados: precosGravados, precos_ignorados: precosIgnorados, precos_versionados: precosVersionados, base_preco_definida: basePrecoDefinida, conflitos_preco: conflitosPreco.slice(0, 100), rejeitados: rejeitados.slice(0, 100), ids: ids.slice(0, 100) },
       empresa_id: empresaDoAtorAudit(actor),
     },
     tx
@@ -910,6 +940,7 @@ async function executarCarga(plano: Plano, actor: { id?: number; name?: string }
     ignorados,
     precos_gravados: precosGravados,
     precos_ignorados: precosIgnorados,
+    precos_versionados: precosVersionados,
     base_preco_definida: basePrecoDefinida,
     conflitos_preco: conflitosPreco,
     rejeitados,

@@ -252,6 +252,40 @@ test('reimportar o mesmo arquivo não duplica nada (idempotência)', async () =>
   assert.equal(condicoes, 4, 'as condições de pagamento também são idempotentes');
 });
 
+test('mudar o preço de uma condição VERSIONA (fecha a vigência e registra histórico), nunca apaga', async () => {
+  const s = getStore();
+  const variacao = await s.findOneWhere(RESOURCES.produtos, { sku: 'CB2B010', empresa_id: 1 });
+  assert.ok(variacao, 'a variação CB2B010 existe da carga anterior');
+
+  // Nova versão do arquivo com o boleto 30/60 de 54,90 → 59,90.
+  const linhas = LINHAS_BASE.map((l) =>
+    l['Código Industria'] === 'CB2B010' ? { ...l, 'Atacado Boleto 30/60': 59.9 } : l
+  );
+  const conteudo = await xlsxBase64(linhas);
+  const resp = await request(app()).post('/api/carga/politica-comercial/confirmar').send({ conteudo, nome: 'x.xlsx' });
+  assert.equal(resp.status, 200, JSON.stringify(resp.body));
+  assert.equal(resp.body.produtos, 0, 'nenhum produto novo');
+  assert.equal(resp.body.precos_versionados, 1, 'um preço versionado');
+  assert.equal(resp.body.precos_gravados, 0, 'nenhuma linha nova "vigente" contada como gravação simples');
+
+  // Vigente agora é o preço novo.
+  const vigente = await s.findOneWhere(RESOURCES.produto_precos_condicao, { empresa_id: 1, produto_id: Number(variacao!.id), canal: 'atacado', condicao: 'boleto_30_60', vigencia_fim: null });
+  assert.ok(vigente, 'existe linha vigente');
+  assert.equal(Number(vigente!.preco), 59.9);
+
+  // A linha antiga NÃO foi apagada: virou histórico (vigência fechada).
+  const { rows } = await s.list(RESOURCES.produto_precos_condicao, { page: 1, pageSize: 50, filter: { empresa_id: 1, produto_id: Number(variacao!.id), canal: 'atacado', condicao: 'boleto_30_60' } });
+  assert.equal(rows.length, 2, 'histórico + vigente coexistem (nada apagado)');
+  const antiga = rows.find((r) => r.vigencia_fim !== null && r.vigencia_fim !== undefined);
+  assert.ok(antiga, 'a linha anterior tem vigência fechada');
+  assert.equal(Number(antiga!.preco), 54.9);
+
+  // E a mudança está auditada em `produto_precos_condicao_historico`.
+  const { rows: hist } = await s.list(RESOURCES.produto_precos_condicao_historico, { page: 1, pageSize: 50, filter: { empresa_id: 1, produto_id: Number(variacao!.id), canal: 'atacado', condicao: 'boleto_30_60' } });
+  const mudanca = hist.find((h) => Number(h.preco_anterior) === 54.9 && Number(h.preco_novo) === 59.9);
+  assert.ok(mudanca, 'a mudança 54,90 → 59,90 entrou no histórico');
+});
+
 test('status inválido é reportado sem descartar a linha em silêncio', async () => {
   const conteudo = await xlsxBase64([
     { Item: '9001', 'Cód Categoria': 'X', MARCA: 'BROBOND', 'CATEGORIA MASTER': 'TESTE STATUS', COLEÇÃO: 'C', 'VARIANTE COR': 'AZUL', 'DESCRIÇÃO': 'PRODUTO X AZUL', Tamanho: 'U', 'Código Industria': 'TSK001', STATUS: 'PENDENTE' },

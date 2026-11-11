@@ -1095,6 +1095,7 @@ CREATE TABLE IF NOT EXISTS politicas_comerciais (
   multiplo_qtd INTEGER NOT NULL DEFAULT 1 CHECK (multiplo_qtd >= 1),
   reserva_horas INTEGER NOT NULL DEFAULT 0 CHECK (reserva_horas >= 0),
   ativo BOOLEAN NOT NULL DEFAULT TRUE,
+  autoriza_cumulativo BOOLEAN NOT NULL DEFAULT FALSE,
   criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
   atualizado_em TIMESTAMPTZ
 );
@@ -2415,20 +2416,79 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_condicoes_pagamento_empresa_codigo
 CREATE TABLE IF NOT EXISTS produto_precos_condicao (
   id SERIAL PRIMARY KEY,
   empresa_id INTEGER NOT NULL REFERENCES empresas(id) ON DELETE CASCADE,
-  produto_id INTEGER NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
+  produto_id INTEGER NOT NULL REFERENCES produtos(id) ON DELETE RESTRICT,
   canal TEXT NOT NULL,
   condicao TEXT NOT NULL,
   preco NUMERIC(12,2) NOT NULL,
   origem TEXT NOT NULL DEFAULT 'planilha',
+  vigencia_inicio DATE NOT NULL DEFAULT CURRENT_DATE,
+  vigencia_fim DATE,
+  criado_por INTEGER REFERENCES usuarios(id),
+  atualizado_por INTEGER REFERENCES usuarios(id),
   criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
   atualizado_em TIMESTAMPTZ,
   CONSTRAINT produto_precos_condicao_canal_ck CHECK (canal IN ('atacado', 'varejo')),
-  CONSTRAINT produto_precos_condicao_preco_ck CHECK (preco >= 0)
+  CONSTRAINT produto_precos_condicao_preco_ck CHECK (preco >= 0),
+  CONSTRAINT produto_precos_condicao_vigencia_ck CHECK (vigencia_fim IS NULL OR vigencia_fim >= vigencia_inicio),
+  CONSTRAINT fk_produto_precos_condicao_condicao FOREIGN KEY (empresa_id, condicao)
+    REFERENCES condicoes_pagamento (empresa_id, codigo)
 );
-CREATE UNIQUE INDEX IF NOT EXISTS uq_produto_precos_condicao
-  ON produto_precos_condicao (empresa_id, produto_id, canal, condicao);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_produto_precos_condicao_vigente
+  ON produto_precos_condicao (empresa_id, produto_id, canal, condicao)
+  WHERE vigencia_fim IS NULL;
 CREATE INDEX IF NOT EXISTS produto_precos_condicao_produto_idx
   ON produto_precos_condicao (empresa_id, produto_id);
+
+CREATE TABLE IF NOT EXISTS produto_precos_condicao_historico (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL REFERENCES empresas(id) ON DELETE CASCADE,
+  produto_id INTEGER NOT NULL REFERENCES produtos(id) ON DELETE RESTRICT,
+  canal TEXT NOT NULL,
+  condicao TEXT NOT NULL,
+  preco_anterior NUMERIC(12,2),
+  preco_novo NUMERIC(12,2),
+  vigencia_inicio DATE,
+  vigencia_fim DATE,
+  origem TEXT NOT NULL DEFAULT 'planilha',
+  usuario_id INTEGER REFERENCES usuarios(id),
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT produto_precos_condicao_historico_canal_ck CHECK (canal IN ('atacado', 'varejo'))
+);
+CREATE INDEX IF NOT EXISTS produto_precos_condicao_historico_idx
+  ON produto_precos_condicao_historico (empresa_id, produto_id, canal, condicao, criado_em DESC);
+
+-- COMMERCE ENGINE (0119): desconto ADICIONAL sobre um preço OFICIAL por condição
+-- só incide com autorização explícita (`politicas_comerciais.autoriza_cumulativo`
+-- OU uma regra aqui). Identifica escopo, canal, cliente, condição, prioridade e
+-- limite — é a ÚNICA forma de cumular. Espelho de
+-- db/migrations/0119_commerce_engine_preco_integridade.sql.
+CREATE TABLE IF NOT EXISTS politica_comercial_descontos_cumulativos (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL REFERENCES empresas(id) ON DELETE CASCADE,
+  nome TEXT NOT NULL,
+  escopo TEXT NOT NULL DEFAULT 'geral',
+  canal TEXT,
+  condicao TEXT,
+  cliente_id INTEGER REFERENCES clientes(id) ON DELETE CASCADE,
+  produto_id INTEGER REFERENCES produtos(id) ON DELETE CASCADE,
+  desconto_pct NUMERIC(5,2) NOT NULL DEFAULT 0,
+  prioridade INTEGER NOT NULL DEFAULT 0,
+  inicio_em DATE,
+  fim_em DATE,
+  ativo BOOLEAN NOT NULL DEFAULT TRUE,
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  atualizado_em TIMESTAMPTZ,
+  CONSTRAINT politica_comercial_descontos_cumulativos_escopo_ck
+    CHECK (escopo IN ('geral', 'canal', 'condicao', 'cliente', 'produto')),
+  CONSTRAINT politica_comercial_descontos_cumulativos_canal_ck
+    CHECK (canal IS NULL OR canal IN ('varejo', 'atacado', 'todos')),
+  CONSTRAINT politica_comercial_descontos_cumulativos_desconto_ck
+    CHECK (desconto_pct BETWEEN 0 AND 100),
+  CONSTRAINT politica_comercial_descontos_cumulativos_vigencia_ck
+    CHECK (inicio_em IS NULL OR fim_em IS NULL OR fim_em >= inicio_em)
+);
+CREATE INDEX IF NOT EXISTS politica_comercial_descontos_cumulativos_idx
+  ON politica_comercial_descontos_cumulativos (empresa_id, escopo, canal);
 
 CREATE TABLE IF NOT EXISTS politica_preco_minimo (
   id SERIAL PRIMARY KEY,
@@ -2446,11 +2506,11 @@ CREATE TABLE IF NOT EXISTS politica_preco_minimo (
 
 CREATE TABLE IF NOT EXISTS precificacao_memoria (
   id SERIAL PRIMARY KEY,
-  empresa_id INTEGER NOT NULL REFERENCES empresas(id) ON DELETE CASCADE,
+  empresa_id INTEGER NOT NULL REFERENCES empresas(id) ON DELETE RESTRICT,
   canal TEXT NOT NULL,
   cliente_id INTEGER REFERENCES clientes(id) ON DELETE SET NULL,
   venda_id INTEGER REFERENCES vendas(id) ON DELETE SET NULL,
-  produto_id INTEGER NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
+  produto_id INTEGER NOT NULL REFERENCES produtos(id) ON DELETE RESTRICT,
   quantidade INTEGER NOT NULL DEFAULT 1,
   condicao TEXT,
   preco_lista NUMERIC(12,2) NOT NULL DEFAULT 0,
