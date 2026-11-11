@@ -14,16 +14,18 @@ function probe(area: string, fn: () => void, detail: string) {
 }
 const engine = read('modules/payments/orchestration/payment-orchestrator.ts');
 const sql = read('db/migrations/0069_payment_engine.sql');
-const checkout = read('server/src/commerce/vitrine.ts');
 const api = read('modules/payments/api/routes.ts');
 probe(
   'Payment Engine',
   () => {
     assert.ok(engine.includes('class PaymentOrchestrator'));
-    assert.ok(checkout.includes('paymentEngine.createForOrder'));
-    assert.doesNotMatch(checkout, /from ['"][^'"]*(?:mercado-pago|pagbank|stripe|gateway)/i);
+    // A loja nativa (único checkout próprio) foi retirada (ADR-0007): a criação
+    // de intenção continua no engine, com valor derivado da venda canônica.
+    assert.ok(engine.includes('createForOrder'));
+    assert.match(engine, /const amount = minorUnits\(Number\(order\.total\)\)/);
+    assert.doesNotMatch(engine, /from ['"][^'"]*(?:mercado-pago|pagbank|stripe)/i);
   },
-  'Checkout → engine → router/registry → adapter'
+  'Engine → router/registry → adapter (loja nativa retirada — ADR-0007)'
 );
 probe(
   'Providers',

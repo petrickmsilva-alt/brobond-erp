@@ -3,14 +3,14 @@
 //
 // Uma linha da fila × produto × canal com versão, tentativas, erro real do
 // canal, preço vigente e metadados. Ações: editar (página própria),
-// reprocessar (retry manual) e despublicar (vitrine própria, com confirmação
-// inline — ZERO MODAL).
+// reprocessar (retry manual). A despublicação da vitrine própria foi retirada
+// com a loja nativa (ADR-0007); canais externos cancelam o anúncio no canal.
 // ============================================================================
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, Pencil, RefreshCw, Rocket, Store } from 'lucide-react';
 import { apiFetch, ApiError } from '../../lib/api';
-import { Alert, Badge, ConfirmacaoInline, PageHeader, useToast } from '../../components/ui';
+import { Alert, Badge, PageHeader, useToast } from '../../components/ui';
 import { PageLoading } from '../../components/ui-kit-negocios';
 import { CANAIS_PUBLICACAO, EstadoBadge, ROTULO_PUBLICACAO, TONE_PUBLICACAO, dataHora, grana, rotuloCanal } from './shared';
 
@@ -28,7 +28,7 @@ type Detalhe = {
     publicado_em: string | null;
     atualizado_em: string | null;
   };
-  produto: { id: number; sku: string; nome: string; preco_base: number; na_vitrine: boolean };
+  produto: { id: number; sku: string; nome: string; preco_base: number };
   preco: {
     preco: number;
     promo: number | null;
@@ -47,7 +47,6 @@ export default function CommercePublicacaoDetalhePage() {
   const [erro, setErro] = useState('');
   const [detalhe, setDetalhe] = useState<Detalhe | null>(null);
   const [ocupado, setOcupado] = useState(false);
-  const [confirmandoDespublicar, setConfirmandoDespublicar] = useState(false);
 
   const carregar = useCallback(async () => {
     setCarregando(true);
@@ -80,25 +79,6 @@ export default function CommercePublicacaoDetalhePage() {
     }
   };
 
-  const despublicar = async () => {
-    if (!detalhe) return;
-    setOcupado(true);
-    setErro('');
-    try {
-      await apiFetch(`/commerce/produtos/${detalhe.produto.id}/despublicar`, {
-        method: 'POST',
-        body: JSON.stringify({ canal: detalhe.publicacao.canal }),
-      });
-      toast.success('Produto despublicado da vitrine própria.');
-      setConfirmandoDespublicar(false);
-      await carregar();
-    } catch (e) {
-      setErro(e instanceof ApiError ? e.message : 'Falha ao despublicar.');
-    } finally {
-      setOcupado(false);
-    }
-  };
-
   if (carregando) return <PageLoading label="Carregando publicação…" />;
   if (!detalhe) {
     return (
@@ -112,7 +92,6 @@ export default function CommercePublicacaoDetalhePage() {
   const { publicacao, produto, preco, metadados } = detalhe;
   const rotulo = rotuloCanal(publicacao.canal);
   const reprocessavel = !['PUBLISHED', 'REJECTED', 'PUBLISHING'].includes(publicacao.estado);
-  const podeDespublicar = publicacao.canal === 'BROBOND' && publicacao.estado === 'PUBLISHED';
 
   return (
     <div className="space-y-4">
@@ -235,25 +214,7 @@ export default function CommercePublicacaoDetalhePage() {
         <Link className="btn-secondary" to="/commerce/eventos">
           <Rocket className="h-4 w-4" aria-hidden="true" /> Eventos
         </Link>
-        {podeDespublicar && (
-          <button type="button" className="btn-secondary" onClick={() => setConfirmandoDespublicar(true)}>
-            Despublicar da vitrine
-          </button>
-        )}
       </div>
-
-      {confirmandoDespublicar && (
-        <ConfirmacaoInline
-          open
-          title={`Despublicar "${produto.nome}" da vitrine?`}
-          message="O item sai do ar da loja própria (estado UNPUBLISHED). Canais externos cancelam o anúncio no próprio canal."
-          confirmLabel="Despublicar"
-          danger
-          busy={ocupado}
-          onCancel={() => setConfirmandoDespublicar(false)}
-          onConfirm={() => void despublicar()}
-        />
-      )}
     </div>
   );
 }

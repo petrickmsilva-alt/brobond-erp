@@ -12,7 +12,7 @@
 // ============================================================================
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, ExternalLink, Globe, RefreshCw, Rocket, Save, Store } from 'lucide-react';
+import { ArrowLeft, Globe, RefreshCw, Rocket, Save, Store } from 'lucide-react';
 import { apiFetch, ApiError } from '../../lib/api';
 import { Alert, Badge, PageHeader, useToast } from '../../components/ui';
 import { PageLoading } from '../../components/ui-kit-negocios';
@@ -193,20 +193,6 @@ export default function CommerceProdutoDetalhePage() {
     }
   };
 
-  const despublicar = async (canal: string) => {
-    setPublicando(canal);
-    setAcaoErro('');
-    try {
-      await apiFetch(`/commerce/produtos/${id}/despublicar`, { method: 'POST', body: JSON.stringify({ canal }) });
-      toast.success('Produto removido da vitrine própria.');
-      await carregar();
-    } catch (e) {
-      setAcaoErro(e instanceof ApiError ? e.message : 'Falha ao despublicar.');
-    } finally {
-      setPublicando(null);
-    }
-  };
-
   if (carregando) return <PageLoading label="Carregando produto…" />;
   if (!detalhe) {
     return (
@@ -220,7 +206,6 @@ export default function CommerceProdutoDetalhePage() {
   }
 
   const publicacaoDe = (canal: string) => detalhe.publicacoes.find((p) => p.canal === canal) ?? null;
-  const brobond = publicacaoDe('BROBOND');
 
   return (
     <div className="space-y-6">
@@ -229,11 +214,6 @@ export default function CommerceProdutoDetalhePage() {
           <span className="flex flex-wrap items-center gap-2">
             {detalhe.produto.nome}
             <Badge tone={detalhe.produto.ativo ? 'green' : 'slate'}>{detalhe.produto.ativo ? 'Ativo' : 'Inativo'}</Badge>
-            {brobond?.estado === 'PUBLISHED' && (
-              <a className="inline-flex items-center gap-1 text-sm font-normal text-primary hover:underline" href={`/loja/produto/${detalhe.projecao?.slug ?? ''}`} target="_blank" rel="noreferrer">
-                Ver na loja <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
-              </a>
-            )}
           </span>
         }
         description={`SKU ${detalhe.produto.sku} · preço base ${grana(detalhe.produto.preco_base)} · disponibilidade lida do estoque canônico.`}
@@ -257,7 +237,6 @@ export default function CommerceProdutoDetalhePage() {
             <label className="block text-sm">
               <span className="text-ink-soft">Slug público</span>
               <input className="input mt-1" value={slug} disabled={!podeGerir} onChange={(e) => setSlug(e.target.value)} />
-              <span className="mt-1 block text-xs text-muted">URL: /loja/produto/{slug || '…'}</span>
             </label>
             <label className="block text-sm">
               <span className="text-ink-soft">Ordem na vitrine</span>
@@ -387,7 +366,7 @@ export default function CommerceProdutoDetalhePage() {
         </h2>
         <p className="mt-1 text-xs text-muted">
           Fila com idempotência (empresa + produto + canal + versão). PUBLISHED só depois da confirmação da API externa
-          — ou da própria vitrine no canal BROBOND.
+          do canal.
         </p>
         <div className="mt-3 overflow-x-auto">
           <table className="table">
@@ -440,11 +419,6 @@ export default function CommerceProdutoDetalhePage() {
                             onClick={() => void reprocessar(pub.id)}
                           >
                             <RefreshCw className="h-4 w-4" aria-hidden="true" /> Reprocessar
-                          </button>
-                        )}
-                        {podeGerir && pub?.estado === 'PUBLISHED' && canal.valor === 'BROBOND' && (
-                          <button type="button" className="btn-ghost" disabled={publicando === canal.valor} onClick={() => void despublicar(canal.valor)}>
-                            Despublicar
                           </button>
                         )}
                       </div>

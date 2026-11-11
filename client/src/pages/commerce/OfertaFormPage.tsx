@@ -26,7 +26,7 @@ type Formulario = {
   vigencia_fim: string;
 };
 
-const VAZIO: Formulario = { produto_id: '', canal: 'BROBOND', preco: '', preco_promo: '', vigencia_inicio: '', vigencia_fim: '' };
+const VAZIO: Formulario = { produto_id: '', canal: 'MERCADOLIVRE', preco: '', preco_promo: '', vigencia_inicio: '', vigencia_fim: '' };
 
 export default function CommerceOfertaFormPage() {
   const { id } = useParams();

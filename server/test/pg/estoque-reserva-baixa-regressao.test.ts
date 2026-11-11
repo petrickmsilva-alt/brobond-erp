@@ -21,7 +21,7 @@
 //
 // Os números impressos (linhas ESTOQUE_REGRESSAO) são os valores OBSERVADOS
 // no banco, não os esperados. Nenhum mock de estoque, transação ou conversão:
-// o pedido nasce por POST /loja/checkout, a cobrança é do provedor de teste
+// o pedido nasce por POST /commerce/checkout (motor interno, autenticado), a cobrança é do provedor de teste
 // (mock determinístico só com NODE_ENV=test), o pagamento chega por webhook
 // HTTP e a venda/saída são criadas pela ponte canônica.
 //
@@ -82,15 +82,8 @@ async function reservarPorta(): Promise<number> {
   return port;
 }
 
-async function subirServidor(port: number, empresaVitrine: number): Promise<{ child: Child; baseUrl: string; logs: () => string }> {
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    NODE_ENV: 'test',
-    PORT: String(port),
-    JWT_SECRET: randomUUID(),
-    // Loja de teste pertence à empresa criada nesta rodada (não depende de dados alheios).
-    COMMERCE_LOJA_EMPRESA_ID: String(empresaVitrine),
-  };
+async function subirServidor(port: number): Promise<{ child: Child; baseUrl: string; logs: () => string }> {
+  const env: NodeJS.ProcessEnv = { ...process.env, NODE_ENV: 'test', PORT: String(port), JWT_SECRET: randomUUID() };
   const processo = spawn(process.execPath, ['--import', 'tsx', 'src/index.ts'], { cwd: SERVER_DIR, env, stdio: ['ignore', 'pipe', 'pipe'] });
   let output = '';
   const append = (chunk: string | Buffer) => { output = `${output}${String(chunk)}`.slice(-40_000); };
@@ -177,14 +170,14 @@ async function produtoComEstoque(rotulo: string, quantidade = 8): Promise<number
   return produtoId;
 }
 
-async function checkoutPublico(produtoId: number, rotulo: string): Promise<Pedido> {
+async function checkoutInterno(produtoId: number, rotulo: string): Promise<Pedido> {
   const chave = `chave-${RODADA}-${rotulo}-${randomUUID().slice(0, 8)}`.slice(0, 64);
-  const checkout = await req('POST', '/loja/checkout', {
+  const checkout = await req('POST', '/commerce/checkout', {
     chave,
     comprador: { nome: `Comprador ${rotulo}`, email: `comprador-${rotulo}${SUFIXO_EMAIL}`, whatsapp: '62999990000', documento: '529.982.247-25' },
     itens: [{ produto_id: produtoId, tamanho_id: null, quantidade: 1 }],
     endereco: { nome: `Comprador ${rotulo}`, rua: 'Rua das Flores', numero: '10', bairro: 'Centro', cidade: 'Goiânia', uf: 'GO', cep: '74000-000', complemento: null },
-  });
+  }, tokenA);
   assert.equal(checkout.status, 201, `checkout ${rotulo}: ${msg(checkout)}`);
   const saleId = String(checkout.body?.sale_id || '');
   const tokenPedido = String(checkout.body?.pedido?.checkout_token || checkout.body?.checkout_token || '');
@@ -311,7 +304,7 @@ before(async () => {
   configsGateway.push(Number(cfgRow.rows[0].id));
 
   const porta = await reservarPorta();
-  const servidor = await subirServidor(porta, empresaA);
+  const servidor = await subirServidor(porta);
   child = servidor.child;
   baseUrl = servidor.baseUrl;
   logsServidor = servidor.logs;
@@ -380,7 +373,7 @@ test('C1 pedido pendente: reserva ativa, físico intacto (8/1/7), 0 venda, 0 sa�
   assert.equal(antes.fisico, 8, 'estoque inicial físico = 8');
   assert.equal(antes.disponivel, 8);
 
-  const pedido = await checkoutPublico(produtoId, 'pendente');
+  const pedido = await checkoutInterno(produtoId, 'pendente');
   const depois = await observar(empresaA, produtoId);
   registrar('C1_pendente', depois, { pedido_estado: (await estadoPedido(pedido.pedidoId)).estado });
 
@@ -399,7 +392,7 @@ test('C1 pedido pendente: reserva ativa, físico intacto (8/1/7), 0 venda, 0 sa�
 // ============================================================================
 test('C2 pagamento aprovado: reserva consumida, 1 venda, 1 saída, físico 7/0/7', async () => {
   const produtoId = await produtoComEstoque('aprovado');
-  const pedido = await checkoutPublico(produtoId, 'aprovado');
+  const pedido = await checkoutInterno(produtoId, 'aprovado');
 
   const wh = await webhook(`evt-${RODADA}-aprovado`, 'pago', pedido.providerRef);
   assert.equal(wh.status, 200, `webhook pago: ${wh.texto}`);
@@ -428,7 +421,7 @@ test('C2 pagamento aprovado: reserva consumida, 1 venda, 1 saída, físico 7/0/7
 // ============================================================================
 test('C3a cancelado pelo operador: reserva liberada, 0 venda, 0 saída, físico 8/0/8; repetição idempotente', async () => {
   const produtoId = await produtoComEstoque('cancelado');
-  const pedido = await checkoutPublico(produtoId, 'cancelado');
+  const pedido = await checkoutInterno(produtoId, 'cancelado');
   assert.equal((await observar(empresaA, produtoId)).reservado, 1, 'reserva ativa antes do cancelamento');
 
   const cancel = await req('POST', `/commerce/pedidos/${pedido.saleId}/cancelar`, {}, tokenA);
@@ -451,7 +444,7 @@ test('C3a cancelado pelo operador: reserva liberada, 0 venda, 0 saída, físico 
 
 test('C3b recusado pelo provedor (webhook): reserva liberada, 0 venda, 0 saída, físico 8/0/8', async () => {
   const produtoId = await produtoComEstoque('recusado');
-  const pedido = await checkoutPublico(produtoId, 'recusado');
+  const pedido = await checkoutInterno(produtoId, 'recusado');
 
   const wh = await webhook(`evt-${RODADA}-recusado`, 'cancelado', pedido.providerRef);
   assert.equal(wh.status, 200, `webhook cancelado: ${wh.texto}`);
@@ -473,7 +466,7 @@ test('C3b recusado pelo provedor (webhook): reserva liberada, 0 venda, 0 saída,
 
 test('C3c expirado pela varredura real: reserva liberada, 0 venda, 0 saída, físico 8/0/8; segunda varredura idempotente', async () => {
   const produtoId = await produtoComEstoque('expirado');
-  const pedido = await checkoutPublico(produtoId, 'expirado');
+  const pedido = await checkoutInterno(produtoId, 'expirado');
   assert.equal((await observar(empresaA, produtoId)).reservado, 1);
 
   // Força o prazo vencido no banco (o relógio da varredura é o do servidor de teste).
@@ -504,7 +497,7 @@ test('C3c expirado pela varredura real: reserva liberada, 0 venda, 0 saída, fí
 // ============================================================================
 test('C4 webhook duplicado (mesmo event_id e novo event_id do mesmo pagamento): 1 conversão, 1 venda, 1 saída', async () => {
   const produtoId = await produtoComEstoque('duplicado');
-  const pedido = await checkoutPublico(produtoId, 'duplicado');
+  const pedido = await checkoutInterno(produtoId, 'duplicado');
   const eventoId = `evt-${RODADA}-dup`;
 
   const primeiro = await webhook(eventoId, 'pago', pedido.providerRef);
@@ -542,7 +535,7 @@ test('C4 webhook duplicado (mesmo event_id e novo event_id do mesmo pagamento): 
 // ============================================================================
 test('C5 concorrência: 2 webhooks aprovados + 2 conversões em paralelo → 1 pagamento, 1 venda, 1 saída, sem 5xx', async () => {
   const produtoId = await produtoComEstoque('concorrencia');
-  const pedido = await checkoutPublico(produtoId, 'concorrencia');
+  const pedido = await checkoutInterno(produtoId, 'concorrencia');
 
   const respostas = await Promise.all([
     webhook(`evt-${RODADA}-cc-1`, 'pago', pedido.providerRef),
@@ -577,7 +570,7 @@ test('C5 concorrência: 2 webhooks aprovados + 2 conversões em paralelo → 1 p
 // ============================================================================
 test('C6 tenant cruzado: empresa B não lê, cancela nem converte o pedido de A; estoque de A intacto', async () => {
   const produtoId = await produtoComEstoque('tenant');
-  const pedido = await checkoutPublico(produtoId, 'tenant');
+  const pedido = await checkoutInterno(produtoId, 'tenant');
   const antes = await observar(empresaA, produtoId);
   assert.equal(antes.reservado, 1);
 

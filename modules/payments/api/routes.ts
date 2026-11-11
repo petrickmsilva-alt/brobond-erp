@@ -425,11 +425,19 @@ paymentsRouter.post(
     res.json({ ok: true });
   })
 );
+/**
+ * Métodos de pagamento oferecidos para um carrinho, pelo Payment Engine.
+ *
+ * Era o endpoint público `/api/loja/payment-methods`; com a retirada da loja
+ * nativa (ADR-0007) ele passou a ser AUTENTICADO: o tenant vem da sessão
+ * (`contextoCheckout`), nunca de env/unicidade. O motor de cotação é o serviço
+ * compartilhado preservado em `server/src/commerce/checkout.ts`.
+ */
 export async function checkoutMethods(req: Request, res: Response) {
-  const { empresaDaVitrine } = await import('../../../server/src/commerce/loja-base');
-  const empresaId = await empresaDaVitrine();
-  if (!empresaId) throw new HttpError(409, 'Vitrine não configurada.');
+  const { contextoCheckout } = await import('../../../server/src/commerce/checkout-base');
+  const { empresaId } = await contextoCheckout(req);
   // Quote endpoint never accepts a browser price: use the existing cart pricing/freight pipeline.
-  const { quotePaymentMethods } = await import('../../../server/src/commerce/vitrine');
+  const { quotePaymentMethods } = await import('../../../server/src/commerce/checkout');
+  res.setHeader('Cache-Control', 'no-store');
   res.json(await quotePaymentMethods(empresaId, req));
 }

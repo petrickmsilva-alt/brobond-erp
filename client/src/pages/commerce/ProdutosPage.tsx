@@ -87,7 +87,6 @@ export default function CommerceProdutosPage() {
           </button>
           <div className="truncate text-xs text-muted">
             {r.sku}
-            {r.na_vitrine && r.slug ? ` · /loja/produto/${r.slug}` : ''}
           </div>
         </div>
       ),
@@ -122,8 +121,8 @@ export default function CommerceProdutosPage() {
     },
     {
       key: 'vitrine',
-      header: 'Vitrine',
-      render: (r) => (r.na_vitrine ? <Badge tone="green">Na vitrine</Badge> : <Badge tone="slate">Fora</Badge>),
+      header: 'Catálogo',
+      render: (r) => (r.na_vitrine ? <Badge tone="green">Com conteúdo</Badge> : <Badge tone="slate">Sem conteúdo</Badge>),
     },
     {
       key: 'publicacoes',

@@ -1,5 +1,5 @@
 // ============================================================================
-// COMMERCE — CARRINHO / COTAÇÃO / CHECKOUT / STOREFRONT em PostgreSQL REAL.
+// COMMERCE — CARRINHO / COTAÇÃO / CHECKOUT INTERNO em PostgreSQL REAL.
 //
 // Servidor de verdade (HTTP) + banco real. Prova, com o produto do go-live
 // (nome COM aspas, SKU COM aspas, R$ 80,00, estoque 8, frete = retirada):
@@ -11,11 +11,12 @@
 //     disponibilidade (physical − reserved);
 //   • cupom aplicado/recalculado/inválido; frete fail-closed;
 //   • produto despublicado: continua VISÍVEL (e removível) no carrinho sem vazar
-//     nome, checkout recusa (409) e a página do produto responde 404 REAL;
+//     nome e o checkout recusa (409);
 //   • tenancy: item de outra empresa → mesma resposta de "indisponível";
-//   • SEO: title/description/canonical/JSON-LD escapados, 404 real;
+//   • loja nativa retirada (ADR-0007): URLs antigas respondem 410 Gone;
 //   • webhook duplicado + conversão repetida → UMA venda (idempotência);
-//   • RBAC: operador não altera a config da loja; sem token → 401.
+//   • RBAC: o checkout interno EXIGE sessão (sem token → 401); operador não
+//     altera a config; outro tenant não vê o pedido.
 // ============================================================================
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -40,9 +41,9 @@ const SKU_ASPAS = `CAM-BAS-PREM-VERM-"B" LOGO BRANCA ${RS}`;
 const NOME_ASPAS = `COTTON "B" ${RODADA}`;
 const EMAIL_DOMINIO = '@cart.example.test';
 
-test('CARRINHO PG: cotação autoritativa, anti-tamper, estoque/reserva, cupom, frete, despublicação, tenancy, SEO e idempotência', async (t) => {
+test('CARRINHO PG: cotação autoritativa, anti-tamper, estoque/reserva, cupom, frete, despublicação, tenancy e idempotência', async (t) => {
   const porta = await reservePort();
-  const { child, baseUrl } = await startRealServer(porta, { COMMERCE_LOJA_EMPRESA_ID: '1' });
+  const { child, baseUrl } = await startRealServer(porta);
   const req = criarCliente(baseUrl);
   const cliente = new Client({ connectionString: String(process.env.DATABASE_URL) });
   await cliente.connect();
@@ -116,6 +117,8 @@ test('CARRINHO PG: cotação autoritativa, anti-tamper, estoque/reserva, cupom, 
   const tokenA = await login(emailGer, senhaGer);
   const tokenOp = await login(emailOp, senhaOp);
   const tokenB = await login(emailB, senhaB);
+  // Motor de checkout INTERNO (ADR-0007): rotas autenticadas, tenant da sessão.
+  const reqInt = (metodo: string, rota: string, corpo?: unknown) => req(metodo, rota, corpo, tokenA);
 
   const cfgRow = await cliente.query(
     `INSERT INTO gateway_configs (empresa_id, provider, ambiente, ativo, credenciais_cifradas)
@@ -165,14 +168,9 @@ test('CARRINHO PG: cotação autoritativa, anti-tamper, estoque/reserva, cupom, 
   }, tokenA);
   assert.ok([200, 201].includes(cfg.status), `config da loja: ${msg(cfg)}`);
 
-  // ---- 1) vitrine e cotação -------------------------------------------------------
-  const detalhe = await req('GET', `/loja/produtos/${encodeURIComponent(slug)}`);
-  assert.equal(detalhe.status, 200, `detalhe: ${msg(detalhe)}`);
-  assert.equal(detalhe.body.produto.preco, 80);
-  assert.equal(detalhe.body.produto.sku, SKU_ASPAS, 'SKU com aspas preservado');
-
+  // ---- 1) cotação do motor de checkout INTERNO (autenticado) -----------------------
   const itens1 = [{ produto_id: produtoId, tamanho_id: null, quantidade: 1 }];
-  const q1 = await req('POST', '/loja/preview', { itens: itens1 });
+  const q1 = await reqInt('POST', '/commerce/checkout/preview', { itens: itens1 });
   assert.equal(q1.status, 200, `preview: ${msg(q1)}`);
   assert.equal(q1.headers.get('cache-control'), 'no-store', 'cotação nunca é cacheada');
   const linha = q1.body.itens[0];
@@ -191,7 +189,7 @@ test('CARRINHO PG: cotação autoritativa, anti-tamper, estoque/reserva, cupom, 
   assert.ok(Date.parse(q1.body.calculado_em) > 0);
 
   // ---- 2) ANTI-TAMPER: o browser nunca define preço/total/desconto/frete -------------
-  const tamper = await req('POST', '/loja/preview', {
+  const tamper = await reqInt('POST', '/commerce/checkout/preview', {
     itens: [{ produto_id: produtoId, tamanho_id: null, quantidade: 1, preco_unitario: 1, preco: 1, subtotal: 1, disponivel: 999 }],
     total: 1, totais: { total: 1 }, desconto: 79, frete: 0, subtotal: 1,
   });
@@ -202,12 +200,12 @@ test('CARRINHO PG: cotação autoritativa, anti-tamper, estoque/reserva, cupom, 
 
   // ---- 3) quantidades inválidas -----------------------------------------------------
   for (const ruim of [0, -1, 'abc', 'NaN', 'Infinity', 1.5, null, 100, '', {}]) {
-    const r = await req('POST', '/loja/preview', { itens: [{ produto_id: produtoId, tamanho_id: null, quantidade: ruim }] });
+    const r = await reqInt('POST', '/commerce/checkout/preview', { itens: [{ produto_id: produtoId, tamanho_id: null, quantidade: ruim }] });
     assert.equal(r.status, 400, `quantidade ${JSON.stringify(ruim)} deve ser 400: ${msg(r)}`);
   }
-  assert.equal((await req('POST', '/loja/preview', { itens: [] })).status, 400, 'carrinho vazio → 400');
-  assert.equal((await req('POST', '/loja/preview', { itens: [{ produto_id: 'x', quantidade: 1 }] })).status, 400);
-  assert.equal((await req('POST', '/loja/preview', { itens: [...itens1, ...itens1] })).status, 400, 'linha duplicada → 400');
+  assert.equal((await reqInt('POST', '/commerce/checkout/preview', { itens: [] })).status, 400, 'carrinho vazio → 400');
+  assert.equal((await reqInt('POST', '/commerce/checkout/preview', { itens: [{ produto_id: 'x', quantidade: 1 }] })).status, 400);
+  assert.equal((await reqInt('POST', '/commerce/checkout/preview', { itens: [...itens1, ...itens1] })).status, 400, 'linha duplicada → 400');
 
   // ---- 3b) ENDPOINT DE QUANTIDADE (+ / −): confirmação server-side -------------
   const mutacao = (quantidade: unknown, extra: Record<string, unknown> = {}) => ({
@@ -216,29 +214,29 @@ test('CARRINHO PG: cotação autoritativa, anti-tamper, estoque/reserva, cupom, 
     ...extra,
   });
   for (const qtd of [2, 3, 2]) {
-    const r = await req('POST', '/loja/carrinho/quantidade', mutacao(qtd));
+    const r = await reqInt('POST', '/commerce/checkout/carrinho/quantidade', mutacao(qtd));
     assert.equal(r.status, 200, `quantidade ${qtd} confirmada: ${msg(r)}`);
     assert.equal(r.body.quantidade, qtd, 'só a quantidade confirmada pelo servidor é devolvida');
     assert.equal(r.body.cotacao.totais.subtotal, 80 * qtd, 'subtotal recalculado no servidor');
     assert.equal(r.body.cotacao.totais.total, 80 * qtd, 'total recalculado no servidor');
   }
   for (const ruim of [0, -1, 1.5, 100, '2', 'abc', null, {}, [], [2], true, NaN, Infinity, -Infinity]) {
-    const r = await req('POST', '/loja/carrinho/quantidade', mutacao(ruim));
+    const r = await reqInt('POST', '/commerce/checkout/carrinho/quantidade', mutacao(ruim));
     assert.equal(r.status, 400, `quantidade inválida ${JSON.stringify(ruim)} → 400: ${msg(r)}`);
   }
-  const m9 = await req('POST', '/loja/carrinho/quantidade', mutacao(9));
+  const m9 = await reqInt('POST', '/commerce/checkout/carrinho/quantidade', mutacao(9));
   assert.equal(m9.status, 409, `acima do estoque → 409: ${msg(m9)}`);
   assert.equal(m9.body.error, 'Só há 8 unidades disponíveis.');
   assert.equal(m9.body.quantidade, undefined, 'nunca confirma quantidade acima do estoque');
   // Tenant: produto da empresa B não pode ser alterado pela loja da empresa A.
-  const mB = await req('POST', '/loja/carrinho/quantidade', {
+  const mB = await reqInt('POST', '/commerce/checkout/carrinho/quantidade', {
     alvo: { produto_id: produtoIdB, tamanho_id: null, quantidade: 2 },
     itens: [{ produto_id: produtoIdB, tamanho_id: null, quantidade: 2 }],
     empresa_id: 2, // forjado pelo browser: precisa ser ignorado
   });
   assert.equal(mB.status, 409, `item de outra empresa → 409: ${msg(mB)}`);
   assert.ok(!mB.texto.includes('filial') && !mB.texto.includes(`OUTRA-${RS}`), 'nada do tenant B vaza');
-  const mTamper = await req('POST', '/loja/carrinho/quantidade', mutacao(2, { total: 1, unit_price: 1, discount: 79, freight: 9, empresa_id: 999 }));
+  const mTamper = await reqInt('POST', '/commerce/checkout/carrinho/quantidade', mutacao(2, { total: 1, unit_price: 1, discount: 79, freight: 9, empresa_id: 999 }));
   assert.equal(mTamper.status, 200, `campos monetários/de tenant do browser são ignorados: ${msg(mTamper)}`);
   assert.equal(mTamper.body.cotacao.totais.total, 160);
 
@@ -249,64 +247,49 @@ test('CARRINHO PG: cotação autoritativa, anti-tamper, estoque/reserva, cupom, 
   // Os fixtures abaixo foram atualizados para esse contrato; as asserções de
   // estoque/frete/tenancy/SEO/idempotência permanecem exatamente as mesmas.
   // ---- 4) estoque -------------------------------------------------------------------
-  const q9 = await req('POST', '/loja/preview', { itens: [{ produto_id: produtoId, tamanho_id: null, quantidade: 9 }] });
+  const q9 = await reqInt('POST', '/commerce/checkout/preview', { itens: [{ produto_id: produtoId, tamanho_id: null, quantidade: 9 }] });
   assert.equal(q9.status, 200);
   assert.equal(q9.body.itens[0].ok, false);
   assert.equal(q9.body.itens[0].aviso, 'Só 8 em estoque.');
   assert.equal(q9.body.pronto_para_checkout, false);
   assert.deepEqual(q9.body.payment_methods, [], 'sem estoque → nenhum método oferecido');
-  const co9 = await req('POST', '/loja/checkout', { chave: `chave-${RODADA}-9`, comprador: { nome: 'Cliente X', email: `x${EMAIL_DOMINIO}`, whatsapp: '62999991234', documento: '529.982.247-25' }, itens: [{ produto_id: produtoId, tamanho_id: null, quantidade: 9 }] });
+  const co9 = await reqInt('POST', '/commerce/checkout', { chave: `chave-${RODADA}-9`, comprador: { nome: 'Cliente X', email: `x${EMAIL_DOMINIO}`, whatsapp: '62999991234', documento: '529.982.247-25' }, itens: [{ produto_id: produtoId, tamanho_id: null, quantidade: 9 }] });
   assert.equal(co9.status, 409, `checkout com estoque insuficiente: ${msg(co9)}`);
 
   // ---- 5) cupom -----------------------------------------------------------------------
   const codigo = `CART${RODADA}`.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 24);
   const cupom = await req('POST', '/commerce/cupons', { codigo, tipo: 'percentual', valor: 10, minimo_pedido: 0, uso_maximo: 5, validade: null, ativo: true }, tokenA);
   assert.ok([200, 201].includes(cupom.status), `cupom: ${msg(cupom)}`);
-  const qc = await req('POST', '/loja/preview', { itens: itens1, cupom: codigo.toLowerCase() });
+  const qc = await reqInt('POST', '/commerce/checkout/preview', { itens: itens1, cupom: codigo.toLowerCase() });
   assert.equal(qc.body.cupom.valido, true);
   assert.equal(qc.body.desconto, 8);
   assert.equal(qc.body.totais.total, 72, 'cupom recalculado no servidor');
-  const qci = await req('POST', '/loja/preview', { itens: itens1, cupom: 'NAOEXISTE999', desconto: 79 });
+  const qci = await reqInt('POST', '/commerce/checkout/preview', { itens: itens1, cupom: 'NAOEXISTE999', desconto: 79 });
   assert.equal(qci.status, 200);
   assert.equal(qci.body.cupom.valido, false);
   assert.equal(qci.body.totais.total, 80, 'cupom inválido não desconta');
   assert.equal(qci.body.pronto_para_checkout, false, 'cupom inválido bloqueia o checkout (decisão do servidor)');
 
   // ---- 6) tenancy: item de outra empresa == indisponível, sem vazar nada ------------
-  const qb = await req('POST', '/loja/preview', { itens: [{ produto_id: produtoIdB, tamanho_id: null, quantidade: 1 }] });
+  const qb = await reqInt('POST', '/commerce/checkout/preview', { itens: [{ produto_id: produtoIdB, tamanho_id: null, quantidade: 1 }] });
   assert.equal(qb.status, 200);
   assert.equal(qb.body.itens[0].ok, false);
   assert.equal(qb.body.itens[0].indisponivel, true);
   assert.equal(qb.body.itens[0].nome, 'Item indisponível');
   assert.ok(!qb.texto.includes('filial') && !qb.texto.includes(`OUTRA-${RS}`), 'nada do tenant B vaza');
   assert.equal(qb.body.pronto_para_checkout, false);
-  const cob = await req('POST', '/loja/checkout', { chave: `chave-${RODADA}-b`, comprador: { nome: 'Cliente X', email: `x${EMAIL_DOMINIO}`, whatsapp: '62999991234', documento: '529.982.247-25' }, itens: [{ produto_id: produtoIdB, tamanho_id: null, quantidade: 1 }] });
+  const cob = await reqInt('POST', '/commerce/checkout', { chave: `chave-${RODADA}-b`, comprador: { nome: 'Cliente X', email: `x${EMAIL_DOMINIO}`, whatsapp: '62999991234', documento: '529.982.247-25' }, itens: [{ produto_id: produtoIdB, tamanho_id: null, quantidade: 1 }] });
   assert.equal(cob.status, 409, `checkout com item de outro tenant: ${msg(cob)}`);
 
-  // ---- 7) SEO + status HTTP real ----------------------------------------------------
-  const pagina = await paginaHtml(baseUrl, `/loja/produto/${encodeURIComponent(slug)}`);
-  assert.equal(pagina.status, 200);
-  assert.match(pagina.html, new RegExp(`<title>COTTON &quot;B&quot; ${RODADA} — Loja ${RODADA}</title>`));
-  assert.match(pagina.html, /<link rel="canonical" href="[^"]+\/loja\/produto\//);
-  assert.match(pagina.html, /<meta name="description" content="[^"]+"/);
-  assert.match(pagina.html, /<meta name="robots" content="index,follow"/);
-  const ld = /<script type="application\/ld\+json">([\s\S]*?)<\/script>/.exec(pagina.html);
-  assert.ok(ld, 'JSON-LD presente');
-  const produtoLd = JSON.parse(ld![1]);
-  assert.equal(produtoLd['@type'], 'Product');
-  assert.equal(produtoLd.sku, SKU_ASPAS);
-  assert.equal(produtoLd.offers.price, '80.00');
-  assert.equal(produtoLd.offers.availability, 'https://schema.org/InStock');
-  assert.ok(!pagina.html.includes(`<title>COTTON "B"`), 'aspas escapadas no HTML (anti-XSS)');
-  const inexistente = await paginaHtml(baseUrl, '/loja/produto/nao-existe-xyz');
-  assert.equal(inexistente.status, 404, '404 REAL para produto inexistente');
-  assert.match(inexistente.html, /noindex/);
-  const injecao = await paginaHtml(baseUrl, `/loja/produto/${encodeURIComponent('"><script>alert(1)</script>')}`);
-  assert.equal(injecao.status, 404);
-  assert.ok(!injecao.html.includes('<script>alert(1)</script>'), 'slug malicioso nunca é refletido');
-  const home = await paginaHtml(baseUrl, '/loja');
-  assert.equal(home.status, 200);
-  assert.match(home.html, new RegExp(`<title>Loja ${RODADA}</title>`));
+  // ---- 7) URLs antigas da loja nativa → 410 Gone (ADR-0007) ------------------------
+  // A vitrine própria foi retirada: nenhuma URL antiga pode devolver 200 (seria um
+  // SEO enganoso). Sem STOREFRONT_REDIRECT_URL, o tratamento é 410 explícito.
+  const antiga = await paginaHtml(baseUrl, `/loja/produto/${encodeURIComponent(slug)}`);
+  assert.equal(antiga.status, 410, 'URL antiga de produto → 410 Gone');
+  assert.match(antiga.html, /noindex/);
+  const antigaHome = await paginaHtml(baseUrl, '/loja');
+  assert.equal(antigaHome.status, 410, 'home da vitrine → 410 Gone');
+  assert.match(antigaHome.html, /noindex/);
 
   // ---- 8) CHECKOUT anti-tamper + reserva reduz disponibilidade ----------------------
   const chave = `chave-${RODADA}-${randomUUID().slice(0, 8)}`.slice(0, 64);
@@ -317,7 +300,7 @@ test('CARRINHO PG: cotação autoritativa, anti-tamper, estoque/reserva, cupom, 
     total: 1, totais: { total: 1 }, frete: 0, desconto: 79,
     endereco: null,
   };
-  const checkout = await req('POST', '/loja/checkout', corpoCheckout);
+  const checkout = await reqInt('POST', '/commerce/checkout', corpoCheckout);
   assert.equal(checkout.status, 201, `checkout: ${msg(checkout)}`);
   const saleId = String(checkout.body.sale_id);
   const pedido = await cliente.query(`SELECT id, total, frete_valor, desconto FROM commerce_pedidos WHERE sale_id = $1`, [saleId]);
@@ -325,12 +308,12 @@ test('CARRINHO PG: cotação autoritativa, anti-tamper, estoque/reserva, cupom, 
   assert.equal(Number(pedido.rows[0].desconto), 0);
   const sale = await cliente.query(`SELECT amount_cents FROM sales WHERE id = $1`, [saleId]);
   assert.equal(Number(sale.rows[0].amount_cents), 8000);
-  const checkoutRepetido = await req('POST', '/loja/checkout', corpoCheckout);
+  const checkoutRepetido = await reqInt('POST', '/commerce/checkout', corpoCheckout);
   assert.equal(checkoutRepetido.status, 200);
   assert.equal(checkoutRepetido.body.idempotente, true, 'retry/refresh não cria segundo pedido');
   assert.equal((await cliente.query(`SELECT count(*)::int n FROM commerce_pedidos WHERE chave_checkout = $1`, [chave])).rows[0].n, 1);
 
-  const depoisReserva = await req('POST', '/loja/preview', { itens: [{ produto_id: produtoId, tamanho_id: null, quantidade: 8 }] });
+  const depoisReserva = await reqInt('POST', '/commerce/checkout/preview', { itens: [{ produto_id: produtoId, tamanho_id: null, quantidade: 8 }] });
   assert.equal(depoisReserva.body.itens[0].disponivel, 7, 'reserva do checkout reduz o disponível (físico − reservado)');
   assert.equal(depoisReserva.body.itens[0].ok, false);
   const fisico = await cliente.query(`SELECT coalesce(sum(quantidade),0)::int q FROM estoques WHERE produto_id = $1`, [produtoId]);
@@ -357,7 +340,7 @@ test('CARRINHO PG: cotação autoritativa, anti-tamper, estoque/reserva, cupom, 
 
   // ---- 10) frete fail-closed ---------------------------------------------------------
   await cliente.query(`UPDATE commerce_configuracoes SET frete_provedor = 'nenhum' WHERE loja_nome LIKE $1`, [`Loja ${RODADA}%`]);
-  const semFrete = await req('POST', '/loja/preview', { itens: itens1 });
+  const semFrete = await reqInt('POST', '/commerce/checkout/preview', { itens: itens1 });
   assert.equal(semFrete.status, 200);
   assert.equal(semFrete.body.frete_indisponivel, true);
   assert.match(String(semFrete.body.frete_motivo), /frete não configurado/i);
@@ -368,20 +351,17 @@ test('CARRINHO PG: cotação autoritativa, anti-tamper, estoque/reserva, cupom, 
   // ---- 11) produto despublicado: visível/removível no carrinho, checkout recusa, 404 real --
   const desp = await req('POST', `/commerce/produtos/${produtoId}/despublicar`, { canal: 'BROBOND' }, tokenA);
   assert.equal(desp.status, 200, `despublicar: ${msg(desp)}`);
-  const qd = await req('POST', '/loja/preview', { itens: itens1 });
+  const qd = await reqInt('POST', '/commerce/checkout/preview', { itens: itens1 });
   assert.equal(qd.status, 200, 'o carrinho NÃO falha inteiro por causa de um item despublicado');
   assert.equal(qd.body.itens[0].indisponivel, true);
   assert.equal(qd.body.itens[0].ok, false);
   assert.ok(!qd.texto.includes('COTTON'), 'produto despublicado não vaza nome');
   assert.equal(qd.body.pronto_para_checkout, false);
-  assert.equal((await req('GET', `/loja/produtos/${encodeURIComponent(slug)}`)).status, 404, 'API: produto despublicado → 404');
-  assert.equal((await paginaHtml(baseUrl, `/loja/produto/${encodeURIComponent(slug)}`)).status, 404, 'HTML: produto despublicado → 404 real');
-  const lista = await req('GET', '/loja/produtos?page=1&pageSize=60');
-  assert.ok(!(lista.body.produtos || []).some((p: any) => p.slug === slug), 'produto despublicado não aparece na vitrine');
-  const coDesp = await req('POST', '/loja/checkout', { chave: `chave-${RODADA}-d`, comprador: { nome: 'Cliente X', email: `x${EMAIL_DOMINIO}`, whatsapp: '62999991234', documento: '529.982.247-25' }, itens: itens1 });
+  const coDesp = await reqInt('POST', '/commerce/checkout', { chave: `chave-${RODADA}-d`, comprador: { nome: 'Cliente X', email: `x${EMAIL_DOMINIO}`, whatsapp: '62999991234', documento: '529.982.247-25' }, itens: itens1 });
   assert.equal(coDesp.status, 409, `checkout de item despublicado: ${msg(coDesp)}`);
 
   // ---- 12) RBAC ------------------------------------------------------------------------
+  assert.equal((await req('POST', '/commerce/checkout/preview', { itens: itens1 })).status, 401, 'checkout interno exige sessão (sem token → 401)');
   assert.equal((await req('POST', '/commerce_configuracoes', { loja_nome: 'x' }, tokenOp)).status, 403, 'operador não altera a config da loja');
   assert.equal((await req('PUT', `/commerce/produtos/${produtoId}/precos`, { canal: 'BROBOND', preco: 1, preco_promo: null }, tokenOp)).status, 403, 'operador não altera preço');
   assert.equal((await req('GET', '/commerce/pedidos')).status, 401);

@@ -80,11 +80,6 @@ const CommerceFulfillmentPage = lazy(() => import('./pages/commerce/FulfillmentP
 const CommerceEventosPage = lazy(() => import('./pages/commerce/EventosPage'));
 const CommerceErrosPage = lazy(() => import('./pages/commerce/ErrosPage'));
 const CommerceDevolucoesPage = lazy(() => import('./pages/commerce/DevolucoesPage'));
-const LojaInicioPage = lazy(() => import('./pages/commerce/loja/LojaInicioPage'));
-const LojaProdutoPage = lazy(() => import('./pages/commerce/loja/LojaProdutoPage'));
-const LojaCarrinhoPage = lazy(() => import('./pages/commerce/loja/LojaCarrinhoPage'));
-const LojaCheckoutPage = lazy(() => import('./pages/commerce/loja/LojaCheckoutPage'));
-const LojaPedidoPage = lazy(() => import('./pages/commerce/loja/LojaPedidoPage'));
 // Usuários: cadastro/edição em PÁGINA própria (nunca em modal/drawer).
 const UsuarioRegistroPage = lazy(() =>
   import('./pages/UsuariosPage').then((m) => ({ default: m.UsuarioRegistroPage }))
@@ -159,12 +154,10 @@ export default function App() {
           <Route path="/convite/:token" element={<Convite />} />
           <Route path="/catalogo/:token/*" element={<CatalogoPublico />} />
           <Route path="/portal/:token/*" element={<PortalCliente />} />
-          {/* Vitrine B2C própria do BROBOND COMMERCE OS — pública, sem sessão ERP. */}
-          <Route path="/loja" element={<LojaInicioPage />} />
-          <Route path="/loja/produto/:slug" element={<LojaProdutoPage />} />
-          <Route path="/loja/carrinho" element={<LojaCarrinhoPage />} />
-          <Route path="/loja/checkout" element={<LojaCheckoutPage />} />
-          <Route path="/loja/pedido/:token" element={<LojaPedidoPage />} />
+          {/* A vitrine B2C nativa (/loja) foi DESCONTINUADA (ADR-0007). As URLs
+              antigas são tratadas no servidor (301 para a RETAIL quando
+              STOREFRONT_REDIRECT_URL existe; senão 410). A loja pública de
+              varejo é a RETAIL WooCommerce (brobond.com.br). */}
           <Route
             path="/"
             element={

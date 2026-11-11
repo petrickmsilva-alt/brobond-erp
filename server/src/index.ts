@@ -108,17 +108,14 @@ import {
   reprocessarPublicacao,
   despublicarProduto,
 } from './commerce/catalogo';
-import { storefrontSeo } from './commerce/storefront-seo';
 import {
-  lojaConfigPublica,
-  lojaProdutoPublico,
-  lojaPreview,
-  lojaAtualizarQuantidade,
-  lojaCriarCheckout,
-  lojaRecuperarCheckout,
-  lojaPedidoPublico,
-  lojaProdutosPublicos,
-} from './commerce/vitrine';
+  previewInterno,
+  quantidadeInterna,
+  criarCheckoutCommerce,
+  recuperarCheckoutInterno,
+  pedidoInterno,
+} from './commerce/checkout';
+import { lojaNativaRetirada } from './commerce/loja-nativa-retirada';
 import {
   atualizarPagamentoPedidoCommerce,
   cancelarPedidoCommerce,
@@ -146,7 +143,6 @@ import {
   listarPromocoes,
   simularPromocao,
 } from './commerce/promocoes';
-import { estadoLoja } from './commerce/estado-loja';
 import { capacidadesCreators, listCreatorsEntity, detailCreatorsEntity, createCreatorsEntity, updateCreatorsEntity, listCreatorAttributions } from './creators';
 import { analyticsCommerce, trendsCommerce } from './commerce/analytics';
 import { processarComercioAgendado, reprocessarOutbox } from './commerce/outbox';
@@ -686,20 +682,6 @@ app.get('/api/publico/catalogo/:token/embed', rateLimitPublico, wrap(catalogoEmb
 // Pedido pelo catálogo — cria uma cotação de venda no ERP (sem login, rate limit)
 app.post('/api/publico/catalogo/:token/pedido', rateLimitPublico, wrap(criarPedidoCatalogo));
 app.post('/api/publico/catalogo/:token/evento', rateLimitPublico, wrap(eventoCatalogo));
-// ---- VITRINE PRÓPRIA /loja (Commerce OS) — pública, rate limit próprio ----
-// Loja B2C do tenant resolvido por env/unicidade (nunca por dado do cliente).
-app.get('/api/loja/config', rateLimitPublico, wrap(lojaConfigPublica));
-app.get('/api/loja/produtos', rateLimitPublico, wrap(lojaProdutosPublicos));
-app.get('/api/loja/produtos/:slug', rateLimitPublico, wrap(lojaProdutoPublico));
-app.post('/api/loja/preview', rateLimitPublico, wrap(lojaPreview));
-// + / − do carrinho: proposta validada no servidor (faixa, tenant, estoque real).
-// O cliente só persiste a quantidade que voltar confirmada nesta resposta.
-app.post('/api/loja/carrinho/quantidade', rateLimitPublico, wrap(lojaAtualizarQuantidade));
-app.post('/api/loja/payment-methods', rateLimitPublico, wrap(checkoutMethods));
-app.post('/api/commerce/checkout/payment-intent', rateLimitPublico, wrap(lojaCriarCheckout));
-app.post('/api/loja/checkout', rateLimitPublico, wrap(lojaCriarCheckout));
-app.get('/api/loja/checkout/:chave', rateLimitPublico, wrap(lojaRecuperarCheckout));
-app.get('/api/loja/pedidos/:token', rateLimitPublico, wrap(lojaPedidoPublico));
 // Portal do cliente (acompanhamento de pedidos por CPF/CNPJ)
 app.get('/api/portal/:token/pedidos', rateLimitPortal, wrap(portalPedidos));
 app.get('/api/portal/:token/pedido/:id', rateLimitPortal, wrap(portalPedidoDetalhe));
@@ -742,6 +724,17 @@ app.use('/api', wrap(requireAuth));
 // Conta com senha provisória (convite, reset ou admin padrão) só lê e só escreve
 // no próprio fluxo de troca de senha — ver bloquearSenhaProvisoria.
 app.use('/api', bloquearSenhaProvisoria);
+
+// ---- CHECKOUT INTERNO (ADR-0007) — motor compartilhado, AUTENTICADO ----
+// A superfície pública /api/loja/* foi RETIRADA. A loja pública de varejo é a
+// RETAIL WooCommerce (brobond.com.br). O motor de checkout permanece como
+// serviço compartilhado do ERP, agora sob sessão (RBAC) e tenant da sessão.
+app.post('/api/commerce/checkout/preview', wrap(previewInterno));
+app.post('/api/commerce/checkout/carrinho/quantidade', wrap(quantidadeInterna));
+app.post('/api/commerce/checkout/payment-methods', wrap(checkoutMethods));
+app.post('/api/commerce/checkout', wrap(criarCheckoutCommerce));
+app.get('/api/commerce/checkout/pedido/:token', wrap(pedidoInterno));
+app.get('/api/commerce/checkout/:chave', wrap(recuperarCheckoutInterno));
 
 // PROD-DB-01.3 — o acesso de emergência (id 0, perfil 'admin') é um ADMIN
 // SINTÉTICO: existe para diagnóstico e recuperação enquanto o banco está fora,
@@ -1216,7 +1209,6 @@ app.get('/api/creators/parcerias/:id/atribuicoes', wrap(listCreatorAttributions)
 // promoções/cupons, fulfillment/delivery/rastreio, trends e observabilidade.
 // RBAC por recurso (checkAccess/checkFluxo) — nada aqui depende de esconder botão.
 // ------------------------------------------------------------------------------
-app.get('/api/commerce/loja/estado', wrap(estadoLoja));
 app.get('/api/commerce/produtos', wrap(listarProdutosCommerce));
 app.post('/api/commerce/produtos', wrap(projetarProdutoCommerce));
 app.get('/api/commerce/produtos/:id', wrap(obterProdutoCommerce));
@@ -1657,10 +1649,10 @@ app.delete(
 // Rotas /api desconhecidas
 app.use('/api', (_req, _res, next) => next(new HttpError(404, 'Rota não encontrada')));
 
-// Storefront público: SEO (title/description/canonical/JSON-LD) e 404 REAL para
-// produto inexistente/não publicado. Antes do fallback do SPA; sem loja
-// configurada cai no SPA normal.
-app.get(['/loja', '/loja/produto/:slug'], wrap(storefrontSeo));
+// Loja nativa RETIRADA (ADR-0007): URLs antigas respondem 301 (se
+// STOREFRONT_REDIRECT_URL definida e houver equivalente) ou 410 Gone. Nunca o
+// index do ERP — um 200 aqui seria um SEO enganoso.
+app.get(['/loja', '/loja/*'], wrap((req, res) => { lojaNativaRetirada(req, res); }));
 
 // ----------------------------------------------------------------------------
 // Front buildado (produção — mesmo serviço na Render). Depois das rotas /api.

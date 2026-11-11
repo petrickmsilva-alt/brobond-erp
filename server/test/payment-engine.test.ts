@@ -493,11 +493,11 @@ test('Payment Engine: actual orchestrated fallback records both attempts; busine
 test('Payment Engine: provider configuration preserves environment credentials only on explicit authenticated admin save', async () => {
   const { registrarReautenticacao, limparReautenticacao } = await import('../src/auth');
   const env = {
-    company: process.env.COMMERCE_LOJA_EMPRESA_ID,
+    company: process.env.COMMERCE_PAGAMENTO_EMPRESA_ID,
     token: process.env.MERCADOPAGO_ACCESS_TOKEN,
     webhook: process.env.MERCADOPAGO_WEBHOOK_SECRET,
   };
-  process.env.COMMERCE_LOJA_EMPRESA_ID = '4';
+  process.env.COMMERCE_PAGAMENTO_EMPRESA_ID = '4';
   process.env.MERCADOPAGO_ACCESS_TOKEN = 'fixture-env-no-leak';
   process.env.MERCADOPAGO_WEBHOOK_SECRET = 'fixture-env-webhook';
   const actor = { id: 909, name: 'Admin save fixture', perfil: 'admin', empresa_id: 4 };
@@ -527,7 +527,7 @@ test('Payment Engine: provider configuration preserves environment credentials o
   } finally {
     limparReautenticacao(actor.id);
     for (const [key, value] of [
-      ['COMMERCE_LOJA_EMPRESA_ID', env.company],
+      ['COMMERCE_PAGAMENTO_EMPRESA_ID', env.company],
       ['MERCADOPAGO_ACCESS_TOKEN', env.token],
       ['MERCADOPAGO_WEBHOOK_SECRET', env.webhook],
     ] as const) {

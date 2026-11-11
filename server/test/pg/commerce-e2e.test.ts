@@ -8,17 +8,18 @@
 //   1. catálogo: produto ERP → projeção na vitrine (idempotente) → preço por
 //      canal → publicação enfileirada → processador real → BROBOND PUBLISHED
 //      e Mercado Livre ERROR honesto (sem credencial = erro, nunca sucesso);
-//   2. vitrine pública: /loja/produtos e /loja/produtos/:slug sem autenticação;
+//   2. catálogo publicado: a loja pública nativa foi RETIRADA (ADR-0007); o
+//      produto publicado é conferido pelo motor de checkout INTERNO;
 //   3. cupom de uso único: preview aplica → checkout reserva → PAGAMENTO
 //      consome (uso_atual=1) → novo preview recusa (fail-closed);
-//   4. checkout público (/loja/checkout): pedido AGUARDANDO_PAGAMENTO, sale
+//   4. checkout interno (/commerce/checkout, autenticado): pedido AGUARDANDO_PAGAMENTO, sale
 //      com empresa_id, reserva ATIVA, cobrança criada pelo BACKEND (o front
 //      nunca confirma nada);
 //   5. pagamento: webhook MOCK ASSINADO do provedor → processado → o ouvinte
 //      do Commerce OS confirma o pedido (PAGO) — só depois do webhook;
 //   6. conversão: /commerce/pedidos/:saleId/converter cria UMA venda pela
 //      ponte sales → vendas e a repetição é idempotente;
-//   7. frete fail-closed: sem provedor, /loja/preview responde "Frete não
+//   7. frete fail-closed: sem provedor, /commerce/checkout/preview responde "Frete não
 //      configurado" e o checkout recusa com 409;
 //   8. RBAC/tenancy no backend: sem token 401, operador sem permissão de
 //      escrita 403, outro tenant 404 (nunca vaza cross-tenant).
@@ -129,7 +130,7 @@ async function criarUsuario(cliente: Client, nome: string, email: string, perfil
   return senha;
 }
 
-test('COMMERCE E2E: catálogo → fila → vitrine → checkout → webhook paga → conversão, com RBAC/tenancy e frete fail-closed', async (t) => {
+test('COMMERCE E2E: catálogo → fila → checkout interno → webhook paga → conversão, com RBAC/tenancy e frete fail-closed', async (t) => {
   const porta = await reservePort();
   const { child, baseUrl, logs } = await startRealServer(porta);
   (globalThis as { __CE2E_BASE__?: string }).__CE2E_BASE__ = baseUrl;
@@ -317,15 +318,6 @@ test('COMMERCE E2E: catálogo → fila → vitrine → checkout → webhook paga
   }, tokenA, baseUrl);
   assert.ok([200, 201].includes(cfg.status), `config da loja: ${msg(cfg)}`);
 
-  // ---- 3b) vitrine pública (sem token) --------------------------------------
-  const vitrine = await req('GET', '/loja/produtos?page=1&pageSize=48', undefined, null, baseUrl);
-  assert.equal(vitrine.status, 200, `vitrine: ${msg(vitrine)}`);
-  const naVitrine = (vitrine.body?.produtos || []).find((p: any) => p.slug === slug);
-  assert.ok(naVitrine, 'produto projetado aparece na vitrine pública');
-  const vitrineDetalhe = await req('GET', `/loja/produtos/${slug}`, undefined, null, baseUrl);
-  assert.equal(vitrineDetalhe.status, 200, `detalhe público: ${msg(vitrineDetalhe)}`);
-  assert.equal(vitrineDetalhe.body?.produto?.nome, `Camiseta ${RODADA}`);
-
   // ---- 4) cupom de uso único -------------------------------------------------
   const codigoCupom = `CE2E${RODADA}`.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 20);
   const cupom = await req('POST', '/commerce/cupons', { codigo: codigoCupom, tipo: 'percentual', valor: 10, minimo_pedido: 0, uso_maximo: 1, validade: null, ativo: true }, tokenA, baseUrl);
@@ -350,29 +342,26 @@ test('COMMERCE E2E: catálogo → fila → vitrine → checkout → webhook paga
   const foreignCreator = await req('GET', `/creators/perfis/${creator.body.row.id}`, undefined, tokenB, baseUrl);
   assert.equal(foreignCreator.status, 404, 'outro tenant não acessa creator');
 
-  // ---- 5) config pública da loja espelha o frete manual ---------------------
-  const configPublica = await req('GET', '/loja/config', undefined, null, baseUrl);
-  assert.equal(configPublica.status, 200, `config pública: ${msg(configPublica)}`);
-  assert.equal(configPublica.body?.frete?.provedor, 'manual', 'a vitrine enxerga o frete configurado');
-
-  // ---- 6) preview com cupom --------------------------------------------------
+  // ---- 6) preview INTERNO com cupom (autenticado, ADR-0007) ------------------
   const itens = [{ produto_id: produtoId, tamanho_id: null, quantidade: 1 }];
-  const preview = await req('POST', '/loja/preview', { itens, cupom: codigoCupom }, null, baseUrl);
+  const preview = await req('POST', '/commerce/checkout/preview', { itens, cupom: codigoCupom }, tokenA, baseUrl);
   assert.equal(preview.status, 200, `preview: ${msg(preview)}`);
+  assert.equal(preview.body?.itens?.[0]?.nome, `Camiseta ${RODADA}`, 'produto publicado visível no motor interno');
+  assert.equal(preview.body?.itens?.[0]?.ok, true, 'item publicado e com estoque está apto');
   assert.equal(preview.body?.cupom?.valido, true, 'cupom válido no preview');
   assert.ok(Number(preview.body?.cupom?.desconto) > 0, 'cupom desconta no preview');
   assert.equal(preview.body?.frete?.disponivel, true, 'frete manual disponível');
   assert.equal(preview.body?.frete?.valor, 20, 'frete cobra a tabela');
 
-  // ---- 7) checkout público: pedido + sale + reserva + cobrança --------------
+  // ---- 7) checkout INTERNO: pedido + sale + reserva + cobrança -------------- (autenticado)
   const chave = `chave-${RODADA}-${randomUUID().slice(0, 8)}`.slice(0, 64);
-  const checkout = await req('POST', '/loja/checkout', {
+  const checkout = await req('POST', '/commerce/checkout', {
     chave,
     comprador: { nome: 'Cliente CE2E', email: 'cliente@ce2e.example.test', whatsapp: '62999991234', documento: '529.982.247-25' },
     itens,
     cupom: codigoCupom,
     endereco: { nome: 'Cliente CE2E', rua: 'Rua das Flores', numero: '10', bairro: 'Centro', cidade: 'Goiânia', uf: 'GO', cep: '74000-000', complemento: null },
-  }, null, baseUrl);
+  }, tokenA, baseUrl);
   assert.equal(checkout.status, 201, `checkout: ${msg(checkout)}`);
   const saleId = String(checkout.body?.sale_id || '');
   const tokenPedido = String(checkout.body?.pedido?.checkout_token || checkout.body?.checkout_token || '');
@@ -381,11 +370,11 @@ test('COMMERCE E2E: catálogo → fila → vitrine → checkout → webhook paga
   assert.equal(checkout.body?.ok, true);
 
   // reenvio do MESMO carrinho → idempotente (mesmo pedido)
-  const checkout2 = await req('POST', '/loja/checkout', {
+  const checkout2 = await req('POST', '/commerce/checkout', {
     chave,
     comprador: { nome: 'Cliente CE2E', email: 'cliente@ce2e.example.test', whatsapp: '62999991234', documento: '529.982.247-25' },
     itens,
-  }, null, baseUrl);
+  }, tokenA, baseUrl);
   assert.equal(checkout2.status, 200, `reenvio idempotente: ${msg(checkout2)}`);
   assert.equal(checkout2.body?.idempotente, true, 'mesma chave devolve o MESMO pedido');
   const attributed = await req('GET', `/creators/parcerias/${partnership.body.row.id}/atribuicoes`, undefined, tokenA, baseUrl);
@@ -406,8 +395,8 @@ test('COMMERCE E2E: catálogo → fila → vitrine → checkout → webhook paga
   assert.equal(reservas.rows.length, 1, 'UMA reserva de checkout ativa');
   assert.equal(reservas.rows[0].status, 'ativa', 'reserva ativa segura a última peça');
 
-  const acompanhamento = await req('GET', `/loja/pedidos/${tokenPedido}`, undefined, null, baseUrl);
-  assert.equal(acompanhamento.status, 200, `acompanhamento público: ${msg(acompanhamento)}`);
+  const acompanhamento = await req('GET', `/commerce/checkout/pedido/${tokenPedido}`, undefined, tokenA, baseUrl);
+  assert.equal(acompanhamento.status, 200, `acompanhamento interno: ${msg(acompanhamento)}`);
   assert.equal(acompanhamento.body?.pedido?.estado, 'AGUARDANDO_PAGAMENTO');
 
   // ---- 8) pagamento: SÓ o webhook do provedor confirma -----------------------
@@ -442,7 +431,7 @@ test('COMMERCE E2E: catálogo → fila → vitrine → checkout → webhook paga
   const linhaCupom = await cliente.query(`SELECT uso_atual FROM commerce_cupons WHERE codigo = $1`, [codigoCupom]);
   assert.equal(Number(linhaCupom.rows[0].uso_atual), 1, 'pagamento consumiu a ÚNICA uso do cupom');
 
-  const cupomEsgotado = await req('POST', '/loja/preview', { itens, cupom: codigoCupom }, null, baseUrl);
+  const cupomEsgotado = await req('POST', '/commerce/checkout/preview', { itens, cupom: codigoCupom }, tokenA, baseUrl);
   assert.equal(cupomEsgotado.status, 200, 'preview segue respondendo');
   assert.equal(cupomEsgotado.body?.cupom?.valido, false, 'cupom de uso único agora é inválido (fail-closed)');
 
@@ -485,16 +474,16 @@ test('COMMERCE E2E: catálogo → fila → vitrine → checkout → webhook paga
   // ---- 10) frete fail-closed -------------------------------------------------
   const cfgUpdate = await cliente.query(`UPDATE commerce_configuracoes SET frete_provedor = 'nenhum' WHERE loja_nome LIKE $1`, [`Loja ${RODADA}%`]);
   assert.ok((cfgUpdate.rowCount ?? 0) >= 1, 'configuracao de frete atualizada');
-  const semFrete = await req('POST', '/loja/preview', { itens: [{ produto_id: produtoId, tamanho_id: null, quantidade: 1 }] }, null, baseUrl);
+  const semFrete = await req('POST', '/commerce/checkout/preview', { itens: [{ produto_id: produtoId, tamanho_id: null, quantidade: 1 }] }, tokenA, baseUrl);
   assert.equal(semFrete.status, 200, 'preview continua respondendo sem frete');
   assert.equal(semFrete.body?.frete?.disponivel, false, 'frete indisponível quando não configurado');
   const motivo = String(semFrete.body?.frete?.motivo ?? semFrete.body?.frete_motivo ?? '');
   assert.match(motivo, /frete não configurado/i, `mensagem exata de frete não configurado: "${motivo}"`);
-  const checkoutSemFrete = await req('POST', '/loja/checkout', {
+  const checkoutSemFrete = await req('POST', '/commerce/checkout', {
     chave: `chave2-${RODADA}-${randomUUID().slice(0, 8)}`.slice(0, 64),
     comprador: { nome: 'Sem Frete', email: 'semfrete@ce2e.example.test', whatsapp: '62999991234', documento: '529.982.247-25' },
     itens: [{ produto_id: produtoId, tamanho_id: null, quantidade: 1 }],
-  }, null, baseUrl);
+  }, tokenA, baseUrl);
   assert.equal(checkoutSemFrete.status, 409, `checkout sem frete recusa com 409: ${msg(checkoutSemFrete)}`);
   assert.match(String(checkoutSemFrete.body?.erro ?? checkoutSemFrete.body?.error ?? ''), /frete/i, `409 explica o frete: ${msg(checkoutSemFrete)}`);
 

@@ -1,29 +1,29 @@
 // ============================================================================
-// FASE 2 — COERÊNCIA DOCUMENTAL DA `/loja` (estado atual × arquitetura-alvo).
+// ADR-0007 — RETIRADA DA LOJA PÚBLICA NATIVA `/loja` (executada).
 //
 // A decisão do Diretor (ADR-0007) é RETIRAR a loja pública nativa `/loja` e
-// deixar a RETAIL WooCommerce como única loja pública de varejo. A retirada,
-// porém, NÃO foi executada (bloqueada por ambiente/decisão — ver
-// NATIVE-STORE-DECOMMISSION-REPORT.md). Enquanto não executada, a
-// documentação precisa descrever a superfície como ATIVA, não como removida.
+// deixar a RETAIL WooCommerce como única loja pública de varejo. Esta missão
+// EXECUTOU a retirada. Este teste trava a coerência do estado FINAL:
+//   1. nenhuma superfície pública nativa (`/api/loja/*`, rotas SPA `/loja`);
+//   2. os módulos exclusivos da vitrine foram REMOVIDOS;
+//   3. os serviços COMPARTILHADOS permanecem (pedidos, cliente, frete, Payment
+//      Engine, WooCommerce);
+//   4. as URLs antigas têm tratamento explícito (301/410), nunca 200 enganoso.
 //
-// Este teste trava as duas metades da coerência:
-//   1. a superfície nativa continua REGISTRADA (nada foi removido por engano);
-//   2. os documentos de arquitetura NÃO afirmam a retirada como concluída.
-//
-// Não valida DNS, SEO nem o fluxo RETAIL (fora do escopo desta missão).
+// Não valida DNS, SEO externo nem o fluxo RETAIL (fora do escopo desta missão).
 // ============================================================================
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 
 process.env.NODE_ENV = 'test';
 delete process.env.DATABASE_URL;
 
 const raiz = new URL('../../', import.meta.url);
 const ler = (relativo: string) => readFileSync(new URL(relativo, raiz), 'utf8');
+const existe = (relativo: string) => existsSync(new URL(relativo, raiz));
 
-test('a superfície pública nativa continua registrada (nada removido nesta missão)', () => {
+test('a superfície pública nativa foi retirada (rotas /api/loja/* e SPA /loja)', () => {
   const index = ler('server/src/index.ts');
   for (const rota of [
     "'/api/loja/config'",
@@ -38,74 +38,69 @@ test('a superfície pública nativa continua registrada (nada removido nesta mis
     "'/api/commerce/checkout/payment-intent'",
     "'/api/commerce/loja/estado'",
   ]) {
-    assert.ok(index.includes(rota), `rota ${rota} deveria continuar registrada (retirada não executada)`);
+    assert.ok(!index.includes(rota), `rota ${rota} deveria ter sido retirada (ADR-0007)`);
   }
 
   const app = ler('client/src/App.tsx');
   for (const rota of ['/loja', '/loja/produto/:slug', '/loja/carrinho', '/loja/checkout', '/loja/pedido/:token']) {
-    assert.ok(app.includes(`path="${rota}"`), `rota SPA ${rota} deveria continuar registrada`);
+    assert.ok(!app.includes(`path="${rota}"`), `rota SPA ${rota} deveria ter sido retirada`);
   }
 });
 
-test('os serviços compartilhados da vitrine continuam presentes (não removidos)', () => {
-  // Só os módulos que a retirada preservaria; se algum sumir, é sinal de remoção
-  // fora do escopo (a missão proíbe descontinuar a /loja).
+test('os módulos exclusivos da vitrine nativa foram removidos', () => {
   for (const arquivo of [
     'server/src/commerce/vitrine.ts',
-    'server/src/commerce/pedidos.ts',
     'server/src/commerce/estado-loja.ts',
     'server/src/commerce/loja-base.ts',
+    'server/src/commerce/quantidade-carrinho.ts',
+    'server/src/commerce/storefront-seo.ts',
+    'client/src/pages/commerce/LojaConfigPage.tsx',
+    'client/src/pages/commerce/loja/LojaCheckoutPage.tsx',
+    'client/src/pages/commerce/loja/LojaInicioPage.tsx',
   ]) {
-    assert.doesNotThrow(() => ler(arquivo), `${arquivo} deveria existir`);
+    assert.ok(!existe(arquivo), `${arquivo} deveria ter sido removido`);
   }
 });
 
-test('o relatório registra a retirada como NÃO executada (coerência com o estado real)', () => {
-  const relatorio = ler('docs/architecture/NATIVE-STORE-DECOMMISSION-REPORT.md');
-  assert.match(relatorio, /NÃO EXECUTADA/i, 'o relatório deve declarar a retirada como não executada');
-  assert.match(relatorio, /bloquead/i, 'o relatório deve registrar o bloqueio');
+test('os serviços compartilhados permanecem (não removidos)', () => {
+  for (const arquivo of [
+    'server/src/commerce/pedidos.ts',
+    'server/src/commerce/cliente.ts',
+    'server/src/commerce/frete.ts',
+    'server/src/commerce/pagamento-ambiente.ts',
+    'server/src/commerce/woocommerce/registry.ts',
+  ]) {
+    assert.ok(existe(arquivo), `${arquivo} deveria existir (serviço compartilhado)`);
+  }
 });
 
-test('ADR-0007 registra a decisão como Aceita (a arquitetura-alvo é descontinuar)', () => {
+test('as URLs antigas da loja nativa têm tratamento explícito (301/410)', () => {
+  const retirada = ler('server/src/commerce/loja-nativa-retirada.ts');
+  assert.match(retirada, /410/, 'caminhos sem equivalente respondem 410 Gone');
+  assert.match(retirada, /redirect\(301/, 'caminho com equivalente redireciona 301 quando STOREFRONT_REDIRECT_URL existe');
+  const index = ler('server/src/index.ts');
+  assert.match(index, /lojaNativaRetirada/, 'o servidor usa o handler das URLs antigas antes do SPA');
+});
+
+test('o menu não expõe mais a Loja própria nem o atalho Abrir Loja', () => {
+  const modules = ler('client/src/modules.ts');
+  assert.doesNotMatch(modules, /id: 'commerce-loja'/, 'módulo Loja própria retirado do menu');
+  assert.doesNotMatch(modules, /id: 'commerce-abrir-loja'/, 'atalho Abrir Loja retirado do menu');
+  assert.doesNotMatch(modules, /path: '\/loja'/, 'nenhum item de menu aponta para /loja');
+});
+
+test('a RETAIL WooCommerce é preservada como canal de varejo', () => {
+  const registry = ler('server/src/commerce/woocommerce/registry.ts');
+  assert.match(registry, /'RETAIL'/, 'RETAIL preservada');
+  assert.match(registry, /'WHOLESALE'/, 'WHOLESALE preservada');
+});
+
+test('a documentação registra a retirada como EXECUTADA (coerência com o estado real)', () => {
+  const relatorio = ler('docs/architecture/NATIVE-STORE-DECOMMISSION-REPORT.md');
+  assert.match(relatorio, /EXECUTAD/i, 'o relatório deve declarar a retirada como executada');
+});
+
+test('ADR-0007 registra a decisão como Aceita', () => {
   const adr = ler('docs/architecture/ADR/ADR-0007-descontinuacao-loja-nativa.md');
   assert.match(adr, /Status:\*\*\s*\*\*Aceita/i, 'ADR-0007 deve estar Aceita');
-});
-
-test('nenhum documento de arquitetura afirma a retirada da /loja como concluída', () => {
-  // O risco corrigido nesta missão: docs diziam "descontinuada" (concluída)
-  // quando a superfície segue ativa. "Descontinuar/descontinuada" só é aceitável
-  // como decisão/plano, nunca como estado realizado.
-  const arquivos = [
-    'docs/architecture/SECURITY-ARCHITECTURE.md',
-    'docs/architecture/TARGET-ARCHITECTURE.md',
-    'docs/architecture/README.md',
-    'docs/architecture/NATIVE-STORE-DECOMMISSION.md',
-    'docs/architecture/NATIVE-STORE-DECOMMISSION-REPORT.md',
-  ];
-  for (const arquivo of arquivos) {
-    const texto = ler(arquivo);
-    assert.doesNotMatch(
-      texto,
-      /loja nativa[^\n]*\*\*descontinuada\*\*/i,
-      `${arquivo}: a loja nativa não pode ser descrita como "descontinuada" (ainda está ativa)`
-    );
-    assert.doesNotMatch(
-      texto,
-      /retirada[^\n]*\*\*(concluída|executada)\*\*/i,
-      `${arquivo}: a retirada não pode ser descrita como concluída/executada`
-    );
-    // Afirmação em prosa (sem negrito) do tipo "A retirada é executada na
-    // Fase 2" também é incoerente com o estado real (retirada não executada).
-    assert.doesNotMatch(
-      texto,
-      /retirada (?:é|e|foi) executada/i,
-      `${arquivo}: a retirada não pode ser afirmada como executada (ainda pendente — BL-015)`
-    );
-  }
-});
-
-test('o plano de retirada (NATIVE-STORE-DECOMMISSION.md) declara a execução bloqueada', () => {
-  const plano = ler('docs/architecture/NATIVE-STORE-DECOMMISSION.md');
-  assert.match(plano, /execução está\s+bloqueada\*\*/i, 'o plano deve declarar a execução bloqueada');
-  assert.match(plano, /ainda está ativa/i, 'o plano deve declarar a superfície ainda ativa');
 });

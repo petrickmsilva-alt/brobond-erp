@@ -154,10 +154,10 @@ Números relidos de `npm run architecture:audit` ao fim da Fase 2:
   funcional e **sem** alteração de banco.
 - **Fase 1** — fundação e governança (padrões + implementação mínima + testes).
 - **Fase 2** — núcleo canônico de dados + descontinuação da loja pública nativa
-  `/loja`. **Status:** o núcleo de dados foi entregue; a **retirada da `/loja`
-  não foi executada** (bloqueada por ambiente/decisão) — ver
-  [`NATIVE-STORE-DECOMMISSION-REPORT.md`](NATIVE-STORE-DECOMMISSION-REPORT.md) e
-  `MASTER-BACKLOG.md` (BL-015). A superfície nativa **ainda está ativa**.
+  `/loja`. **Status:** o núcleo de dados foi entregue e a **retirada da `/loja`
+  foi EXECUTADA** — ver
+  [`NATIVE-STORE-DECOMMISSION-REPORT.md`](NATIVE-STORE-DECOMMISSION-REPORT.md).
+  A superfície nativa **não existe mais**; as URLs antigas respondem 301/410.
 
 **Fora de escopo (por decisão do Diretor):** microserviços, reescrita do ERP,
 migração integral para Prisma, cutover comercial, ativação de integrações

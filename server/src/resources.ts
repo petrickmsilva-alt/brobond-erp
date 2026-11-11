@@ -6358,7 +6358,7 @@ export const RESOURCES: Record<string, Resource> = {
   // BROBOND COMMERCE OS (migration 0068) — catálogo multicanal, publicação,
   // pedidos omnichannel, fila/outbox, promoções e rastreio.
   //
-  // As telas do Commerce usam endpoints próprios (/api/commerce/* e /api/loja/*)
+  // As telas do Commerce usam endpoints próprios (/api/commerce/* (e o checkout interno /api/commerce/checkout/*))
   // com as REGRAS do domínio (fila, idempotência, conversão); o recurso aqui
   // declara a FORMA da tabela, o RBAC (checkAccess) e o dono por capacidade.
   // Nenhum destes recursos cria um motor paralelo de estoque/vendas/pagamento.

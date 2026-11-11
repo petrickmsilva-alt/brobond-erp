@@ -61,7 +61,9 @@ describe('Commerce — Detalhe do produto (/commerce/produtos/:id)', () => {
     fetchMock.mockResolvedValue(DETALHE);
     renderPagina();
     expect(await screen.findByText('Camiseta Brobond')).toBeInTheDocument();
-    expect(screen.getByText('camiseta-brobond')).toBeInTheDocument();
+    // O slug público é editado em campo próprio (a URL /loja/produto/<slug> foi
+    // retirada com a loja nativa — ADR-0007).
+    expect(screen.getByDisplayValue('camiseta-brobond')).toBeInTheDocument();
     expect((await screen.findAllByText('Mercado Livre')).length).toBeGreaterThan(0);
     expect((await screen.findAllByText('WooCommerce')).length).toBeGreaterThan(0);
     expect(screen.getByText(/WooCommerce não configurado/)).toBeInTheDocument();

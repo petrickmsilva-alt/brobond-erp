@@ -67,7 +67,7 @@ describe('Commerce — Catálogo multicanal (/commerce/produtos)', () => {
     expect(await screen.findByText('Camiseta Brobond')).toBeInTheDocument();
     expect(screen.getByText(/CAM-001/)).toBeInTheDocument();
     expect(screen.getByText('R$ 89,90')).toBeInTheDocument();
-    expect(screen.getByText('Na vitrine')).toBeInTheDocument();
+    expect(screen.getByText('Com conteúdo')).toBeInTheDocument();
     expect(screen.getByText('12')).toBeInTheDocument();
     expect(screen.getByText(/1 produto\(s\) no catálogo/)).toBeInTheDocument();
     expect(screen.queryByRole('dialog')).toBeNull();

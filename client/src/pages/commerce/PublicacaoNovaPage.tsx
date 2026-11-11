@@ -170,9 +170,6 @@ export default function CommercePublicacaoNovaPage() {
                         A Graph API não publica item individual — a fila responderá REJECTED com o motivo real (documentado).
                       </span>
                     )}
-                    {c.valor === 'BROBOND' && (
-                      <span className="block text-xs text-muted">Exige o produto projetado na vitrine (slug) antes de publicar.</span>
-                    )}
                   </span>
                 </label>
               </li>

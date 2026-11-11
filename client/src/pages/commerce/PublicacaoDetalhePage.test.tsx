@@ -1,6 +1,6 @@
 // ============================================================================
-// COMMERCE — /commerce/publicacoes/:id: detalhe REAL da fila com reprocessar
-// e despublicar (confirmação inline). ZERO MODAL.
+// COMMERCE — /commerce/publicacoes/:id: detalhe REAL da fila com reprocessar.
+// A despublicação da vitrine própria foi retirada com a loja nativa (ADR-0007).
 // ============================================================================
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
@@ -39,7 +39,7 @@ const DETALHE = {
     publicado_em: null,
     atualizado_em: '2026-10-28T11:00:00.000Z',
   },
-  produto: { id: 7, sku: 'SKU-7', nome: 'Camiseta Brobond', preco_base: 89.9, na_vitrine: true },
+  produto: { id: 7, sku: 'SKU-7', nome: 'Camiseta Brobond', preco_base: 89.9 },
   preco: { preco: 120, promo: null, origem: 'canal', linha: { preco: 120, preco_promo: null, vigencia_inicio: null, vigencia_fim: null } },
   metadados: { ml_category_id: 'MLB123' },
 };
@@ -91,25 +91,17 @@ describe('Commerce — Detalhe da publicação (/commerce/publicacoes/:id)', () 
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 
-  it('despublicar (BROBOND) usa confirmação INLINE — nunca modal', async () => {
+  it('não expõe mais a despublicação da vitrine nativa (retirada com ADR-0007)', async () => {
     const publicado = {
       ...DETALHE,
-      publicacao: { ...DETALHE.publicacao, canal: 'BROBOND', estado: 'PUBLISHED', external_id: 'slug-camiseta' },
+      publicacao: { ...DETALHE.publicacao, canal: 'WOOCOMMERCE', estado: 'PUBLISHED', external_id: 'woo-1' },
       preco: { preco: 89.9, promo: null, origem: 'base', linha: null },
     };
     fetchMock.mockResolvedValue(publicado);
     renderPagina();
     await screen.findByText('Camiseta Brobond');
-    await userEvent.click(screen.getByRole('button', { name: /Despublicar da vitrine/ }));
-    expect(screen.queryByRole('dialog')).toBeNull();
-    fetchMock.mockClear();
-    fetchMock.mockImplementation(async (path: string) =>
-      String(path).includes('despublicar') ? { ok: true } : publicado
-    );
-    await userEvent.click(screen.getByRole('button', { name: 'Despublicar' }));
-    await vi.waitFor(() => {
-      expect(fetchMock.mock.calls.some(([p, o]) => String(p).includes('/commerce/produtos/7/despublicar') && o?.method === 'POST')).toBe(true);
-    });
+    expect(screen.queryByRole('button', { name: /Despublicar/ })).toBeNull();
+    expect(fetchMock.mock.calls.some(([p, o]) => String(p).includes('despublicar') && o?.method === 'POST')).toBe(false);
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 });
