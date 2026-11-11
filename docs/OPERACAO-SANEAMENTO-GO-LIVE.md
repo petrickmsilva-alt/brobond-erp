@@ -84,6 +84,36 @@ prosseguir.
 
 ## Registro da execução (preencher ao executar no banco publicado)
 
+### Fase Zero — pré-checagem (2026-11-11)
+
+| Campo | Valor |
+|---|---|
+| Ambiente publicado | `https://brobond-erp.onrender.com` — alcançável (`/api/health` → `200`, `banco: conectado`, `version: 0.6.0`) |
+| Código publicado | **Anterior à descontinuação**: `/loja` → `200` e `/api/loja/config` → `200`. O deploy da branch `operations/pre-go-live-data-sanitization` **não** foi feito (exige autorização do Diretor). |
+| Migration 0115 no repositório | **presente** (`db/migrations/0115_fase9_5_fiscal_layouts.sql`) |
+| Migration 0115 aplicada no banco publicado | **não verificável** — sem credencial |
+| `DATABASE_URL` do banco publicado | **AUSENTE** no ambiente de execução (`render.yaml` traz a seção `databases` comentada; nenhuma variável de conexão exposta) |
+| Backup recuperável do banco publicado | **BLOQUEADO** — sem credencial de conexão não há `pg_dump` nem verificação de restauração |
+| Fotografia do estoque real | **BLOQUEADO** — exige conexão ao banco publicado |
+
+### Bloqueio operacional identificado
+
+O saneamento no banco publicado **não foi executado**. Motivo único e preciso:
+
+> Não há credencial (`DATABASE_URL`) de conexão ao banco PostgreSQL publicado
+> disponível neste ambiente. Sem ela não é possível (a) gerar o backup
+> recuperável obrigatório da Fase Zero, (b) obter a fotografia do estoque real,
+> nem (c) executar a limpeza transacional com comparação antes/depois.
+
+Conforme §14 da ordem executiva, **não** foram contornados controles de acesso
+nem simulada execução em produção. A entrega de código, testes e documentação
+está completa; falta apenas a execução operacional, que exige a credencial do
+banco publicado e a autorização expressa do Diretor.
+
+**Desbloqueio necessário:** fornecer a `DATABASE_URL` do banco publicado (banco
+vazio **não** é exigido aqui; é o banco de produção) — ou executar o runbook no
+próprio host Render — e autorizar o passo operacional.
+
 | Campo | Valor |
 |---|---|
 | Data/hora | _pendente_ |
@@ -94,7 +124,7 @@ prosseguir.
 | Linhas removidas por tabela | _pendente_ |
 | Quantidades preservadas | _pendente_ |
 | Divergências de estoque | _pendente_ |
-| Resultado | _pendente_ |
+| Resultado | **BLOQUEADO — sem credencial de conexão ao banco publicado** |
 
 O saneamento no banco publicado **só** ocorre após autorização expressa e
 backup comprovado. Não confundir o código entregue com os dados efetivamente
