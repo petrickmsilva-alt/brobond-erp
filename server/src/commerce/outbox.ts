@@ -19,7 +19,7 @@ import { HttpError } from '../errors';
 import type { Request, Response } from 'express';
 import { getResource } from '../resources';
 import { escopoDeSistema } from '../empresa';
-import { MAX_TENTATIVAS, backoffMs } from './regras';
+import { MAX_TENTATIVAS, backoffMs, notificacaoSuperseded } from './regras';
 import { randomUUID } from 'node:crypto';
 import { log } from '../log';
 import type { Row, Tx } from '../store';
@@ -84,7 +84,7 @@ export async function enfileirarOutbox(
   }, tx);
 }
 
-type Desfecho = { status: 'processado' | 'retry' | 'erro'; erro?: string };
+type Desfecho = { status: 'processado' | 'retry' | 'erro' | 'bloqueado'; erro?: string };
 
 async function processarEntrada(row: Row): Promise<Desfecho> {
   const s = getStore();
@@ -109,6 +109,7 @@ async function processarEntrada(row: Row): Promise<Desfecho> {
     const { processarEventoNotificacao } = await import('./notificacoes');
     // empresa da LINHA prevalece sobre o payload (isolamento entre empresas).
     const r = await processarEventoNotificacao({ ...payload, empresa_id: empresaId });
+    if (r.status === 'bloqueado') return { status: 'bloqueado', erro: r.erro };
     return r.status === 'retry' ? { status: 'retry', erro: r.erro } : { status: 'processado' };
   }
 
@@ -147,6 +148,7 @@ async function processarEntrada(row: Row): Promise<Desfecho> {
       const { processarEventoNotificacao } = await import('./notificacoes');
       // empresa da LINHA prevalece sobre o payload (isolamento entre empresas).
       const r = await processarEventoNotificacao({ ...payload, empresa_id: empresaId });
+      if (r.status === 'bloqueado') return { status: 'bloqueado', erro: r.erro };
       return r.status === 'retry' ? { status: 'retry', erro: r.erro } : { status: 'processado' };
     }
     if (acao === 'woo-estoque') {
@@ -325,6 +327,17 @@ async function processarLinhaOutbox(s: ReturnType<typeof getStore>, row: Row, jo
           proxima_tentativa_em: null, atualizado_em: new Date().toISOString(),
         });
         return falha ? 'erro' : 'outro';
+      } else if (desfecho.status === 'bloqueado') {
+        // PENDÊNCIA DE CONFIGURAÇÃO: não é falha técnica e não é retry. O evento
+        // para em BLOQUEADO (terminal) até alguém configurar o provedor. NÃO
+        // consome tentativas — repetir não cria um provedor.
+        const bloqueada = await s.tryUpdateIf(R_OUTBOX(), Number(row.id), esperado, {
+          estado: 'BLOQUEADO', tentativas,
+          ultimo_erro: String(desfecho.erro || 'Canal sem provedor configurado.').slice(0, 500),
+          proxima_tentativa_em: null, atualizado_em: new Date().toISOString(),
+        });
+        if (bloqueada) log.warn('outbox_entrada_bloqueada', { job_id: jobId, event_id: Number(row.id), tipo: String(row.tipo), empresa_id: Number(row.empresa_id), motivo: String(desfecho.erro || '').slice(0, 200) });
+        return 'outro';
       } else {
         // retry com backoff — e ERRO honesto quando esgota
         const esgotou = tentativas >= MAX_TENTATIVAS;
@@ -432,8 +445,13 @@ export async function reprocessarOutbox(req: Request, res: Response) {
     const antes = await s.findOneWhere(R_OUTBOX(), { id, empresa_id: empresaId }, tx);
     if (!antes) throw new HttpError(404, 'Evento não encontrado.');
     const estadoAntes = String(antes.estado);
-    if (estadoAntes !== 'ERRO' && estadoAntes !== 'INDETERMINADO') {
-      throw new HttpError(409, 'Somente eventos em erro ou indeterminados podem ser reenfileirados.');
+    if (estadoAntes === 'OBSOLETO') {
+      // Encerrado por obsolescência (canal descontinuado): reenviar seria
+      // mandar dado para um destino que não existe mais. Terminal, sem retry.
+      throw new HttpError(409, 'Evento encerrado por obsolescência; não é reenviável.');
+    }
+    if (estadoAntes !== 'ERRO' && estadoAntes !== 'INDETERMINADO' && estadoAntes !== 'BLOQUEADO') {
+      throw new HttpError(409, 'Somente eventos em erro, indeterminados ou bloqueados podem ser reenfileirados.');
     }
     const depois = await s.tryUpdateIf(R_OUTBOX(), id, { empresa_id: empresaId, estado: estadoAntes, tentativas: antes.tentativas },
       { estado: 'PENDENTE', tentativas: 0, ultimo_erro: null, proxima_tentativa_em: new Date().toISOString() }, tx);
@@ -445,6 +463,182 @@ export async function reprocessarOutbox(req: Request, res: Response) {
     return depois;
   });
   res.json({ id: Number(resultado.id), estado: resultado.estado });
+}
+
+// ----------------------------------------------------------------------------
+// RECONCILIAÇÃO DA FILA (Fase 6) — encerramento AUDITADO de avisos sem efeito.
+//
+// Por que existe: uma falha de configuração (SMTP/Meta ausente) ou um aviso que
+// o estado canônico do pedido já ultrapassou NÃO é uma falha de sincronização.
+// Empilhar isso como ERRO ("após 10 tentativas") mente para o operador. Esta
+// rotina RECLASSIFICA a fila contra a verdade canônica (pedido/pagamento):
+//
+//   • aviso de notificação BLOQUEADO/ERRO cujo pedido está CANCELADO/EXPIRADO/
+//     ESTORNADO (ou cuja cobrança já foi resolvida) → OBSOLETO, com motivo,
+//     data e responsável na trilha (auditoria);
+//   • aviso BLOQUEADO cujo provedor FOI configurado e o pedido segue vivo →
+//     volta para PENDENTE (agora é um envio legítimo);
+//   • NUNCA fecha evento com efeito financeiro/estoque pendente: só eventos de
+//     NOTIFICAÇÃO (`acao='notificacao'`), que são comunicação, não dinheiro;
+//   • NUNCA apaga histórico: o evento permanece, só muda de estado com motivo.
+//
+// Só um gerente/admin roda (RBAC no endpoint). Cada encerramento é auditado.
+// ----------------------------------------------------------------------------
+export type ResultadoReconciliacaoFila = {
+  empresa_id: number;
+  examinados: number;
+  obsoletos: number;
+  reclassificados: number;
+  reenfileirados: number;
+  mantidos: number;
+  detalhes: Array<{ id: number; chave: string; de: string; para: string; motivo: string }>;
+};
+
+/** Canais cujo provedor está configurado (SMTP/WhatsApp). Sem provedor → bloqueado. */
+async function provedorNotificacaoConfigurado(empresaId: number): Promise<boolean> {
+  const { situacaoCanaisNotificacao } = await import('./notificacoes');
+  const situacao = await situacaoCanaisNotificacao(empresaId);
+  return situacao.email.status_configuracao === 'CONFIGURADO' || situacao.whatsapp.status_configuracao === 'CONFIGURADO';
+}
+
+/**
+ * Reclassifica a fila de notificação de UMA empresa contra o estado canônico.
+ * Idempotente: rodar duas vezes não muda nada depois da primeira.
+ */
+export async function reconciliarFilaCommerce(
+  empresaId: number,
+  ator: { id?: number | null; name?: string | null } = {},
+  tx?: Tx
+): Promise<ResultadoReconciliacaoFila> {
+  const s = getStore();
+  const R_PEDIDOS = getResource('commerce_pedidos')!;
+  const R_NOTIF = getResource('commerce_notificacoes')!;
+  const outbox = await s.list(R_OUTBOX(), { page: 1, pageSize: 50_000, filter: { empresa_id: empresaId } }, tx);
+  const pedidos = await s.list(R_PEDIDOS, { page: 1, pageSize: 50_000, filter: { empresa_id: empresaId } }, tx);
+  const pedidoPorId = new Map(pedidos.rows.map((p) => [Number(p.id), p]));
+  const provedorOk = await provedorNotificacaoConfigurado(empresaId);
+
+  // Onde a falha nasceu: um evento ERRO só é FALHA TÉCNICA se a notificação
+  // subjacente falhou POR OUTRO MOTIVO que não falta de configuração. Se todas
+  // as linhas relevantes estão NAO_CONFIGURADO, o ERRO é configuração disfarçada
+  // de falha — e o painel precisa dizer isso, não "falha de sincronização".
+  const notificacoes = await s.list(R_NOTIF, { page: 1, pageSize: 50_000, filter: { empresa_id: empresaId } }, tx);
+  const configPorEvento = new Map<string, { total: number; naoConfigurados: number }>();
+  for (const n of notificacoes.rows) {
+    if (String(n.estado) === 'IGNORADO') continue;
+    const chave = `${Number(n.pedido_id)}:${String(n.evento)}`;
+    const acc = configPorEvento.get(chave) ?? { total: 0, naoConfigurados: 0 };
+    acc.total += 1;
+    if (String(n.provider_status || '') === 'NAO_CONFIGURADO') acc.naoConfigurados += 1;
+    configPorEvento.set(chave, acc);
+  }
+  const eventoSoConfiguracao = (pedidoId: number, evento: string): boolean => {
+    const acc = configPorEvento.get(`${pedidoId}:${evento}`);
+    return !!acc && acc.total > 0 && acc.naoConfigurados === acc.total;
+  };
+
+  const detalhes: ResultadoReconciliacaoFila['detalhes'] = [];
+  let examinados = 0;
+  let obsoletos = 0;
+  let reclassificados = 0;
+  let reenfileirados = 0;
+  let mantidos = 0;
+  const agora = new Date().toISOString();
+
+  for (const o of outbox.rows) {
+    const estado = String(o.estado || '').toUpperCase();
+    if (!['ERRO', 'BLOQUEADO', 'INDETERMINADO'].includes(estado)) continue;
+    const payload = (o.payload && typeof o.payload === 'object' ? o.payload : {}) as Record<string, unknown>;
+    // SÓ eventos de notificação: comunicação transacional, nunca dinheiro/estoque.
+    if (String(payload.acao || '') !== 'notificacao') continue;
+    examinados += 1;
+    const pedidoId = Number(payload.pedido_id);
+    const pedido = Number.isInteger(pedidoId) ? pedidoPorId.get(pedidoId) : undefined;
+    const evento = String(payload.evento || '');
+    const veredito = notificacaoSuperseded(evento, pedido as { estado?: string; pagamento_estado?: string } | undefined);
+    const esperado = { empresa_id: empresaId, estado, tentativas: Number(o.tentativas || 0), claim_versao: Number(o.claim_versao || 0) };
+
+    if (veredito.superseded) {
+      const motivo = `${veredito.motivo} Encerrado por reconciliação (não é falha de sincronização).`;
+      const ok = await s.tryUpdateIf(R_OUTBOX(), Number(o.id), esperado, {
+        estado: 'OBSOLETO', ultimo_erro: null, proxima_tentativa_em: null,
+        motivo_encerramento: motivo, encerrado_em: agora, encerrado_por: ator.name ?? 'reconciliação',
+        atualizado_em: agora,
+      }, tx);
+      if (ok) {
+        obsoletos += 1;
+        detalhes.push({ id: Number(o.id), chave: String(o.chave), de: estado, para: 'OBSOLETO', motivo });
+        await s.audit({
+          empresa_id: empresaId, usuario_id: ator.id ?? null, usuario: ator.name ?? null,
+          acao: 'ajuste', recurso: 'commerce_outbox', registro_id: Number(o.id),
+          descricao: `Evento obsoleto encerrado por reconciliação: ${evento || String(o.chave)}`,
+          dados: { de: estado, para: 'OBSOLETO', motivo, evento, pedido_id: pedidoId || null },
+        }, tx);
+      } else mantidos += 1;
+      continue;
+    }
+
+    // ERRO histórico causado SÓ por falta de configuração: reclassifica para
+    // BLOQUEADO (pendência de configuração) — não é falha técnica. Sem isso, os
+    // "erros após 10 tentativas" da fila continuariam mentindo no painel.
+    const configBloqueado = estado === 'ERRO' && eventoSoConfiguracao(pedidoId, evento);
+    if (configBloqueado) {
+      const para = provedorOk ? 'PENDENTE' : 'BLOQUEADO';
+      const motivo = provedorOk
+        ? 'Provedor configurado: o erro era falta de configuração; envio liberado.'
+        : 'Falha por falta de configuração do canal (SMTP/WhatsApp). Reclassificada de ERRO para BLOQUEADO.';
+      const ok = await s.tryUpdateIf(R_OUTBOX(), Number(o.id), esperado, provedorOk
+        ? { estado: 'PENDENTE', tentativas: 0, ultimo_erro: null, proxima_tentativa_em: agora, atualizado_em: agora }
+        : { estado: 'BLOQUEADO', ultimo_erro: motivo, proxima_tentativa_em: null, atualizado_em: agora }, tx);
+      if (ok) {
+        if (provedorOk) reenfileirados += 1;
+        else reclassificados += 1;
+        detalhes.push({ id: Number(o.id), chave: String(o.chave), de: estado, para, motivo });
+        await s.audit({
+          empresa_id: empresaId, usuario_id: ator.id ?? null, usuario: ator.name ?? null,
+          acao: 'ajuste', recurso: 'commerce_outbox', registro_id: Number(o.id),
+          descricao: `Evento reclassificado por configuração pendente: ${evento || String(o.chave)}`,
+          dados: { de: estado, para, evento, pedido_id: pedidoId || null },
+        }, tx);
+      } else mantidos += 1;
+      continue;
+    }
+
+    // Bloqueado por CONFIGURAÇÃO que já foi resolvida: volta para a fila.
+    if (estado === 'BLOQUEADO' && provedorOk) {
+      const ok = await s.tryUpdateIf(R_OUTBOX(), Number(o.id), esperado, {
+        estado: 'PENDENTE', tentativas: 0, ultimo_erro: null,
+        proxima_tentativa_em: agora, atualizado_em: agora,
+      }, tx);
+      if (ok) {
+        reenfileirados += 1;
+        detalhes.push({ id: Number(o.id), chave: String(o.chave), de: estado, para: 'PENDENTE', motivo: 'Provedor de notificação configurado; envio liberado.' });
+        await s.audit({
+          empresa_id: empresaId, usuario_id: ator.id ?? null, usuario: ator.name ?? null,
+          acao: 'ajuste', recurso: 'commerce_outbox', registro_id: Number(o.id),
+          descricao: `Evento bloqueado liberado após configuração do provedor: ${evento || String(o.chave)}`,
+          dados: { de: estado, para: 'PENDENTE' },
+        }, tx);
+      } else mantidos += 1;
+      continue;
+    }
+    mantidos += 1;
+  }
+
+  return { empresa_id: empresaId, examinados, obsoletos, reclassificados, reenfileirados, mantidos, detalhes };
+}
+
+/**
+ * POST /api/commerce/outbox/reconciliar — encerra avisos obsoletos com trilha.
+ * Exige gerente/admin (mesma alçada do reenfileiramento) e empresa ativa.
+ */
+export async function reconciliarFilaEndpoint(req: Request, res: Response) {
+  const actor = currentUser(req);
+  checkAccess(R_OUTBOX(), actor, 'read');
+  const empresaId = escopoDoAtor(actor).empresaId;
+  const s = getStore();
+  const resultado = await s.transaction((tx) => reconciliarFilaCommerce(empresaId, { id: actor.id, name: actor.name }, tx));
+  res.json(resultado);
 }
 
 /**

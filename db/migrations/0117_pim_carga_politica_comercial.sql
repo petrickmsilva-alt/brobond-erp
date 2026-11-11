@@ -1,5 +1,5 @@
 -- ============================================================================
--- 0116 — CARGA OFICIAL DA POLÍTICA COMERCIAL: IDENTIFICADORES DE ORIGEM
+-- 0117 — CARGA OFICIAL DA POLÍTICA COMERCIAL: IDENTIFICADORES DE ORIGEM
 --
 -- A planilha-base ("TABELA DE PREÇO BASE PARA ERP.xlsx") traz, além do SKU
 -- canônico (`Código Industria`), dois identificadores de origem que o ERP

@@ -1,5 +1,5 @@
 {
-  "gerado_em": "2026-11-11T15:07:36.807Z",
+  "gerado_em": "2026-11-11T13:23:07.565Z",
   "fonte_de_verdade_do_schema": "db/schema.sql + db/migrations/*.sql (PostgreSQL); Prisma = bounded context do commerce",
   "migrations": {
     "sql": 116,
@@ -12,7 +12,7 @@
     "sem_empresa_id": 21,
     "fora_do_prisma": 212
   },
-  "indices": 629,
+  "indices": 628,
   "constraints": 431,
   "recursos": {
     "total": 185,
@@ -93,10 +93,10 @@
     "com_recurso": 112
   },
   "rotas": {
-    "total": 504,
+    "total": 503,
     "por_metodo": {
       "GET": 223,
-      "POST": 242,
+      "POST": 241,
       "PUT": 22,
       "DELETE": 14,
       "PATCH": 3
@@ -208,13 +208,13 @@
   "testes": {
     "server": {
       "arquivos": 317,
-      "casos": 2625
+      "casos": 2635
     },
     "client": {
       "arquivos": 130,
-      "casos": 1098
+      "casos": 1100
     },
-    "total": 3723
+    "total": 3735
   },
   "integracoes": {
     "arquivos_modules": 81,

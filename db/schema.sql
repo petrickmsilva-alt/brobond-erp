@@ -6862,9 +6862,15 @@ CREATE TABLE IF NOT EXISTS commerce_outbox (
   chave TEXT NOT NULL,
   payload JSONB,
   estado TEXT NOT NULL DEFAULT 'PENDENTE',
-  CONSTRAINT commerce_outbox_estado_ck CHECK (estado IN ('PENDENTE', 'PROCESSANDO', 'PROCESSADO', 'ERRO')),
+  CONSTRAINT commerce_outbox_estado_ck CHECK (estado IN (
+    'PENDENTE', 'PROCESSANDO', 'PROCESSADO', 'ERRO', 'INDETERMINADO',
+    'BLOQUEADO', 'OBSOLETO'
+  )),
   tentativas INTEGER NOT NULL DEFAULT 0 CHECK (tentativas >= 0),
   ultimo_erro TEXT,
+  motivo_encerramento TEXT,
+  encerrado_em TIMESTAMPTZ,
+  encerrado_por TEXT,
   proxima_tentativa_em TIMESTAMPTZ,
   processado_em TIMESTAMPTZ,
   criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -6872,6 +6878,9 @@ CREATE TABLE IF NOT EXISTS commerce_outbox (
   CONSTRAINT uq_commerce_outbox_chave UNIQUE (empresa_id, tipo, chave)
 );
 CREATE INDEX IF NOT EXISTS ix_commerce_outbox_fila ON commerce_outbox (estado, proxima_tentativa_em);
+CREATE INDEX IF NOT EXISTS ix_commerce_outbox_encerrados
+  ON commerce_outbox (empresa_id, estado, encerrado_em DESC)
+  WHERE estado IN ('BLOQUEADO', 'OBSOLETO');
 
 -- ----------------------------------------------------------------------------
 -- Promoções e cupons (vitrine própria). Cálculo é função pura do servidor
@@ -9353,7 +9362,7 @@ CREATE INDEX IF NOT EXISTS fiscal_layouts_sistema_vigencia_idx
 
 -- ============================================================================
 -- ESPELHO da migração 0116 — IDENTIFICADORES DE ORIGEM DA CARGA COMERCIAL
--- (a autoridade é db/migrations/0116_pim_carga_politica_comercial.sql; este
+-- (a autoridade é db/migrations/0117_pim_carga_politica_comercial.sql; este
 --  espelho existe para o parser de schema e o contrato de colunas dos recursos)
 -- ============================================================================
 ALTER TABLE produtos ADD COLUMN IF NOT EXISTS codigo_item TEXT;

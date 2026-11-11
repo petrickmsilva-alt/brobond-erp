@@ -89,6 +89,56 @@ export function mapearEstadoPagamento(statusCobranca: unknown): EstadoPagamento 
 }
 
 // ----------------------------------------------------------------------------
+// SUPERSESSÃO DE AVISO (Fase 6 — saúde do Omnichannel)
+//
+// Um aviso transacional (evento do outbox → commerce_notificacoes) perde
+// finalidade quando o estado CANÔNICO do pedido já o ultrapassou. Enviar
+// "PIX gerado" para um pedido EXPIRADO, ou "pagamento pendente" para um pedido
+// já PAGO, é ruído — não comunicação. A regra é PURA (oráculo em
+// commerce-oracle.test.ts) e CONSERVADORA: só marca supersessão diante de um
+// estado terminal/irreversível do pedido; na dúvida, o aviso permanece válido.
+//
+// Isto NÃO decide sozinho: quem encerra é a reconciliação AUDITADA
+// (`reconciliarFilaCommerce`), acionada por um gerente. A regra só responde
+// "o estado atual ainda justifica este aviso?".
+// ----------------------------------------------------------------------------
+
+/** Estados do pedido que tornam QUALQUER aviso não-terminal sem efeito. */
+const PEDIDO_TERMINAL = new Set<string>(['CANCELADO', 'EXPIRADO', 'ESTORNADO']);
+/** Estados do pedido em que a cobrança já foi resolvida (paga/convertida). */
+const PEDIDO_RESOLVIDO = new Set<string>(['PAGO', 'CONVERTIDO']);
+/** Avisos que só fazem sentido ENQUANTO a cobrança está em aberto. */
+const AVISOS_DE_COBRANCA = new Set<string>(['PIX_GENERATED', 'PAYMENT_PENDING', 'PAYMENT_REJECTED']);
+/** Avisos que refletem o próprio estado terminal (não são supersedidos por ele). */
+const AVISOS_TERMINAIS = new Set<string>(['ORDER_CANCELLED', 'ORDER_EXPIRED']);
+
+/**
+ * `superseded` = o estado canônico do pedido já tornou o aviso sem efeito.
+ * `motivo` explica por quê (vai para a trilha do encerramento).
+ */
+export function notificacaoSuperseded(
+  evento: string,
+  pedido: { estado?: string | null; pagamento_estado?: string | null } | null | undefined
+): { superseded: boolean; motivo?: string } {
+  if (!pedido) return { superseded: false };
+  const estado = String(pedido.estado || '').toUpperCase();
+  const pagamento = String(pedido.pagamento_estado || '').toUpperCase();
+  if (PEDIDO_TERMINAL.has(estado)) {
+    // O próprio aviso terminal reflete o estado; os demais perderam efeito.
+    if (AVISOS_TERMINAIS.has(evento)) return { superseded: false };
+    return { superseded: true, motivo: `Pedido ${estado}: o aviso '${evento}' foi ultrapassado pelo estado terminal.` };
+  }
+  if (PEDIDO_RESOLVIDO.has(estado) && AVISOS_DE_COBRANCA.has(evento)) {
+    return { superseded: true, motivo: `Pedido ${estado}: a cobrança já foi resolvida; o aviso '${evento}' perdeu efeito.` };
+  }
+  // Pagamento recusado/estornado/expirado também resolve a espera por cobrança.
+  if (['REJECTED', 'REFUNDED', 'CHARGEBACK', 'EXPIRED', 'CANCELLED'].includes(pagamento) && evento === 'PAYMENT_PENDING') {
+    return { superseded: true, motivo: `Pagamento ${pagamento}: não há mais cobrança pendente para avisar.` };
+  }
+  return { superseded: false };
+}
+
+// ----------------------------------------------------------------------------
 // Máquina de estados do pedido (projeção — a verdade operacional é sales/vendas)
 // ----------------------------------------------------------------------------
 

@@ -141,9 +141,25 @@ export async function detectarDivergencias(s: S, empresaId: number, tx?: Tx): Pr
   const vitrinePorProduto = new Set(vitrines.map((v) => Number(v.produto_id)));
   const precoPorChave = new Set(precos.map((p) => `${Number(p.produto_id)}|${String(p.canal)}`));
 
-  // --- CONECTOR: evento da fila em erro (integração falhou de verdade) --------
+  // --- CONECTOR: evento da fila que precisa de gente ---------------------------
+  // Só ERRO é falha técnica definitiva. BLOQUEADO é PENDÊNCIA DE CONFIGURAÇÃO
+  // (SMTP/Meta ausente) e OBSOLETO é aviso sem efeito — nenhum dos dois é
+  // "falha de sincronização". O painel precisa dizer a verdade de cada um.
   for (const o of outbox) {
     const estado = String(o.estado || '').toUpperCase();
+    if (estado === 'OBSOLETO') continue; // encerrado com trilha: não é pendência
+    const referencia = String(o.chave || o.id);
+    const dados = { tipo: o.tipo ?? null, tentativas: Number(o.tentativas || 0), ultimo_erro: o.ultimo_erro ?? null };
+    if (estado === 'BLOQUEADO') {
+      divergencias.push({
+        canal: 'BROBOND', categoria: 'CONECTOR', tipo: 'outbox_bloqueado',
+        classificacao: 'HUMANA', severidade: 'media', referencia,
+        detalhe: `Evento da fila "${String(o.tipo || '')}" aguarda CONFIGURAÇÃO do provedor de notificação (não é falha de sincronização).`,
+        acao_recomendada: 'Definir as variáveis do canal (SMTP/WhatsApp) e reconciliar a fila; o evento volta sozinho.',
+        dados,
+      });
+      continue;
+    }
     if (estado !== 'ERRO' && estado !== 'FALHA') continue;
     divergencias.push({
       canal: 'BROBOND',
@@ -151,10 +167,10 @@ export async function detectarDivergencias(s: S, empresaId: number, tx?: Tx): Pr
       tipo: 'outbox_erro',
       classificacao: 'HUMANA',
       severidade: 'alta',
-      referencia: String(o.chave || o.id),
+      referencia,
       detalhe: `Evento da fila "${String(o.tipo || '')}" em ERRO após ${Number(o.tentativas || 0)} tentativa(s).`,
       acao_recomendada: 'Conferir o último erro do evento e reprocessar pela fila.',
-      dados: { tipo: o.tipo ?? null, tentativas: Number(o.tentativas || 0), ultimo_erro: o.ultimo_erro ?? null },
+      dados,
     });
   }
 
@@ -435,7 +451,7 @@ export type PainelOmnichannel = {
   divergencias: Array<Record<string, unknown>>;
   /** Divergências do WooCommerce multi-loja (migração 0101), agrupadas por loja. */
   woocommerce_lojas: Array<{ store_key: string; abertas: number; por_categoria: Record<string, number> }>;
-  saude_conectores: Array<{ canal: string; divergencias_abertas: number; pior_severidade: SeveridadeOmni | null; outbox_pendente: number; outbox_erro: number; ultimo_erro: string | null }>;
+  saude_conectores: Array<{ canal: string; divergencias_abertas: number; pior_severidade: SeveridadeOmni | null; outbox_pendente: number; outbox_erro: number; outbox_bloqueado: number; outbox_obsoleto: number; ultimo_erro: string | null }>;
   gerado_em: string;
 };
 
@@ -477,18 +493,23 @@ export async function painelOmnichannel(empresaId: number, filtros: FiltrosPaine
   }
 
   // Saúde por conector: divergências abertas + estado da fila.
+  // A fila é desdobrada em três leituras honestas — PENDENTE/PROCESSANDO
+  // (em curso), ERRO (falha técnica) e BLOQUEADO (configuração pendente).
+  // OBSOLETO não entra: é histórico encerrado, não pendência.
   const outbox = await listarTudo(s, 'commerce_outbox', empresaId, {});
-  const outboxPorCanal = new Map<string, { pendente: number; erro: number; ultimo_erro: string | null }>();
+  const outboxPorCanal = new Map<string, { pendente: number; erro: number; bloqueado: number; obsoleto: number; ultimo_erro: string | null }>();
   for (const o of outbox) {
     const estado = String(o.estado || '').toUpperCase();
     const canal = 'BROBOND';
-    if (!outboxPorCanal.has(canal)) outboxPorCanal.set(canal, { pendente: 0, erro: 0, ultimo_erro: null });
+    if (!outboxPorCanal.has(canal)) outboxPorCanal.set(canal, { pendente: 0, erro: 0, bloqueado: 0, obsoleto: 0, ultimo_erro: null });
     const acc = outboxPorCanal.get(canal)!;
     if (estado === 'PENDENTE' || estado === 'PROCESSANDO') acc.pendente++;
     if (estado === 'ERRO' || estado === 'FALHA') {
       acc.erro++;
       if (!acc.ultimo_erro && o.ultimo_erro) acc.ultimo_erro = String(o.ultimo_erro).slice(0, 200);
     }
+    if (estado === 'BLOQUEADO') acc.bloqueado++;
+    if (estado === 'OBSOLETO') acc.obsoleto++;
   }
   const saudeConectores = CANAIS_OMNICHANNEL.map((canal) => {
     const doCanal = abertas.filter((d) => String(d.canal) === canal);
@@ -499,6 +520,8 @@ export async function painelOmnichannel(empresaId: number, filtros: FiltrosPaine
       pior_severidade: piorSeveridade(doCanal.map((d) => String(d.severidade) as SeveridadeOmni)),
       outbox_pendente: fila?.pendente ?? 0,
       outbox_erro: fila?.erro ?? 0,
+      outbox_bloqueado: fila?.bloqueado ?? 0,
+      outbox_obsoleto: fila?.obsoleto ?? 0,
       ultimo_erro: fila?.ultimo_erro ?? null,
     };
   });

@@ -194,3 +194,34 @@ test('PROD-DB-01.1 — falha da cadeia versionada deixa o banco degradado (nenhu
 
   console.log('\n=== PROD-DB-01.1 (migração) evidência ===\n' + evidence.map((l) => `- ${l}`).join('\n'));
 });
+
+test('PROD-DB-01 — a cadeia reaplicada NÃO estreita o CHECK de commerce_outbox (estados terminais sobrevivem)', async (t) => {
+  await migrate();
+  assert.equal(isDbDegraded(), false, 'pré-condição: banco pronto');
+
+  // Cenário de drift/recovery REAL (o mesmo que o gate pegou): existe uma linha
+  // em estado terminal BLOQUEADO/OBSOLETO e a cadeia é reaplicada a partir da
+  // 0099 (que faz DROP+ADD de commerce_outbox_estado_ck). Se a 0099 reinstalasse
+  // um conjunto MENOR, o ADD falharia com "check constraint ... is violated by
+  // some row" e o ERP ficaria degradado. A migração que reexecuta só pode AMPLIAR.
+  const empresa = await novaEmpresa(`PRODDB01CK ${randomUUID().slice(0, 8)}`);
+  await query(
+    `INSERT INTO commerce_outbox (empresa_id, tipo, chave, estado) VALUES ($1, 'sincronizacao', $2, 'BLOQUEADO')`,
+    [empresa, `ck-${randomUUID().slice(0, 8)}`]
+  );
+  await query(`DELETE FROM schema_migrations WHERE id >= '0099'`);
+  t.after(async () => {
+    await query(`DELETE FROM commerce_outbox WHERE empresa_id = $1`, [empresa]).catch(() => undefined);
+    await query(`DELETE FROM empresas WHERE id = $1`, [empresa]).catch(() => undefined);
+    await migrate().catch(() => undefined); // devolve o banco ao estado pronto
+  });
+
+  await migrate();
+  assert.equal(isDbDegraded(), false, 'reaplicar a cadeia com linha BLOQUEADO presente NÃO pode degradar o banco');
+  const ck = await query<{ def: string }>(
+    `SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conname = 'commerce_outbox_estado_ck'`
+  );
+  assert.match(String(ck.rows[0]?.def), /BLOQUEADO/, 'o CHECK reaplicado aceita o estado terminal BLOQUEADO');
+  assert.match(String(ck.rows[0]?.def), /OBSOLETO/, 'o CHECK reaplicado aceita o estado terminal OBSOLETO');
+  evidence.push('reaplicação da cadeia com linha BLOQUEADO ⇒ isDbDegraded()=false; CHECK contém BLOQUEADO/OBSOLETO');
+});
