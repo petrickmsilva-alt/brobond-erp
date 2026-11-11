@@ -42,6 +42,8 @@ type SaudeConector = {
   pior_severidade: string | null;
   outbox_pendente: number;
   outbox_erro: number;
+  outbox_bloqueado: number;
+  outbox_obsoleto: number;
   ultimo_erro: string | null;
 };
 
@@ -237,6 +239,8 @@ export default function CommerceOmnichannelPage() {
                   </div>
                   <div className="mt-2 text-xs text-muted">
                     {s.divergencias_abertas} divergência(s) aberta(s) · fila: {s.outbox_pendente} pendente(s), {s.outbox_erro} em erro
+                    {s.outbox_bloqueado > 0 && <> · {s.outbox_bloqueado} bloqueado(s) por configuração</>}
+                    {s.outbox_obsoleto > 0 && <> · {s.outbox_obsoleto} obsoleto(s)</>}
                   </div>
                   {s.ultimo_erro && <div className="mt-1 line-clamp-2 text-xs text-danger" title={s.ultimo_erro}>{s.ultimo_erro}</div>}
                 </div>

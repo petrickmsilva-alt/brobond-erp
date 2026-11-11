@@ -102,16 +102,18 @@ describe('Notificações transacionais — eventos, idempotência, retry e priva
     assert.equal(r.status, 'processado');
   });
 
-  test('provedor indisponível NÃO invalida pedido: linhas voltam para retry com tentativas e erro', async () => {
+  test('provedor NÃO configurado: pedido intacto e fila BLOQUEADA (não é retry inútil)', async () => {
     await limpar();
     await registrarEventoPedido(contato, ctx);
     const desfecho = await processarEventoNotificacao({ empresa_id: 1, pedido_id: ctx.pedidoId, evento: 'ORDER_CREATED', pedido_externo: ctx.pedidoExterno, checkout_token: ctx.checkoutToken });
-    assert.equal(desfecho.status, 'retry');
+    // Falta de configuração NÃO é falha transitória: retry não cria um provedor.
+    assert.equal(desfecho.status, 'bloqueado');
     const linhas = await s.list(RESOURCES.commerce_notificacoes, { page: 1, pageSize: 50, filter: { empresa_id: 1, pedido_id: ctx.pedidoId } });
     assert.equal(linhas.total, 2);
     for (const row of linhas.rows) {
       assert.equal(row.estado, 'PENDENTE');
       assert.equal(Number(row.tentativas), 1);
+      assert.equal(row.provider_status, 'NAO_CONFIGURADO');
       assert.ok(String(row.ultimo_erro || '').length > 0);
       assert.equal(row.enviado_em, null);
       // Nenhum segredo/token/PII completo vazou para o campo de erro.
@@ -119,6 +121,32 @@ describe('Notificações transacionais — eventos, idempotência, retry e priva
     }
     // Pedido permanece intacto: o envoltório seguro nunca lança.
     await assert.doesNotReject(() => registrarEventoSeguro(contato, { ...ctx, evento: 'PIX_GENERATED' }));
+  });
+
+  test('provedor CONFIGURADO mas fora do ar: falha transitória vira retry (backoff), nunca bloqueio', async (t) => {
+    await limpar();
+    const old = {
+      token: process.env.WHATSAPP_CLOUD_API_TOKEN,
+      phone: process.env.WHATSAPP_PHONE_NUMBER_ID,
+      template: process.env.WHATSAPP_TEMPLATE_TRANSACIONAL,
+    };
+    process.env.WHATSAPP_CLOUD_API_TOKEN = 'fixture-meta-token';
+    process.env.WHATSAPP_PHONE_NUMBER_ID = 'fixture-phone-number-id';
+    process.env.WHATSAPP_TEMPLATE_TRANSACIONAL = 'order_update_approved_fixture';
+    t.mock.method(globalThis, 'fetch', async () => { throw new Error('rede fora'); });
+    try {
+      await registrarEventoPedido(contato, ctx);
+      const desfecho = await processarEventoNotificacao({ empresa_id: 1, pedido_id: ctx.pedidoId, evento: 'ORDER_CREATED', pedido_externo: ctx.pedidoExterno, checkout_token: ctx.checkoutToken });
+      // Um canal transitório REAL domina: o evento merece backoff (retry).
+      assert.equal(desfecho.status, 'retry');
+      const wa = await s.findOneWhere(RESOURCES.commerce_notificacoes, { empresa_id: 1, pedido_id: ctx.pedidoId, canal: 'WHATSAPP' });
+      assert.equal(wa?.estado, 'PENDENTE');
+      assert.notEqual(wa?.provider_status, 'NAO_CONFIGURADO');
+    } finally {
+      if (old.token === undefined) delete process.env.WHATSAPP_CLOUD_API_TOKEN; else process.env.WHATSAPP_CLOUD_API_TOKEN = old.token;
+      if (old.phone === undefined) delete process.env.WHATSAPP_PHONE_NUMBER_ID; else process.env.WHATSAPP_PHONE_NUMBER_ID = old.phone;
+      if (old.template === undefined) delete process.env.WHATSAPP_TEMPLATE_TRANSACIONAL; else process.env.WHATSAPP_TEMPLATE_TRANSACIONAL = old.template;
+    }
   });
 
   test('WhatsApp Meta persiste message_id como REQUEST_ACCEPTED e concorrência não duplica envio', async (t) => {

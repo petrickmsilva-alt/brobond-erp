@@ -145,7 +145,7 @@ import {
 } from './commerce/promocoes';
 import { capacidadesCreators, listCreatorsEntity, detailCreatorsEntity, createCreatorsEntity, updateCreatorsEntity, listCreatorAttributions } from './creators';
 import { analyticsCommerce, trendsCommerce } from './commerce/analytics';
-import { processarComercioAgendado, reprocessarOutbox } from './commerce/outbox';
+import { processarComercioAgendado, reprocessarOutbox, reconciliarFilaEndpoint } from './commerce/outbox';
 import { baixarLancamento, conciliarExtrato, cronRecorrencias, criarLancamentoManual, gerarRecorrencias, recebiveisCartao, rentabilidade, resumoFinanceiro, resumoInvestidores } from './financeiro';
 import { comissoesDaVenda, resumoComissoes } from './comissoes';
 import {
@@ -1235,6 +1235,7 @@ app.use('/api/commerce/payments', paymentsRouter);
 app.get('/api/commerce/pagamentos', wrap(listarPagamentosCommerce));
 app.get('/api/commerce/eventos', wrap(listarEventosCommerce));
 app.post('/api/commerce/outbox/:id/reprocessar', wrap(reprocessarOutbox));
+app.post('/api/commerce/outbox/reconciliar', wrap(reconciliarFilaEndpoint));
 app.get('/api/commerce/erros', wrap(listarErrosCommerce));
 app.get('/api/commerce/promocoes', wrap(listarPromocoes));
 app.post('/api/commerce/promocoes/simular', wrap(simularPromocao));
