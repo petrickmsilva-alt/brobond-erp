@@ -20,7 +20,7 @@ dependência · próxima fase responsável · critério de encerramento · statu
 | BL-012 | 0 | CRM sem notificação ativa de lembrete | GAP-P2-14 | P2 | follow-up | canal | Fase 3 | notificação disparada por `scheduled.ts` | **encerrado na Fase 9.2** — ver §3 |
 | BL-013 | 0 | `insumos.unidade` texto livre | GAP-P3-04 | P3 | padronização | migração de dados | pós-Fase 2 | catálogo de unidades | **parcial na Fase 9.5** — ver §3 (catálogo + conversões declaradas; resolução de legado preservada) |
 | BL-014 | 0 | Painéis de fluxo de módulo residuais (11) | `RELATORIO-PR95` §4.2 | P2/P3 | UX | reescrita por módulo | pós-Fase 2 | LISTA→PÁGINA em cada | **encerrado na Fase 9.3** — ver §3 |
-| BL-015 | 2 | Descontinuação da loja nativa não executada | `NATIVE-STORE-DECOMMISSION-REPORT.md` §4 | P2 | duplicidade de varejo | PG + credenciais Woo + decisão DNS | Fase 3 | remoção executada e RETAIL validado | **aberto — impedimento externo** |
+| BL-015 | 2 | Descontinuação da loja nativa `/loja` | `NATIVE-STORE-DECOMMISSION-REPORT.md` | P2 | duplicidade de varejo | — | **executada** | remoção executada e RETAIL preservado | **encerrado — código retirado (ADR-0007); URLs antigas 301/410; RETAIL preservado** |
 | BL-017 | 9.4 | Conector REPRESENTATIVES (portal de representantes) sem implementação | `COMMERCIAL-ARCHITECTURE.md` §7 | P2 | canal próprio sem integração | portal/credenciais do representante | pós-9.4 | conector + homologação | **aberto (externo)** |
 | BL-018 | 9.5 | Homologação fiscal externa (PVA oficial / contador) pendente | `fiscal/FISCAL-VALIDATION.md` §6 | P2 | obrigação acessória | contador + ambiente fiscal | pós-9.5 | arquivo gerado validado no PVA | **aberto (externo)** |
 
@@ -38,7 +38,7 @@ dependência · próxima fase responsável · critério de encerramento · statu
 | DEC-001 | Destino de SEO das URLs antigas de `/loja` (301 vs 410) | (a) 301 para RETAIL; (b) 410 | SEO / link equity | (a) quando `STOREFRONT_REDIRECT_URL` definida; senão (b). **Não bloqueia** — fallback 410 |
 | DEC-002 | Destino administrativo de `LojaConfigPage`/`estadoLoja` | (a) repurpor como config de canal; (b) remover | UX admin / config de frete | (a) para o que for compartilhado |
 | DEC-003 | Ativar homologação externa das integrações | (a) agora; (b) depois | operação | (b) — fora do escopo desta missão |
-| DEC-004 | Executar a descontinuação de `/loja` em ambiente com PostgreSQL + credenciais Woo | (a) Fase 3 com CI/banco real; (b) adiar | duplicidade de varejo | (a) — só com os gates de §6.8 satisfeitos |
+| DEC-004 | Executar a descontinuação de `/loja` | (a) retirar do código preservando os serviços compartilhados; (b) adiar | duplicidade de varejo | **(a) decidida e executada** — loja nativa retirada; motor de checkout mantido como serviço interno autenticado |
 
 > Nenhuma dessas decisões foi tomada unilateralmente.
 
