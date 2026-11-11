@@ -4877,6 +4877,115 @@ export const RESOURCES: Record<string, Resource> = {
     ],
   },
 
+  // ------------------------------------------------------------------
+  // COMMERCE ENGINE (0118) — preço por condição de pagamento, preço mínimo
+  // e memória de precificação.
+  // ------------------------------------------------------------------
+  condicoes_pagamento: {
+    key: 'condicoes_pagamento',
+    empresa: true,
+    table: 'condicoes_pagamento',
+    label: 'Condições de pagamento',
+    singular: 'Condição de pagamento',
+    labelFields: ['nome'],
+    ops: ALL_OPS,
+    minPerfil: 'gerente',
+    notice:
+      'Estrutura de COMO se paga (pix, boleto 30/60/90, cartão). O preço de cada condição vive em "Preços por condição". Não contém fórmula: é cadastro.',
+    fields: [
+      { name: 'codigo', label: 'Código', type: 'text', required: true, search: true, maxLength: 40, pattern: '^[a-z0-9_]+$', patternMessage: 'Use apenas minúsculas, números e _ (ex.: boleto_30_60).', placeholder: 'pix, boleto_30, cartao_credito_30_60' },
+      { name: 'nome', label: 'Nome', type: 'text', required: true, search: true, maxLength: 80, placeholder: 'Boleto 30/60 dias' },
+      { name: 'canal', label: 'Canal', type: 'select', default: 'todos', options: [
+        { value: 'todos', label: 'Todos' }, { value: 'atacado', label: 'Atacado' }, { value: 'varejo', label: 'Varejo' },
+      ] },
+      { name: 'parcelas', label: 'Parcelas', type: 'integer', default: 1, min: 1 },
+      { name: 'prazo_dias', label: 'Prazo do 1º vencimento (dias)', type: 'integer', default: 0, min: 0 },
+      ativo, ...auditFields,
+    ],
+    orderBy: { field: 'codigo', dir: 'asc' },
+  },
+
+  produto_precos_condicao: {
+    key: 'produto_precos_condicao',
+    empresa: true,
+    table: 'produto_precos_condicao',
+    label: 'Preços por condição',
+    singular: 'Preço por condição',
+    labelFields: ['produto_id', 'condicao'],
+    ops: ALL_OPS,
+    minPerfil: 'gerente',
+    notice:
+      'Preço OFICIAL do produto para uma condição de pagamento e canal (ex.: Atacado Boleto 30/60). É dado comercial de entrada — o ERP não o recalcula. Reimportar a planilha ATUALIZA a linha, nunca duplica.',
+    fields: [
+      { name: 'produto_id', label: 'Produto', type: 'ref', ref: 'produtos', required: true, search: true },
+      { name: 'canal', label: 'Canal', type: 'select', required: true, options: [
+        { value: 'atacado', label: 'Atacado' }, { value: 'varejo', label: 'Varejo' },
+      ] },
+      { name: 'condicao', label: 'Condição', type: 'text', required: true, search: true, maxLength: 40 },
+      { name: 'preco', label: 'Preço (R$)', type: 'money', required: true, min: 0 },
+      { name: 'origem', label: 'Origem', type: 'text', maxLength: 40, default: 'planilha', hint: 'De onde veio o preço (ex.: planilha).' },
+      ...auditFields,
+    ],
+    orderBy: { field: 'produto_id', dir: 'asc' },
+  },
+
+  politica_preco_minimo: {
+    key: 'politica_preco_minimo',
+    empresa: true,
+    table: 'politica_preco_minimo',
+    label: 'Preço mínimo e alçada',
+    singular: 'Política de preço mínimo',
+    labelFields: ['empresa_id'],
+    ops: ALL_OPS,
+    minPerfil: 'gerente',
+    notice:
+      'Parâmetro de BLOQUEIO. Nasce desligado: enquanto "bloqueio_ativo" for falso, o motor apenas INFORMA a margem. Ligar só com limite validado pelo Diretor — a missão proíbe inventar margem mínima.',
+    fields: [
+      { name: 'margem_minima_pct', label: 'Margem mínima (%)', type: 'percent', min: -100, max: 100, hint: 'Vazio = sem limite. Só bloqueia com o bloqueio ligado.' },
+      { name: 'desconto_max_pct', label: 'Desconto máximo (%)', type: 'percent', min: 0, max: 100, hint: 'Vazio = sem limite.' },
+      { name: 'bloqueio_ativo', label: 'Bloqueio ativo', type: 'boolean', default: false, hint: 'Falso (padrão) = apenas informa; não bloqueia venda.' },
+      { name: 'exige_justificativa', label: 'Exige justificativa', type: 'boolean', default: true },
+      { name: 'atualizado_por', label: 'Atualizado por', type: 'ref', ref: 'usuarios', list: false, readonly: true },
+      ...auditFields,
+    ],
+  },
+
+  precificacao_memoria: {
+    key: 'precificacao_memoria',
+    empresa: true,
+    table: 'precificacao_memoria',
+    label: 'Memória de precificação',
+    singular: 'Memória de precificação',
+    labelFields: ['produto_id', 'canal'],
+    ops: READ_ONLY,
+    notice:
+      'Append-only: registra a ORIGEM de cada preço aplicado (lista, condição, descontos, custo, impostos, frete, taxas e margem). É o "por que este preço?" — nunca recalculado silenciosamente.',
+    fields: [
+      { name: 'canal', label: 'Canal', type: 'select', options: [
+        { value: 'atacado', label: 'Atacado' }, { value: 'varejo', label: 'Varejo' }, { value: 'todos', label: 'Todos' },
+      ] },
+      { name: 'cliente_id', label: 'Cliente', type: 'ref', ref: 'clientes' },
+      { name: 'venda_id', label: 'Venda', type: 'ref', ref: 'vendas', list: false },
+      { name: 'produto_id', label: 'Produto', type: 'ref', ref: 'produtos', search: true },
+      { name: 'quantidade', label: 'Quantidade', type: 'integer' },
+      { name: 'condicao', label: 'Condição', type: 'text' },
+      { name: 'preco_lista', label: 'Preço de lista', type: 'money' },
+      { name: 'preco_aplicado', label: 'Preço aplicado', type: 'money' },
+      { name: 'desconto_pct', label: 'Desconto (%)', type: 'percent' },
+      { name: 'custo', label: 'Custo', type: 'money' },
+      { name: 'impostos', label: 'Impostos', type: 'money' },
+      { name: 'frete', label: 'Frete', type: 'money' },
+      { name: 'taxas', label: 'Taxas', type: 'money' },
+      { name: 'margem_valor', label: 'Margem (R$)', type: 'money' },
+      { name: 'margem_pct', label: 'Margem (%)', type: 'percent' },
+      { name: 'origem_preco', label: 'Origem do preço', type: 'text', maxLength: 40 },
+      { name: 'regras', label: 'Regras aplicadas', type: 'json', list: false, readonly: true },
+      { name: 'criado_por', label: 'Criado por', type: 'ref', ref: 'usuarios', list: false },
+      ...auditAppendOnly,
+    ],
+    orderBy: { field: 'criado_em', dir: 'desc' },
+  },
+
   listas_preco_historico: {
     key: 'listas_preco_historico',
     empresa: true,

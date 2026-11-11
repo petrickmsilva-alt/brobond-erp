@@ -34,6 +34,7 @@ import { checkAccess, escopoDe, getStore, toHttpError } from './services';
 import { currentUser } from './auth';
 import { parseNumeroTexto } from './csv';
 import { isValidGtin } from './ean';
+import { round2 } from './utils';
 import { validatePayload } from './validate';
 import type { Payload, Row, Tx } from './store';
 
@@ -46,6 +47,51 @@ export const LIMITE_CARGA = 5000;
 // Classificação das colunas: entrada × conferência × ignorada.
 // ---------------------------------------------------------------------------
 export type NaturezaColuna = 'entrada' | 'conferencia' | 'ignorada';
+
+// ---------------------------------------------------------------------------
+// PREÇOS OFICIAIS DA PLANILHA (dados de ENTRADA, não fórmulas).
+//
+// A planilha-base traz os preços comerciais OFICIAIS da Brobond por canal e
+// condição de pagamento. Eles são IMPORTADOS para `produto_precos_condicao`
+// (canal × condição) — o ERP não os recalcula. `Atacado À Vista` e
+// `Varejo À Vista` também definem a BASE do canal (`preco_atacado`/`preco_venda`),
+// mas SÓ quando a base ainda está zerada: nunca sobrescrevemos preço já definido.
+//
+// O rótulo casa por nome normalizado (sem acento, minúsculo), tolerando os
+// espaços duplos e o erro de digitação da origem ("Débido").
+// ---------------------------------------------------------------------------
+export type PrecoOficial = { rotulo: string; canal: 'atacado' | 'varejo'; condicao: string; base?: 'atacado' | 'varejo' };
+export const PRECOS_OFICIAIS: PrecoOficial[] = [
+  { rotulo: 'Atacado À Vista', canal: 'atacado', condicao: 'atacado_vista', base: 'atacado' },
+  { rotulo: 'Atacado Boleto 30', canal: 'atacado', condicao: 'boleto_30' },
+  { rotulo: 'Atacado Boleto 30/60', canal: 'atacado', condicao: 'boleto_30_60' },
+  { rotulo: 'Atacado Boleto 30/60/90', canal: 'atacado', condicao: 'boleto_30_60_90' },
+  { rotulo: 'Atacado Cartão Débido', canal: 'atacado', condicao: 'cartao_debito' },
+  { rotulo: 'Atacado Cartão Crédito à vista', canal: 'atacado', condicao: 'cartao_credito_vista' },
+  { rotulo: 'Atacado Cartão Crédito 30/60', canal: 'atacado', condicao: 'cartao_credito_30_60' },
+  { rotulo: 'Atacado Cartão Crédito 30/60/90', canal: 'atacado', condicao: 'cartao_credito_30_60_90' },
+  { rotulo: 'Varejo À Vista', canal: 'varejo', condicao: 'varejo_vista', base: 'varejo' },
+  { rotulo: 'VRJ 2 Un', canal: 'varejo', condicao: 'varejo_2un' },
+  { rotulo: 'Vlr Cartão à Vista', canal: 'varejo', condicao: 'cartao_vista' },
+  { rotulo: 'Vlr Cartão Parcelado', canal: 'varejo', condicao: 'cartao_parcelado' },
+];
+const PRECOS_OFICIAIS_POR_ROTULO = new Map(PRECOS_OFICIAIS.map((p) => [normalizarRotulo(p.rotulo), p]));
+
+/** Condição de pagamento correspondente (cadastro estrutural) para cada preço. */
+export const CONDICOES_DAS_PLANILHA: { codigo: string; nome: string; canal: 'atacado' | 'varejo'; parcelas: number; prazo_dias: number }[] = [
+  { codigo: 'atacado_vista', nome: 'Atacado à vista', canal: 'atacado', parcelas: 1, prazo_dias: 0 },
+  { codigo: 'boleto_30', nome: 'Atacado boleto 30', canal: 'atacado', parcelas: 1, prazo_dias: 30 },
+  { codigo: 'boleto_30_60', nome: 'Atacado boleto 30/60', canal: 'atacado', parcelas: 2, prazo_dias: 30 },
+  { codigo: 'boleto_30_60_90', nome: 'Atacado boleto 30/60/90', canal: 'atacado', parcelas: 3, prazo_dias: 30 },
+  { codigo: 'cartao_debito', nome: 'Atacado cartão débito', canal: 'atacado', parcelas: 1, prazo_dias: 0 },
+  { codigo: 'cartao_credito_vista', nome: 'Atacado cartão crédito à vista', canal: 'atacado', parcelas: 1, prazo_dias: 0 },
+  { codigo: 'cartao_credito_30_60', nome: 'Atacado cartão crédito 30/60', canal: 'atacado', parcelas: 2, prazo_dias: 30 },
+  { codigo: 'cartao_credito_30_60_90', nome: 'Atacado cartão crédito 30/60/90', canal: 'atacado', parcelas: 3, prazo_dias: 30 },
+  { codigo: 'varejo_vista', nome: 'Varejo à vista', canal: 'varejo', parcelas: 1, prazo_dias: 0 },
+  { codigo: 'varejo_2un', nome: 'Varejo 2 unidades', canal: 'varejo', parcelas: 1, prazo_dias: 0 },
+  { codigo: 'cartao_vista', nome: 'Varejo cartão à vista', canal: 'varejo', parcelas: 1, prazo_dias: 0 },
+  { codigo: 'cartao_parcelado', nome: 'Varejo cartão parcelado', canal: 'varejo', parcelas: 3, prazo_dias: 0 },
+];
 
 const CLASSIFICACAO: { match: RegExp; natureza: NaturezaColuna; nota: string }[] = [
   { match: /^item$/, natureza: 'entrada', nota: 'Identificador sequencial da origem.' },
@@ -64,9 +110,10 @@ const CLASSIFICACAO: { match: RegExp; natureza: NaturezaColuna; nota: string }[]
   { match: /^largura\s*cm$/, natureza: 'entrada', nota: 'Largura em centímetros.' },
   { match: /^comprimento ou profundidade\s*cm$/, natureza: 'entrada', nota: 'Comprimento/profundidade em centímetros.' },
   { match: /^custo unit[aá]rio fabrica[cç][aã]o$/, natureza: 'entrada', nota: 'Custo unitário de fabricação (custo-base).' },
+  // Margens/tributação calculadas pela planilha: CONFERÊNCIA (não autoridade).
+  { match: /mgb|mgl|margem/, natureza: 'conferencia', nota: 'Margem calculada pela planilha — referência, não autoridade.' },
   { match: /imposto|icms|simples nacional|total valor|custo\s*tt/, natureza: 'conferencia', nota: 'Tributação/custo com imposto calculado pela planilha.' },
-  { match: /mgb|mgl|margem/, natureza: 'conferencia', nota: 'Margem calculada pela planilha.' },
-  { match: /atacado|varejo|vrj|cart[aã]o|boleto|parcelad|d[eé]bito|desc|subtotal|combo|condi[cç][oõ]es/, natureza: 'conferencia', nota: 'Preço/desconto calculado pela planilha.' },
+  { match: /atacado|varejo|vrj|cart[aã]o|boleto|parcelad|d[eé]bito|desc|subtotal|combo|condi[cç][oõ]es/, natureza: 'conferencia', nota: 'Preço/desconto da planilha — referência para conferência.' },
 ];
 
 /** Normaliza o cabeçalho: sem acento, minúsculo, espaços colapsados. */
@@ -83,6 +130,9 @@ export function normalizarRotulo(s: unknown): string {
 export function classificarColuna(rotulo: string): { natureza: NaturezaColuna; nota: string } {
   const r = normalizarRotulo(rotulo);
   if (!r || /^coluna\d+$/.test(r)) return { natureza: 'ignorada', nota: 'Coluna sem rótulo/auxiliar da planilha.' };
+  // Preço OFICIAL (canal × condição) é dado de ENTRADA — precisa vencer a regra
+  // genérica de "preço calculado" logo abaixo.
+  if (PRECOS_OFICIAIS_POR_ROTULO.has(r)) return { natureza: 'entrada', nota: 'Preço oficial por condição de pagamento (dado de entrada).' };
   for (const c of CLASSIFICACAO) if (c.match.test(r)) return { natureza: c.natureza, nota: c.nota };
   return { natureza: 'ignorada', nota: 'Coluna não reconhecida — depende de validação.' };
 }
@@ -265,6 +315,8 @@ export type ItemNormalizado = {
   familia: string;
   nome_pai: string;
   pai_sku: string;
+  /** Preços oficiais da linha, por condição de pagamento (dados de ENTRADA). */
+  precos: { canal: 'atacado' | 'varejo'; condicao: string; preco: number }[];
 };
 
 /** Busca tolerante ao rótulo: casa por nome normalizado (aceita \n e espaços). */
@@ -351,7 +403,21 @@ export function normalizarItem(linha: LinhaBruta, barcodePorIndustria: Map<strin
     familia,
     nome_pai: base || descricao || codigo_industria,
     pai_sku: skuPaiDe(categoria_master, colecao),
+    precos: extrairPrecosOficiais(c),
   };
+}
+
+/** Lê os preços oficiais da linha (canal × condição). Ignora célula vazia. */
+export function extrairPrecosOficiais(celulas: Record<string, string>): { canal: 'atacado' | 'varejo'; condicao: string; preco: number }[] {
+  const out: { canal: 'atacado' | 'varejo'; condicao: string; preco: number }[] = [];
+  for (const [k, v] of Object.entries(celulas)) {
+    const spec = PRECOS_OFICIAIS_POR_ROTULO.get(normalizarRotulo(k));
+    if (!spec) continue;
+    const p = numero(v);
+    if (p === null || p <= 0) continue;
+    out.push({ canal: spec.canal, condicao: spec.condicao, preco: p });
+  }
+  return out;
 }
 
 /** Ordem canônica de tamanhos de vestuário (usada na grade e na listagem). */
@@ -368,6 +434,8 @@ export type PlanoItem = ItemNormalizado & {
   acao: 'criar_pai' | 'criar_variacao';
   variacao_chave: string | null;
   erros: string[];
+  /** Conflitos de preço DENTRO do arquivo para este item (mesma chave, valores distintos). */
+  precos_conflitantes: string[];
 };
 
 export type PlanoFamilia = {
@@ -393,6 +461,12 @@ export type Validacoes = {
   codigos_barras_invalidos: number;
   campos_conferencia: number;
   colunas_nao_reconhecidas: string[];
+  /** Linhas com pelo menos um preço oficial (entrada) identificado. */
+  linhas_com_preco: number;
+  /** Total de preços oficiais (canal × condição) reconhecidos no arquivo. */
+  precos_oficiais: number;
+  /** Conflito DENTRO do arquivo: mesmo SKU+canal+condição com valores distintos. */
+  precos_conflitantes_arquivo: string[];
 };
 
 export type Plano = { itens: PlanoItem[]; familias: PlanoFamilia[]; validacoes: Validacoes };
@@ -473,8 +547,31 @@ export function planejar(leitura: Leitura, barcodePorIndustria: Map<string, stri
       acao: ehPai ? 'criar_variacao' : 'criar_pai',
       variacao_chave: ehPai ? [it.cor ? `COR:${it.cor}` : '', it.tamanho ? `TAM:${it.tamanho}` : ''].filter(Boolean).join('|') : null,
       erros,
+      precos_conflitantes: [],
     };
   });
+
+  // Conflito de preço DENTRO do arquivo: mesmo SKU + canal + condição com
+  // valores distintos. Não descartamos em silêncio — reportamos a linha.
+  const precosPorChave = new Map<string, { valor: number; linha: number }>();
+  const precosConflitoArquivo: string[] = [];
+  for (const p of itensPlano) {
+    if (!p.codigo_industria) continue;
+    for (const preco of p.precos) {
+      const chave = `${p.codigo_industria}|${preco.canal}|${preco.condicao}`;
+      const anterior = precosPorChave.get(chave);
+      if (anterior && anterior.valor !== preco.preco) {
+        const aviso = `${chave}: ${anterior.valor} (linha ${anterior.linha}) × ${preco.preco} (linha ${p.linha})`;
+        precosConflitoArquivo.push(aviso);
+        if (!p.precos_conflitantes.includes(aviso)) p.precos_conflitantes.push(aviso);
+      } else if (!anterior) {
+        precosPorChave.set(chave, { valor: preco.preco, linha: p.linha });
+      }
+    }
+  }
+
+  const linhasComPreco = itensPlano.filter((p) => p.precos.length > 0).length;
+  const totalPrecos = itensPlano.reduce((acc, p) => acc + p.precos.length, 0);
 
   return {
     itens: itensPlano,
@@ -496,6 +593,9 @@ export function planejar(leitura: Leitura, barcodePorIndustria: Map<string, stri
       codigos_barras_invalidos: opcoes.codigos_barras_invalidos ?? 0,
       campos_conferencia: leitura.classificacao.filter((c) => c.natureza === 'conferencia').length,
       colunas_nao_reconhecidas: leitura.classificacao.filter((c) => c.natureza === 'ignorada').map((c) => c.coluna),
+      linhas_com_preco: linhasComPreco,
+      precos_oficiais: totalPrecos,
+      precos_conflitantes_arquivo: precosConflitoArquivo,
     },
   };
 }
@@ -537,10 +637,11 @@ export async function previewCarga(req: Request, res: Response) {
         linha: it.linha, item: it.item, sku: it.codigo_industria, pai_sku: it.pai_sku,
         categoria_master: it.categoria_master, colecao: it.colecao, cor: it.cor, tamanho: it.tamanho,
         codigo_barras: it.codigo_barras, acao: it.acao, erros: it.erros,
+        precos: it.precos, precos_conflitantes: it.precos_conflitantes,
       })),
       limite: LIMITE_CARGA,
       truncado: plano.itens.length > LIMITE_CARGA,
-      nao_gravado: 'Prévia apenas: nenhum produto, variação ou estoque foi gravado.',
+      nao_gravado: 'Prévia apenas: nenhum produto, variação, preço ou estoque foi gravado.',
     });
   } catch (e) {
     throw toHttpError(e, RESOURCES.produtos);
@@ -559,7 +660,14 @@ export async function confirmarCarga(req: Request, res: Response) {
       throw new HttpError(413, `A carga aceita no máximo ${LIMITE_CARGA} linhas por vez. Divida a planilha.`);
     }
     const resultado = await s.transaction(async (tx) => executarCarga(plano, actor, escopo, tx));
-    res.json({ ok: true, ...resultado, estoque_importado: false, precos_sobrescritos: false });
+    res.json({
+      ok: true,
+      ...resultado,
+      estoque_importado: false,
+      precos_sobrescritos: false,
+      formulas_importadas: false,
+      observacao: 'Preços oficiais gravados como DADOS de entrada (produto_precos_condicao). A base do canal só foi preenchida onde estava zerada. Margens, impostos e formação de preço do ERP não foram tocados.',
+    });
   } catch (e) {
     throw toHttpError(e, RESOURCES.produtos);
   }
@@ -573,6 +681,10 @@ async function executarCarga(plano: Plano, actor: { id?: number; name?: string }
   let produtos = 0;
   let variacoes = 0;
   let ignorados = 0;
+  let precosGravados = 0;
+  let precosIgnorados = 0;
+  let basePrecoDefinida = 0;
+  const conflitosPreco: string[] = [];
   const rejeitados: { linha: number; motivo: string }[] = [];
   const ids: number[] = [];
 
@@ -580,6 +692,8 @@ async function executarCarga(plano: Plano, actor: { id?: number; name?: string }
   const colCache = new Map<string, number>();
   const tamCache = new Map<string, number>();
   const gradeCache = new Map<string, number>();
+  /** SKU (Código Industria) → id do produto canônico, para gravar os preços. */
+  const idPorSku = new Map<string, number>();
 
   async function categoriaId(nome: string): Promise<number | null> {
     const chave = normalizarRotulo(nome);
@@ -636,6 +750,55 @@ async function executarCarga(plano: Plano, actor: { id?: number; name?: string }
 
   const paisPorFamilia = new Map<string, Row>();
 
+  /**
+   * Grava os preços OFICIAIS (dados de ENTRADA) do item em
+   * `produto_precos_condicao`. Idempotente: reimportar ATUALIZA a linha do
+   * mesmo (produto, canal, condição) — nunca duplica. Divergência de valor
+   * vira registro no relatório (transparência), não descarte silencioso.
+   */
+  async function gravarPrecos(produtoId: number, it: ItemNormalizado): Promise<void> {
+    for (const preco of it.precos) {
+      const existente = await s.findOneWhere(
+        RESOURCES.produto_precos_condicao,
+        { empresa_id: escopo.empresaId, produto_id: produtoId, canal: preco.canal, condicao: preco.condicao },
+        tx
+      );
+      const valor = round2(preco.preco);
+      if (!existente) {
+        await s.insert(RESOURCES.produto_precos_condicao, {
+          empresa_id: escopo.empresaId, produto_id: produtoId, canal: preco.canal, condicao: preco.condicao, preco: valor, origem: 'planilha',
+        }, tx);
+        precosGravados++;
+      } else if (round2(Number(existente.preco)) !== valor) {
+        await s.update(RESOURCES.produto_precos_condicao, Number(existente.id), { preco: valor, origem: 'planilha' }, tx);
+        precosGravados++;
+        conflitosPreco.push(`${it.codigo_industria}|${preco.canal}|${preco.condicao}: ${Number(existente.preco)} → ${valor}`);
+      } else {
+        precosIgnorados++;
+      }
+    }
+  }
+
+  /**
+   * Define a BASE do canal (`preco_atacado`/`preco_venda`) a partir do preço
+   * "à vista" da planilha — SOMENTE quando a base ainda está ZERADA. Nunca
+   * sobrescreve um preço já definido no ERP.
+   */
+  async function definirBaseSeVazia(produtoId: number, produto: Row, it: ItemNormalizado): Promise<void> {
+    const patch: Payload = {};
+    for (const spec of PRECOS_OFICIAIS) {
+      if (!spec.base) continue;
+      const preco = it.precos.find((p) => p.condicao === spec.condicao);
+      if (!preco) continue;
+      const campo = spec.base === 'atacado' ? 'preco_atacado' : 'preco_venda';
+      if (Number(produto[campo] || 0) === 0) patch[campo] = round2(preco.preco);
+    }
+    if (Object.keys(patch).length) {
+      await s.update(RESOURCES.produtos, produtoId, patch, tx);
+      basePrecoDefinida++;
+    }
+  }
+
   for (const it of plano.itens) {
     try {
       if (it.erros.length) throw new HttpError(400, it.erros.join(' '));
@@ -669,12 +832,13 @@ async function executarCarga(plano: Plano, actor: { id?: number; name?: string }
       // Família de uma linha só: o próprio pai é o produto — nada mais a criar.
       if (it.acao === 'criar_pai') {
         if (!paiNovo) ignorados++;
+        idPorSku.set(it.codigo_industria, Number(pai.id));
         continue;
       }
 
       // Variação (idempotente por SKU).
       const existente = await s.findOneWhere(RESOURCES.produtos, { sku: it.codigo_industria, empresa_id: escopo.empresaId }, tx);
-      if (existente) { ignorados++; ids.push(Number(existente.id)); continue; }
+      if (existente) { ignorados++; ids.push(Number(existente.id)); idPorSku.set(it.codigo_industria, Number(existente.id)); continue; }
       const tamId = await tamanhoId(it.tamanho);
       const gid = await gradeDaFamilia(familia);
       const payload = payloadVariacao(it, { categoria_id: catId, colecao_id: colId, grade_id: gid, empresa_id: escopo.empresaId, produto_pai_id: Number(pai.id), variacao_tamanho_id: tamId });
@@ -682,9 +846,40 @@ async function executarCarga(plano: Plano, actor: { id?: number; name?: string }
       const filho = await s.insert(RESOURCES.produtos, payload, tx);
       variacoes++;
       ids.push(Number(filho.id));
+      idPorSku.set(it.codigo_industria, Number(filho.id));
     } catch (e: any) {
       const h = toHttpError(e, RESOURCES.produtos);
       rejeitados.push({ linha: it.linha, motivo: h.message });
+    }
+  }
+
+  // Cadastro ESTRUTURAL das condições de pagamento usadas pela planilha
+  // (pix/boleto/cartão). Idempotente por (empresa, código): não duplica.
+  const condicoesPresentes = new Set(plano.itens.flatMap((it) => it.precos.map((p) => p.condicao)));
+  for (const cond of CONDICOES_DAS_PLANILHA) {
+    if (!condicoesPresentes.has(cond.codigo)) continue;
+    const existente = await s.findOneWhere(RESOURCES.condicoes_pagamento, { empresa_id: escopo.empresaId, codigo: cond.codigo }, tx);
+    if (!existente) {
+      await s.insert(RESOURCES.condicoes_pagamento, {
+        empresa_id: escopo.empresaId, codigo: cond.codigo, nome: cond.nome, canal: cond.canal,
+        parcelas: cond.parcelas, prazo_dias: cond.prazo_dias, ativo: true,
+      }, tx);
+    }
+  }
+
+  // Preços OFICIAIS da planilha (dados de ENTRADA) → `produto_precos_condicao`.
+  // Feito depois do cadastro para que o produto já exista; o conflito com o
+  // valor já cadastrado é REPORTADO, nunca escondido. Nenhuma fórmula é gravada.
+  for (const it of plano.itens) {
+    const produtoId = idPorSku.get(it.codigo_industria);
+    if (!produtoId || !it.precos.length) continue;
+    try {
+      await gravarPrecos(produtoId, it);
+      const produto = await s.get(RESOURCES.produtos, produtoId, tx);
+      if (produto) await definirBaseSeVazia(produtoId, produto, it);
+    } catch (e: any) {
+      const h = toHttpError(e, RESOURCES.produtos);
+      rejeitados.push({ linha: it.linha, motivo: `Preço: ${h.message}` });
     }
   }
 
@@ -702,14 +897,24 @@ async function executarCarga(plano: Plano, actor: { id?: number; name?: string }
       acao: 'importar',
       recurso: 'produtos',
       registro_id: null,
-      descricao: `Carga da política comercial: ${produtos} produto(s)-pai, ${variacoes} variação(ões), ${ignorados} ignorado(s), ${rejeitados.length} rejeitado(s). Nenhuma quantidade física importada; nenhum preço/margem sobrescrito.`,
-      dados: { produtos, variacoes, ignorados, rejeitados: rejeitados.slice(0, 100), ids: ids.slice(0, 100) },
+      descricao: `Carga da política comercial: ${produtos} produto(s)-pai, ${variacoes} variação(ões), ${ignorados} ignorado(s), ${precosGravados} preço(s) oficial(is) gravado(s), ${rejeitados.length} rejeitado(s). Nenhuma quantidade física importada; nenhuma margem/fórmula do ERP sobrescrita.`,
+      dados: { produtos, variacoes, ignorados, precos_gravados: precosGravados, precos_ignorados: precosIgnorados, base_preco_definida: basePrecoDefinida, conflitos_preco: conflitosPreco.slice(0, 100), rejeitados: rejeitados.slice(0, 100), ids: ids.slice(0, 100) },
       empresa_id: empresaDoAtorAudit(actor),
     },
     tx
   );
 
-  return { produtos, variacoes, ignorados, rejeitados, total_identificadores: plano.validacoes.skus_distintos };
+  return {
+    produtos,
+    variacoes,
+    ignorados,
+    precos_gravados: precosGravados,
+    precos_ignorados: precosIgnorados,
+    base_preco_definida: basePrecoDefinida,
+    conflitos_preco: conflitosPreco,
+    rejeitados,
+    total_identificadores: plano.validacoes.skus_distintos,
+  };
 }
 
 // ---------------------------------------------------------------------------

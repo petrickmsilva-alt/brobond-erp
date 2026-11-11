@@ -21,7 +21,7 @@ const express = (await import('express')).default;
 const request = (await import('supertest')).default;
 const { RESOURCES } = await import('../src/resources');
 const { getStore } = await import('../src/services');
-const { previewCarga, confirmarCarga, classificarColuna, normalizarItem, descricaoBase, skuPaiDe, sanitizarXlsx } = await import(
+const { previewCarga, confirmarCarga, classificarColuna, normalizarItem, descricaoBase, skuPaiDe, sanitizarXlsx, extrairPrecosOficiais } = await import(
   '../src/cargaPoliticaComercial'
 );
 
@@ -48,6 +48,8 @@ const CABECALHO = [
   'Item', 'Cód Categoria', 'MARCA', 'CATEGORIA MASTER', 'COLEÇÃO', 'VARIANTE COR', 'DESCRIÇÃO',
   'Tamanho', 'Código Industria', 'Tipo', 'STATUS', 'Peso KG', 'Altura CM', 'Largura CM',
   'Comprimento ou profundidade CM', 'Custo Unitário Fabricação',
+  // Preços OFICIAIS (dados de ENTRADA) — importados como preço por condição.
+  'Atacado À Vista', 'Atacado Boleto 30/60', 'Varejo À Vista', 'Vlr Cartão Parcelado',
   // Colunas CALCULADAS — devem ser classificadas como conferência e ignoradas.
   'Margem MGB (%)', 'Preço Varejo', 'Preço Atacado',
 ];
@@ -78,12 +80,12 @@ async function xlsxBase64(linhas: Linha[], barras: { codigo: string; industria: 
 }
 
 const LINHAS_BASE: Linha[] = [
-  { Item: '1001', 'Cód Categoria': 'CB2B', MARCA: 'BROBOND', 'CATEGORIA MASTER': 'CAMISETA', COLEÇÃO: 'BORDADO B', 'VARIANTE COR': 'PRETA', 'DESCRIÇÃO': 'CAMISETA BORDADO B PRETA', Tamanho: 'P', 'Código Industria': 'CB2B010', Tipo: 'UN', STATUS: 'ATIVO', 'Peso KG': 0.2, 'Altura CM': 2, 'Largura CM': 30, 'Comprimento ou profundidade CM': 40, 'Custo Unitário Fabricação': 25.5, 'Margem MGB (%)': 60, 'Preço Varejo': 79.9 },
-  { Item: '1002', 'Cód Categoria': 'CB2B', MARCA: 'BROBOND', 'CATEGORIA MASTER': 'CAMISETA', COLEÇÃO: 'BORDADO B', 'VARIANTE COR': 'PRETA', 'DESCRIÇÃO': 'CAMISETA BORDADO B PRETA', Tamanho: 'M', 'Código Industria': 'CB2B011', Tipo: 'UN', STATUS: 'ATIVO', 'Peso KG': 0.2, 'Custo Unitário Fabricação': 25.5 },
-  { Item: '1003', 'Cód Categoria': 'CB2B', MARCA: 'BROBOND', 'CATEGORIA MASTER': 'CAMISETA', COLEÇÃO: 'BORDADO B', 'VARIANTE COR': 'BRANCA', 'DESCRIÇÃO': 'CAMISETA BORDADO B BRANCA', Tamanho: 'P', 'Código Industria': 'CB2B020', Tipo: 'UN', STATUS: 'ATIVO', 'Peso KG': 0.2, 'Custo Unitário Fabricação': 25.5 },
-  { Item: '1004', 'Cód Categoria': 'CB2B', MARCA: 'BROBOND', 'CATEGORIA MASTER': 'CAMISETA', COLEÇÃO: 'BORDADO B', 'VARIANTE COR': 'BRANCA', 'DESCRIÇÃO': 'CAMISETA BORDADO B BRANCA', Tamanho: 'M', 'Código Industria': 'CB2B021', Tipo: 'UN', STATUS: 'ATIVO', 'Peso KG': 0.2, 'Custo Unitário Fabricação': 25.5 },
+  { Item: '1001', 'Cód Categoria': 'CB2B', MARCA: 'BROBOND', 'CATEGORIA MASTER': 'CAMISETA', COLEÇÃO: 'BORDADO B', 'VARIANTE COR': 'PRETA', 'DESCRIÇÃO': 'CAMISETA BORDADO B PRETA', Tamanho: 'P', 'Código Industria': 'CB2B010', Tipo: 'UN', STATUS: 'ATIVO', 'Peso KG': 0.2, 'Altura CM': 2, 'Largura CM': 30, 'Comprimento ou profundidade CM': 40, 'Custo Unitário Fabricação': 25.5, 'Atacado À Vista': 49.9, 'Atacado Boleto 30/60': 54.9, 'Varejo À Vista': 99.9, 'Vlr Cartão Parcelado': 109.9, 'Margem MGB (%)': 60, 'Preço Varejo': 79.9 },
+  { Item: '1002', 'Cód Categoria': 'CB2B', MARCA: 'BROBOND', 'CATEGORIA MASTER': 'CAMISETA', COLEÇÃO: 'BORDADO B', 'VARIANTE COR': 'PRETA', 'DESCRIÇÃO': 'CAMISETA BORDADO B PRETA', Tamanho: 'M', 'Código Industria': 'CB2B011', Tipo: 'UN', STATUS: 'ATIVO', 'Peso KG': 0.2, 'Custo Unitário Fabricação': 25.5, 'Atacado À Vista': 49.9, 'Varejo À Vista': 99.9 },
+  { Item: '1003', 'Cód Categoria': 'CB2B', MARCA: 'BROBOND', 'CATEGORIA MASTER': 'CAMISETA', COLEÇÃO: 'BORDADO B', 'VARIANTE COR': 'BRANCA', 'DESCRIÇÃO': 'CAMISETA BORDADO B BRANCA', Tamanho: 'P', 'Código Industria': 'CB2B020', Tipo: 'UN', STATUS: 'ATIVO', 'Peso KG': 0.2, 'Custo Unitário Fabricação': 25.5, 'Atacado À Vista': 49.9, 'Varejo À Vista': 99.9 },
+  { Item: '1004', 'Cód Categoria': 'CB2B', MARCA: 'BROBOND', 'CATEGORIA MASTER': 'CAMISETA', COLEÇÃO: 'BORDADO B', 'VARIANTE COR': 'BRANCA', 'DESCRIÇÃO': 'CAMISETA BORDADO B BRANCA', Tamanho: 'M', 'Código Industria': 'CB2B021', Tipo: 'UN', STATUS: 'ATIVO', 'Peso KG': 0.2, 'Custo Unitário Fabricação': 25.5, 'Atacado À Vista': 49.9, 'Varejo À Vista': 99.9 },
   // Produto simples (família de uma linha só).
-  { Item: '2001', 'Cód Categoria': 'SOR', MARCA: 'BROBOND', 'CATEGORIA MASTER': 'ÓCULOS DE SOL', COLEÇÃO: 'VINTAGE POLARIZADO', 'VARIANTE COR': 'PRETO', 'DESCRIÇÃO': 'ÓCULOS DE SOL VINTAGE PRETO', Tamanho: '', 'Código Industria': 'SOR15101', Tipo: 'UN', STATUS: 'INATIVO', 'Peso KG': 0.05, 'Custo Unitário Fabricação': 40 },
+  { Item: '2001', 'Cód Categoria': 'SOR', MARCA: 'BROBOND', 'CATEGORIA MASTER': 'ÓCULOS DE SOL', COLEÇÃO: 'VINTAGE POLARIZADO', 'VARIANTE COR': 'PRETO', 'DESCRIÇÃO': 'ÓCULOS DE SOL VINTAGE PRETO', Tamanho: '', 'Código Industria': 'SOR15101', Tipo: 'UN', STATUS: 'INATIVO', 'Peso KG': 0.05, 'Custo Unitário Fabricação': 40, 'Atacado À Vista': 89.9, 'Varejo À Vista': 179.9 },
 ];
 
 // ---------------------------------------------------------------------------
@@ -92,10 +94,21 @@ const LINHAS_BASE: Linha[] = [
 test('a classificação separa entrada, conferência e ignorada', () => {
   assert.equal(classificarColuna('Custo Unitário Fabricação').natureza, 'entrada');
   assert.equal(classificarColuna('Código Industria').natureza, 'entrada');
+  assert.equal(classificarColuna('Atacado À Vista').natureza, 'entrada');
+  assert.equal(classificarColuna('Vlr Cartão Parcelado').natureza, 'entrada');
   assert.equal(classificarColuna('Margem MGB (%)').natureza, 'conferencia');
   assert.equal(classificarColuna('Preço Varejo').natureza, 'conferencia');
   assert.equal(classificarColuna('Preço Atacado').natureza, 'conferencia');
   assert.equal(classificarColuna('Coluna7').natureza, 'ignorada');
+});
+
+test('os preços oficiais são lidos por canal e condição (não viram conferência)', () => {
+  const precos = extrairPrecosOficiais({ 'Atacado À Vista': '49,90', 'Atacado Boleto 30/60': '54.9', 'Varejo À Vista': '99.9', 'Margem MGB (%)': '60' });
+  const porCond = Object.fromEntries(precos.map((p) => [p.condicao, p.preco]));
+  assert.equal(porCond['atacado_vista'], 49.9);
+  assert.equal(porCond['boleto_30_60'], 54.9);
+  assert.equal(porCond['varejo_vista'], 99.9);
+  assert.equal(precos.length, 3, 'a coluna de margem calculada NÃO vira preço');
 });
 
 test('a descrição-base remove o sufixo de cor e o SKU do pai é determinístico', () => {
@@ -154,7 +167,7 @@ test('a prévia não grava nada e reporta as validações', async () => {
   assert.equal(depois, antes, 'a prévia não cria produtos');
 });
 
-test('a confirmação cria pai + variações, sem estoque e sem preço', async () => {
+test('a confirmação cria pai + variações, importa preços oficiais e NÃO importa estoque', async () => {
   const conteudo = await xlsxBase64(LINHAS_BASE, [
     { industria: 'CB2B010', codigo: 'DTF ORIGINALPRETAP' }, // concatenação: NÃO é GTIN
     { industria: 'CB2B011', codigo: '7891234567895' }, // EAN-13 com dígito verificador VÁLIDO
@@ -166,6 +179,7 @@ test('a confirmação cria pai + variações, sem estoque e sem preço', async (
   assert.equal(resp.body.variacoes, 4, 'quatro variações da camiseta');
   assert.equal(resp.body.estoque_importado, false);
   assert.equal(resp.body.precos_sobrescritos, false);
+  assert.equal(resp.body.formulas_importadas, false);
 
   const pai = await s.findOneWhere(RESOURCES.produtos, { sku: 'CAMISETA-BORDADO-B', empresa_id: 1 });
   assert.ok(pai, 'o produto-pai foi criado');
@@ -182,13 +196,25 @@ test('a confirmação cria pai + variações, sem estoque e sem preço', async (
   assert.equal(varPreta!.codigo_categoria, 'CB2B');
   assert.equal(varPreta!.codigo_industria, 'CB2B010');
   assert.equal(Number(varPreta!.custo), 25.5, 'o custo-base é importado');
-  assert.equal(Number(varPreta!.preco_venda), 0, 'preço de varejo NÃO é importado');
-  assert.equal(Number(varPreta!.preco_atacado), 0, 'preço de atacado NÃO é importado');
+  assert.equal(Number(varPreta!.preco_venda), 99.9, 'a BASE do varejo vem do preço oficial à vista');
+  assert.equal(Number(varPreta!.preco_atacado), 49.9, 'a BASE do atacado vem do preço oficial à vista');
   assert.equal(varPreta!.codigo_barras, null, 'concatenação não vira código de barras');
   assert.equal(Number(varPreta!.peso_liquido_g), 200);
   assert.equal(Number(varPreta!.altura_mm), 20);
   assert.equal(Number(varPreta!.largura_mm), 300);
   assert.equal(Number(varPreta!.profundidade_mm), 400);
+
+  // Preços OFICIAIS gravados por condição (dados de entrada, não fórmula).
+  const condBoleto = await s.findOneWhere(RESOURCES.produto_precos_condicao, { empresa_id: 1, produto_id: Number(varPreta!.id), canal: 'atacado', condicao: 'boleto_30_60' });
+  assert.ok(condBoleto, 'o preço de atacado boleto 30/60 foi importado');
+  assert.equal(Number(condBoleto!.preco), 54.9);
+  const condParcelado = await s.findOneWhere(RESOURCES.produto_precos_condicao, { empresa_id: 1, produto_id: Number(varPreta!.id), canal: 'varejo', condicao: 'cartao_parcelado' });
+  assert.ok(condParcelado);
+  assert.equal(Number(condParcelado!.preco), 109.9);
+
+  // Cadastro estrutural das condições de pagamento criado (idempotente).
+  assert.ok(await s.findOneWhere(RESOURCES.condicoes_pagamento, { empresa_id: 1, codigo: 'boleto_30_60' }));
+  assert.ok(await s.findOneWhere(RESOURCES.condicoes_pagamento, { empresa_id: 1, codigo: 'cartao_parcelado' }));
 
   const varBranca = await s.findOneWhere(RESOURCES.produtos, { sku: 'CB2B021', empresa_id: 1 });
   assert.equal(varBranca!.codigo_barras, null, 'sem EAN válido, o campo fica ausente');
@@ -210,6 +236,7 @@ test('reimportar o mesmo arquivo não duplica nada (idempotência)', async () =>
   const conteudo = await xlsxBase64(LINHAS_BASE);
   const s = getStore();
   const antes = await s.countWhere(RESOURCES.produtos, { empresa_id: 1 });
+  const precosAntes = await s.countWhere(RESOURCES.produto_precos_condicao, { empresa_id: 1 });
 
   const resp = await request(app()).post('/api/carga/politica-comercial/confirmar').send({ conteudo, nome: 'x.xlsx' });
   assert.equal(resp.status, 200, JSON.stringify(resp.body));
@@ -219,6 +246,10 @@ test('reimportar o mesmo arquivo não duplica nada (idempotência)', async () =>
 
   const depois = await s.countWhere(RESOURCES.produtos, { empresa_id: 1 });
   assert.equal(depois, antes, 'a contagem de produtos não muda');
+  const precosDepois = await s.countWhere(RESOURCES.produto_precos_condicao, { empresa_id: 1 });
+  assert.equal(precosDepois, precosAntes, 'a reimportação não duplica preços por condição');
+  const condicoes = await s.countWhere(RESOURCES.condicoes_pagamento, { empresa_id: 1 });
+  assert.equal(condicoes, 4, 'as condições de pagamento também são idempotentes');
 });
 
 test('status inválido é reportado sem descartar a linha em silêncio', async () => {
