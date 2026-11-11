@@ -9350,3 +9350,14 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_fiscal_layouts_sistema_versao
   ON fiscal_layouts (sistema, codigo_versao);
 CREATE INDEX IF NOT EXISTS fiscal_layouts_sistema_vigencia_idx
   ON fiscal_layouts (sistema, ativo, vigencia_inicio);
+
+-- ============================================================================
+-- ESPELHO da migração 0116 — IDENTIFICADORES DE ORIGEM DA CARGA COMERCIAL
+-- (a autoridade é db/migrations/0116_pim_carga_politica_comercial.sql; este
+--  espelho existe para o parser de schema e o contrato de colunas dos recursos)
+-- ============================================================================
+ALTER TABLE produtos ADD COLUMN IF NOT EXISTS codigo_item TEXT;
+ALTER TABLE produtos ADD COLUMN IF NOT EXISTS codigo_categoria TEXT;
+ALTER TABLE produtos ADD COLUMN IF NOT EXISTS codigo_industria TEXT;
+CREATE INDEX IF NOT EXISTS produtos_codigo_industria_idx ON produtos (empresa_id, codigo_industria);
+CREATE INDEX IF NOT EXISTS produtos_codigo_item_idx ON produtos (empresa_id, codigo_item);

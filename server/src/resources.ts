@@ -2545,6 +2545,9 @@ export const RESOURCES: Record<string, Resource> = {
       { name: 'descricao', label: 'Descrição comercial', type: 'textarea', maxLength: 2000, list: false, wide: true, hint: 'Texto usado no catálogo e nas propostas.', section: 'Identificação e catálogo' },
       { name: 'descricao_curta', label: 'Descrição curta', type: 'text', maxLength: 180, list: false, wide: true, section: 'Identificação e catálogo', hint: 'Uma linha — usada em listas, marketplaces e no PDV.' },
       { name: 'marca', label: 'Marca', type: 'text', maxLength: 60, list: false, search: true, section: 'Identificação e catálogo' },
+      { name: 'codigo_item', label: 'Item (origem)', type: 'text', maxLength: 40, list: false, search: true, section: 'Identificação e catálogo', hint: 'Número do item na planilha de origem. Texto: preserva zeros à esquerda.' },
+      { name: 'codigo_categoria', label: 'Código de categoria (origem)', type: 'text', maxLength: 40, list: false, search: true, section: 'Identificação e catálogo', hint: 'Código de categoria da planilha de origem (ex.: SOR). Não substitui a Categoria do ERP.' },
+      { name: 'codigo_industria', label: 'Código da indústria', type: 'text', maxLength: 40, list: false, search: true, section: 'Identificação e catálogo', hint: 'Código do fabricante/indústria (ex.: SOR15101). Preservado como veio, em texto.' },
       { name: 'tags', label: 'Tags', type: 'text', maxLength: 240, list: false, wide: true, search: true, section: 'Identificação e catálogo', placeholder: 'verão, básico, promoção', hint: 'Separe por vírgula. Ajuda na busca e nos filtros.' },
       { name: 'observacoes_internas', label: 'Observações internas', type: 'textarea', maxLength: 2000, list: false, wide: true, section: 'Identificação e catálogo', hint: 'Nunca sai em catálogo, proposta ou nota — é só para a equipe.' },
 
