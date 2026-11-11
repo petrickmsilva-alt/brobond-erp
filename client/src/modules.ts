@@ -8,7 +8,6 @@ import {
   ClipboardList,
   Cog,
   Clock,
-  ExternalLink,
   Factory,
   Flag,
   Handshake,
@@ -148,7 +147,6 @@ export const MODULE_GROUPS = [
   // o rótulo exibido é "Comercial" (ver GROUP_LABEL).
   'Catálogo',
   'Comercial Commerce',
-  'Experiência',
   'Pedidos',
   'Fulfillment',
   'Pagamentos',
@@ -191,9 +189,9 @@ export type Module = {
   planned?: string[];
   /**
    * Item de NAVEGAÇÃO que aponta para uma rota PÚBLICA já implementada FORA do
-   * Layout do ERP (ex.: /loja). Continua na fonte única (Sidebar, TopNav,
-   * Command Palette, breadcrumb), mas NÃO gera rota no loop de `App.tsx` —
-   * nunca existe segunda implementação nem rota paralela do storefront.
+   * Layout do ERP. Continua na fonte única (Sidebar, TopNav, Command Palette,
+   * breadcrumb), mas NÃO gera rota no loop de `App.tsx` — nunca existe segunda
+   * implementação nem rota paralela.
    */
   rotaPublica?: boolean;
   /**
@@ -2038,37 +2036,6 @@ export const MODULES: Module[] = [
     description: 'Cupons por código com validade, mínimo e limite de uso atômico — validados no servidor, no checkout.',
   },
 {
-    id: 'commerce-loja',
-    label: 'Loja própria',
-    icon: Store,
-    space: 'commerce',
-    area: 'Commerce',
-    group: 'Experiência',
-    subgroup: 'Vitrine',
-    keywords: 'loja vitrine checkout frete configuracao storefront brobond',
-    path: '/commerce/loja',
-    minPerfil: 'gerente',
-    resource: 'commerce_configuracoes',
-    description: 'Configuração da vitrine /loja: identidade, frete (FreightProvider), expiração do carrinho e responsável pelo checkout.',
-  },
-{
-    // EXPERIÊNCIA → Abrir Loja: atalho de NAVEGAÇÃO para a experiência pública
-    // oficial. Não é módulo administrativo, não cria página e não duplica rota:
-    // /loja já existe (LojaInicioPage, fora do Layout/Protected do ERP).
-    id: 'commerce-abrir-loja',
-    label: 'Abrir Loja',
-    icon: ExternalLink,
-    space: 'commerce',
-    area: 'Commerce',
-    group: 'Experiência',
-    subgroup: 'Vitrine',
-    kind: 'acao',
-    keywords: 'abrir loja vitrine publica storefront ver loja /loja experiences',
-    path: '/loja',
-    rotaPublica: true,
-    description: 'Abre a experiência pública da loja em /loja (vitrine, produto, carrinho e checkout). A área administrativa continua em Loja própria → /commerce/loja.',
-  },
-{
     id: 'commerce-pedidos',
     label: 'Pedidos',
     icon: ShoppingCart,
@@ -2412,7 +2379,6 @@ export const GROUP_META: Record<
   // BROBOND COMMERCE ENTERPRISE: grupos operacionais reais, na ordem do menu.
   'Catálogo': { area: 'Commerce', icon: Package, section: 'commerce' },
   'Comercial Commerce': { area: 'Commerce', icon: Percent, section: 'commerce' },
-  'Experiência': { area: 'Commerce', icon: Store, section: 'commerce' },
   Pedidos: { area: 'Commerce', icon: ShoppingCart, section: 'commerce' },
   Fulfillment: { area: 'Commerce', icon: Truck, section: 'commerce' },
   Pagamentos: { area: 'Commerce', icon: CreditCard, section: 'commerce' },
@@ -2472,7 +2438,6 @@ export const PAGES_ESPECIAIS = [
   'commerce-pedidos',
   'commerce-delivery',
   'commerce-trends',
-  'commerce-loja',
   'commerce-promocoes',
   'commerce-cupons',
   'commerce-fila',

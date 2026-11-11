@@ -81,8 +81,6 @@ const ROTAS_CANONICAS_ESPERADAS: Record<string, string> = {
   'conector-instagram': '/conectores/instagram',
   'commerce-produtos': '/commerce/produtos',
   'commerce-publicacoes': '/commerce/publicacoes',
-  'commerce-loja': '/commerce/loja',
-  'commerce-abrir-loja': '/loja',
   'commerce-promocoes': '/commerce/promocoes',
   'commerce-cupons': '/commerce/cupons',
   'commerce-pedidos': '/commerce/pedidos',
@@ -118,13 +116,13 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
     //   declaradas; P2-13: importações contábeis; P3-05/06: terceiros e facções).
     // + 1 do PR #95 — capacidade própria "Contagem Cíclica ABC" (P2-16) sob
     //   Estoque & Suprimentos → Estoque, com página e rota próprias.
-    // + 5 do BROBOND COMMERCE OS (0068): Publicações, Loja própria, Promoções,
-    //   Cupons e Fila & sync — os 4 antigos "planned" do Multicanal continuam,
-    //   agora implementados e sem a marcação de planejamento.
+    // + 3 do BROBOND COMMERCE OS (0068): Publicações, Promoções e Cupons — os
+    //   antigos "planned" do Multicanal continuam, agora implementados e sem a
+    //   marcação de planejamento. A Loja própria e o atalho Abrir Loja foram
+    //   RETIRADOS com a loja nativa (ADR-0007).
     // + 28 das ONDAS 4–5 (D1 atendimento/CDP, D2 fidelidade/afiliados,
     //   D3 Data/BI, D4 IA, D5 demanda/suprimento, D6 ocorrências/scorecard,
     //   D7 EPM) — todos com página e rota próprias, ZERO MODAL.
-    // + 1 do atalho de navegação Abrir Loja (/loja, rota pública já existente)
     // + 3 do COMMERCE ENTERPRISE: Preços (/commerce/precos), Payment Engine
     //   (/commerce/pagamentos) e Providers (/commerce/pagamentos/provedores) —
     //   páginas que já existiam ou leem dado real; entram no menu, sem rota nova "Em breve".
@@ -134,11 +132,11 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
     //   (leitura derivada + configuração do motor de alertas).
     // + 1 da FASE 9.2 — Caixa de entrada do CRM (avisos internos por usuário).
     // + 1 da FASE 9.5 — Leiautes SPED/EFD (registro versionado, leitura).
-    expect(MODULES).toHaveLength(153);
+    expect(MODULES).toHaveLength(151);
     const ids = MODULES.map((m) => m.id);
     const paths = MODULES.map((m) => m.path);
-    expect(new Set(ids).size).toBe(153);
-    expect(new Set(paths).size).toBe(153);
+    expect(new Set(ids).size).toBe(151);
+    expect(new Set(paths).size).toBe(151);
 
     for (const [id, pathEsperado] of Object.entries(ROTAS_CANONICAS_ESPERADAS)) {
       const mod = MODULES.find((m) => m.id === id);
@@ -167,10 +165,10 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
     }
   });
 
-  it('separa ERP CORE (128), Commerce (19), Creators (4) e Utilidades Globais (2)', () => {
+  it('separa ERP CORE (128), Commerce (17), Creators (4) e Utilidades Globais (2)', () => {
     expect(MODULES.filter((m) => m.space === 'erp')).toHaveLength(128);
     // 4 conectores de canal + 10 módulos do BROBOND COMMERCE OS
-    expect(MODULES.filter((m) => m.space === 'commerce')).toHaveLength(19);
+    expect(MODULES.filter((m) => m.space === 'commerce')).toHaveLength(17);
     expect(MODULES.filter((m) => m.space === 'creators')).toHaveLength(4);
     expect(MODULES.filter((m) => m.space === 'utilidades')).toHaveLength(2);
   });
@@ -347,14 +345,12 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
     expect(porArea('Administração')).toEqual(['empresas', 'usuarios', 'auditoria', 'webhooks']);
     expect(porArea('Commerce')).toEqual([
       // COMMERCE ENTERPRISE — ordem do menu:
-      // Catálogo → Comercial → Experiência → Pedidos → Fulfillment → Pagamentos → Canais → Integrações → Inteligência
+      // Catálogo → Comercial → Pedidos → Fulfillment → Pagamentos → Canais → Integrações → Inteligência
       'commerce-produtos',
       'commerce-publicacoes',
       'commerce-precos',
       'commerce-promocoes',
       'commerce-cupons',
-      'commerce-loja',
-      'commerce-abrir-loja',
       'commerce-pedidos',
       'commerce-delivery',
       'commerce-pagamentos',
@@ -378,9 +374,9 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
       s.areas.flatMap((a) => a.groups.flatMap((g) => g.subgroups.flatMap((sub) => sub.modules.map((m) => m.id))))
     );
     expect(modulosNaArvore).toEqual(MODULES.map((m) => m.id));
-    // 24 legadas + 13 páginas Commerce (inclui notificações) + 4 páginas Creators
-    // + 1 da FASE 9.2 (caixa de entrada do CRM).
-    expect(PAGES_ESPECIAIS).toHaveLength(43);
+    // 24 legadas + 12 páginas Commerce (inclui notificações) + 4 páginas Creators
+    // + 1 da FASE 9.2 (caixa de entrada do CRM). A Loja própria foi retirada (ADR-0007).
+    expect(PAGES_ESPECIAIS).toHaveLength(42);
   });
 });
 
@@ -498,7 +494,7 @@ describe('visibleModules', () => {
 
   it('registra o menu Commerce enterprise e Creators fora do Core, sem planned indevido', () => {
     expect(MODULE_GROUPS).toEqual(
-      expect.arrayContaining(['Catálogo', 'Comercial Commerce', 'Experiência', 'Pedidos', 'Fulfillment', 'Pagamentos', 'Canais', 'Integrações', 'Inteligência', 'Parcerias e campanhas'])
+      expect.arrayContaining(['Catálogo', 'Comercial Commerce', 'Pedidos', 'Fulfillment', 'Pagamentos', 'Canais', 'Integrações', 'Inteligência', 'Parcerias e campanhas'])
     );
     expect(MODULE_GROUPS as readonly string[]).not.toContain('Multicanal');
     expect(MODULE_GROUPS as readonly string[]).not.toContain('Loja e ofertas');
@@ -512,7 +508,8 @@ describe('visibleModules', () => {
     const porGrupo = (g: string) => commerce.filter((m) => m.group === g).map((m) => m.id);
     expect(porGrupo('Catálogo')).toEqual(['commerce-produtos', 'commerce-publicacoes']);
     expect(porGrupo('Comercial Commerce')).toEqual(['commerce-precos', 'commerce-promocoes', 'commerce-cupons']);
-    expect(porGrupo('Experiência')).toEqual(['commerce-loja', 'commerce-abrir-loja']);
+    // A Loja própria e o atalho Abrir Loja foram retirados com a loja nativa (ADR-0007).
+    expect(porGrupo('Experiência')).toEqual([]);
     expect(porGrupo('Pedidos')).toEqual(['commerce-pedidos']);
     expect(porGrupo('Fulfillment')).toEqual(['commerce-delivery']);
     expect(porGrupo('Pagamentos')).toEqual(['commerce-pagamentos', 'commerce-providers', 'conector-mercadopago']);
@@ -528,7 +525,7 @@ describe('visibleModules', () => {
     // Rotas preservadas (nenhuma URL pública do menu anterior desapareceu).
     const caminhos = MODULES.map((m) => m.path);
     for (const rota of [
-      '/commerce/produtos', '/commerce/publicacoes', '/commerce/loja', '/commerce/promocoes', '/commerce/cupons',
+      '/commerce/produtos', '/commerce/publicacoes', '/commerce/promocoes', '/commerce/cupons',
       '/commerce/pedidos', '/commerce/delivery', '/commerce/fila', '/commerce/trends',
       '/conectores/mercado-pago', '/conectores/mercado-livre', '/conectores/nuvemshop', '/conectores/instagram',
     ]) expect(caminhos, rota).toContain(rota);

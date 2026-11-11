@@ -34,7 +34,7 @@ const EMAIL_DOMINIO = '@promo.example.test';
 
 test('PIM/Pricing PG: promoção escopada (produto/categoria/canal/prioridade) aplica no checkout real', async (t) => {
   const porta = await reservePort();
-  const { child, baseUrl } = await startRealServer(porta, { COMMERCE_LOJA_EMPRESA_ID: '1' });
+  const { child, baseUrl } = await startRealServer(porta);
   const req = criarCliente(baseUrl);
   const cliente = new Client({ connectionString: String(process.env.DATABASE_URL) });
   await cliente.connect();
@@ -67,6 +67,8 @@ test('PIM/Pricing PG: promoção escopada (produto/categoria/canal/prioridade) a
   const login = await req('POST', '/auth/login', { email: emailGer, password: senhaGer });
   assert.equal(login.status, 200, `login: ${msg(login)}`);
   const token = String(login.body?.token || '');
+  // Motor de checkout INTERNO (ADR-0007): cotação autenticada, tenant da sessão.
+  const reqInt = (metodo: string, rota: string, corpo?: unknown) => req(metodo, rota, corpo, token);
 
   // ---- categorias ------------------------------------------------------------
   const catAlvo = await req('POST', '/categorias', { nome: `Alvo ${RODADA}`, ativo: true }, token);
@@ -118,20 +120,20 @@ test('PIM/Pricing PG: promoção escopada (produto/categoria/canal/prioridade) a
   }, token);
   assert.ok([200, 201].includes(promoProduto.status), `promo produto: ${msg(promoProduto)}`);
 
-  const q1 = await req('POST', '/loja/preview', { itens: [itemA, itemB] });
+  const q1 = await reqInt('POST', '/commerce/checkout/preview', { itens: [itemA, itemB] });
   assert.equal(q1.status, 200, `preview A+B: ${msg(q1)}`);
   assert.equal(q1.body.totais.subtotal, 150);
   assert.equal(q1.body.desconto, 10, 'só o produto alvo (R$ 100 × 10%) desconta');
   assert.equal(q1.body.totais.total, 140);
 
   // produto fora dos alvos sozinho: NÃO desconta
-  const qSoB = await req('POST', '/loja/preview', { itens: [itemB] });
+  const qSoB = await reqInt('POST', '/commerce/checkout/preview', { itens: [itemB] });
   assert.equal(qSoB.body.desconto, 0, 'produto fora do alvo não desconta');
   assert.equal(qSoB.body.totais.total, 50);
 
   // ---- 2) CANAL: promoção de 'atacado' não vale na vitrine (varejo) ----------
   await req('PUT', `/commerce/promocoes/${promoProduto.body.promocao.id}`, { canal: 'atacado' }, token);
-  const qCanal = await req('POST', '/loja/preview', { itens: [itemA, itemB] });
+  const qCanal = await reqInt('POST', '/commerce/checkout/preview', { itens: [itemA, itemB] });
   assert.equal(qCanal.body.desconto, 0, 'promoção de atacado não vale na vitrine (varejo)');
   // volta para todos
   await req('PUT', `/commerce/promocoes/${promoProduto.body.promocao.id}`, { canal: 'todos' }, token);
@@ -143,7 +145,7 @@ test('PIM/Pricing PG: promoção escopada (produto/categoria/canal/prioridade) a
     minimo_pedido: 0, data_inicio: '2020-01-01', data_fim: null, ativo: true, categorias: [categoriaAlvoId],
   }, token);
   assert.ok([200, 201].includes(promoCategoria.status), `promo categoria: ${msg(promoCategoria)}`);
-  const qCat = await req('POST', '/loja/preview', { itens: [itemA, itemB] });
+  const qCat = await reqInt('POST', '/commerce/checkout/preview', { itens: [itemA, itemB] });
   assert.equal(qCat.body.desconto, 20, '20% sobre R$ 100 da categoria alvo');
   assert.equal(qCat.body.totais.total, 130);
 
@@ -154,7 +156,7 @@ test('PIM/Pricing PG: promoção escopada (produto/categoria/canal/prioridade) a
   }, token);
   // Mesmo desconto (20) → a de maior prioridade vence; ambas dão 20, então o
   // valor final é o mesmo, mas a "melhor" reportada deve ser a de prioridade maior.
-  const qPrec = await req('POST', '/loja/preview', { itens: [itemA] });
+  const qPrec = await reqInt('POST', '/commerce/checkout/preview', { itens: [itemA] });
   assert.equal(qPrec.body.desconto, 20);
   // diferença observável: com desconto diferente (25%) e prioridade baixa, a de
   // MAIOR prioridade (20%, prioridade 1) NÃO vence a de maior desconto (25%) —
@@ -164,14 +166,14 @@ test('PIM/Pricing PG: promoção escopada (produto/categoria/canal/prioridade) a
     minimo_pedido: 0, data_inicio: '2020-01-01', data_fim: null, ativo: true, categorias: [categoriaAlvoId],
   }, token);
   assert.ok([200, 201].includes(promoCategoriaAltaDesconto.status));
-  const qMelhor = await req('POST', '/loja/preview', { itens: [itemA] });
+  const qMelhor = await reqInt('POST', '/commerce/checkout/preview', { itens: [itemA] });
   assert.equal(qMelhor.body.desconto, 25, 'maior desconto vence a prioridade');
 
   // ---- 5) PROMOÇÃO × CUPOM: não acumulam, vence o maior ---------------------
   const codigo = `PROMO${RS}`;
   const cupom = await req('POST', '/commerce/cupons', { codigo, tipo: 'valor', valor: 30, minimo_pedido: 0, uso_maximo: 5, validade: null, ativo: true }, token);
   assert.ok([200, 201].includes(cupom.status), `cupom: ${msg(cupom)}`);
-  const qCupom = await req('POST', '/loja/preview', { itens: [itemA], cupom: codigo });
+  const qCupom = await reqInt('POST', '/commerce/checkout/preview', { itens: [itemA], cupom: codigo });
   assert.equal(qCupom.body.desconto, 30, 'cupom de R$ 30 vence a promoção de 25% (R$ 25)');
   assert.equal(qCupom.body.totais.total, 70);
 

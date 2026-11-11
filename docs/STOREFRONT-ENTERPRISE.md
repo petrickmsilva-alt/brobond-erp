@@ -1,10 +1,16 @@
-# STOREFRONT ENTERPRISE — evolução da loja própria `/loja/*`
+# STOREFRONT ENTERPRISE — motor de checkout interno (histórico)
 
-> **Escopo**: evolução do que já existe. Não foi criada outra loja, outro
-> checkout, outro pedido, outro estoque, outro Payment Engine, outro ledger
-> financeiro nem uma segunda integração com Mercado Pago. `/commerce/*`
-> continua sendo backoffice; `/loja/*` continua sendo a única superfície
-> pública do comprador.
+> **ATUALIZAÇÃO (ADR-0007, executada):** a superfície pública nativa `/loja/*`
+> foi **RETIRADA**. A única loja pública de varejo é a **RETAIL WooCommerce**
+> (`brobond.com.br`). O motor descrito aqui **permanece** como serviço interno
+> compartilhado, agora sob a superfície **autenticada**
+> `/api/commerce/checkout/*` (não é mais pública). Ver
+> [`architecture/NATIVE-STORE-DECOMMISSION-REPORT.md`](architecture/NATIVE-STORE-DECOMMISSION-REPORT.md).
+>
+> **Escopo histórico**: evolução do que já existia. Não foi criada outra loja,
+> outro checkout, outro pedido, outro estoque, outro Payment Engine, outro
+> ledger financeiro nem uma segunda integração com Mercado Pago. `/commerce/*`
+> é backoffice.
 
 ## 1. Fluxo preservado (ponta a ponta)
 

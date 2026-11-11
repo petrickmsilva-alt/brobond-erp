@@ -92,7 +92,7 @@ describe('Commerce — Form de oferta (novo/editar)', () => {
     await vi.waitFor(() => {
       const chamada = fetchMock.mock.calls.find(([p, o]) => p === '/commerce/produtos/7/precos' && o?.method === 'PUT');
       expect(chamada).toBeTruthy();
-      expect(String(chamada![1]?.body)).toContain('"canal":"BROBOND"');
+      expect(String(chamada![1]?.body)).toContain('"canal":"MERCADOLIVRE"');
       expect(String(chamada![1]?.body)).toContain('"preco":129.9');
     });
     expect(screen.queryByRole('dialog')).toBeNull();

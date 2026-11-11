@@ -77,6 +77,9 @@ export async function analyticsCommerce(req: Request, res: Response) {
   // Canal (análise): contagem e GMV por `channel`.
   const porCanal = new Map<string, { pedidos: number; pagos: number; gmv: number }>();
   for (const v of periodo) {
+    // Vendas do ERP/PDV sem canal externo gravam `channel='BROBOND'` (DEFAULT
+    // histórico de `sales.channel`); o rótulo é apresentado como "Loja física /
+    // ERP" porque a vitrine própria foi retirada (ADR-0007).
     const canal = String(v.channel || 'BROBOND');
     const atual = porCanal.get(canal) ?? { pedidos: 0, pagos: 0, gmv: 0 };
     atual.pedidos += 1;

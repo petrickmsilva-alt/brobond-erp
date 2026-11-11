@@ -51,8 +51,8 @@ export async function account(empresaId: number, code: ProviderCode, operationKe
   const provider = providerRegistry.get(code);
   let config = await configDaEmpresa(empresaId, provider.legacyId);
   if (!config && ['STRIPE', 'PAGBANK'].includes(code)) {
-    const { empresaDaVitrine } = await import('../../../server/src/commerce/loja-base');
-    if ((await empresaDaVitrine()) === empresaId) {
+    const { empresaDoAmbientePagamento } = await import('../../../server/src/commerce/pagamento-ambiente');
+    if (empresaDoAmbientePagamento() === empresaId) {
       config = configuracaoAmbientePagamento(code as 'STRIPE' | 'PAGBANK', process.env, empresaId, provider.legacyId) as any;
     }
   }

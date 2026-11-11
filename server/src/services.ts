@@ -1284,7 +1284,7 @@ export async function createRecord(r: Resource, body: unknown, actor: Actor, ctx
   try {
     const criado = await s.transaction(async (tx) => {
       if (r.key === 'commerce_configuracoes' && data.checkout_usuario_id) {
-        const { responsavelCheckout } = await import('./commerce/loja-base');
+        const { responsavelCheckout } = await import('./commerce/checkout-base');
         await responsavelCheckout(escopo.empresaId, data);
       }
       // Regras específicas
@@ -1495,7 +1495,7 @@ export async function updateRecord(r: Resource, id: number, body: unknown, actor
       if (r.key === 'lancamentos_financeiros' && (before.documento_origem_recurso === 'fin_importacoes_contabeis' || data.documento_origem_recurso === 'fin_importacoes_contabeis')) throw new HttpError(409, 'Partidas contábeis importadas são imutáveis; use uma nova escrituração de ajuste.');
       if (r.key === 'commerce_configuracoes') validarConfiguracaoFrete({ ...before, ...data } as ConfigFrete);
       if (r.key === 'commerce_configuracoes' && data.checkout_usuario_id) {
-        const { responsavelCheckout } = await import('./commerce/loja-base');
+        const { responsavelCheckout } = await import('./commerce/checkout-base');
         await responsavelCheckout(escopo.empresaId, { ...before, ...data });
       }
       // CRM 3.0: depende do desfecho ATUAL da oportunidade (estágio congelado

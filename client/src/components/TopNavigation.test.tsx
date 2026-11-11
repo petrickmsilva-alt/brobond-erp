@@ -278,7 +278,7 @@ describe('TopNavigation — Master Top Navigation (UX-05)', () => {
     // + Leiautes SPED/EFD (Fase 9.5).
     // `modules.test.ts` trava o mesmo número e a lista canônica — aqui só se
     // confirma que o menu não perde nem duplica a fonte única.
-    expect(MODULES).toHaveLength(153);
+    expect(MODULES).toHaveLength(151);
     unmount();
   });
 

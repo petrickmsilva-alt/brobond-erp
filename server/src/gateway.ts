@@ -29,7 +29,7 @@ import { intencaoMercadoPago, mercadopagoProvider, valorMercadoPagoEmCentavos } 
 import { createHmac, createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { Request, Response, Router } from 'express';
 import express from 'express';
-import { gatewayAmbienteDaVitrine } from './commerce/pagamento-ambiente';
+import { gatewayAmbientePagamento } from './commerce/pagamento-ambiente';
 import { HttpError } from './errors';
 import { getResource, type Resource } from './resources';
 import { checkAccess, getStore } from './services';
@@ -397,7 +397,7 @@ export async function configDaEmpresa(empresaId: number, provider: string, tx?: 
   const id = String(provider || '').toLowerCase();
   const persistida = await s.findOneWhere(R_GATEWAY_CONFIGS, { empresa_id: empresaId, provider: id }, tx);
   if (persistida || id !== 'mercadopago') return persistida;
-  return gatewayAmbienteDaVitrine(empresaId);
+  return gatewayAmbientePagamento(empresaId);
 }
 
 export async function contextoDoProvider(empresaId: number, provider: string): Promise<GatewayContext> {

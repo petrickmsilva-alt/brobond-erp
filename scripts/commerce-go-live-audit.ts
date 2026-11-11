@@ -92,15 +92,18 @@ p0(mig.includes('checkout_token TEXT UNIQUE') && mig.includes('chave_checkout'),
 const index = ler('server/src/index.ts');
 const rotasLoja = (index.match(/app\.(get|post)\('\/api\/loja\//g) || []).length;
 const rotasCommerce = (index.match(/app\.(get|post|put|delete)\('\/api\/commerce\//g) || []).length;
-p0(rotasLoja >= 6, `6+ rotas públicas /api/loja/* (${rotasLoja} achadas)`);
+// A loja nativa foi RETIRADA (ADR-0007): nenhuma rota pública /api/loja/* deve
+// existir; a loja pública de varejo é a RETAIL WooCommerce.
+p0(rotasLoja === 0, `nenhuma rota pública /api/loja/* (loja nativa retirada — ADR-0007)`, `${rotasLoja} achadas`);
+p0(existsSync(join(RAIZ, 'server/src/commerce/loja-nativa-retirada.ts')), 'handler das URLs antigas da loja nativa (301/410) presente');
 p0(rotasCommerce >= 25, `25+ rotas /api/commerce/* (${rotasCommerce} achadas)`);
 p0(index.includes('registrarHooksCommerce'), 'hooks commerce registrados no boot (ponte + gateway + ingestão)');
 p0(index.includes('processarComercioAgendado'), 'intervalo agendado da fila/expiração no boot');
 
 // ---------------------------------------------------------- 3. Pagamento
 const gateway = ler('server/src/gateway.ts');
-const vitrine = ler('server/src/commerce/vitrine.ts');
 const pedidos = ler('server/src/commerce/pedidos.ts');
+const orchestrator = ler('modules/payments/orchestration/payment-orchestrator.ts');
 p0(
   gateway.includes('createHmac') && gateway.includes('assinatura') && gateway.includes('webhook_segredo'),
   'webhook público com assinatura HMAC por empresa (segredo cifrado)',
@@ -109,18 +112,16 @@ p0(
   gateway.includes('uq_gateway_webhook_evento') || ler('db/migrations/0025_p2_financeiro_gateways.sql').includes('uq_gateway_webhook_evento'),
   'idempotência de webhook (UNIQUE provider + evento_id) no modelo',
 );
-p0(vitrine.includes('paymentEngine.createForOrder') && ler('modules/payments/orchestration/payment-orchestrator.ts').includes('createPaymentIntent') && !/from ['"][^'"]*(?:mercado-pago|pagbank|stripe)/i.test(vitrine), 'checkout cria intenção via Payment Engine no BACKEND (nunca provider no frontend)');
+// A loja nativa foi retirada: a criação de intenção vive no Payment Engine
+// (backend), com valor derivado da venda canônica — nunca do browser.
 p0(
-  vitrine.includes('instanteIso') === false || gateway.includes('instanteIso'),
-  'normalização de instante na cobrança (timestamptz honesto)',
+  orchestrator.includes('createForOrder') &&
+    orchestrator.includes('createPaymentIntent') &&
+    /const amount = minorUnits\(Number\(order\.total\)\)/.test(orchestrator) &&
+    !/from ['"][^'"]*(?:mercado-pago|pagbank|stripe)/i.test(orchestrator),
+  'intenção de pagamento criada no Payment Engine (backend), valor da venda canônica — nunca provider no frontend',
 );
-const clientLoja = ['client/src/pages/commerce/loja/LojaCheckoutPage.tsx', 'client/src/pages/commerce/loja/LojaCarrinhoPage.tsx']
-  .map(ler)
-  .join('\n');
-p0(
-  !/(confirmarPagamento|pagar_pedido|\/pagar)['"]/.test(clientLoja),
-  'frontend da vitrine nunca chama confirmação de pagamento',
-);
+p0(gateway.includes('instanteIso'), 'normalização de instante na cobrança (timestamptz honesto)');
 p0(pedidos.includes('setOnCobrancaAlterada(confirmarPagamentoCobranca)'), 'ouvinte gateway → estado PAGO + conversão automática');
 
 // --------------------------------------------------------------- 4. RBAC
@@ -129,7 +130,8 @@ const catalogo = ler('server/src/commerce/catalogo.ts');
 const escritasFluxo = (catalogo.match(/checkFluxoEscrita\(/g) || []).length;
 p0(services.includes('export function checkFluxoEscrita'), 'camada checkFluxoEscrita (escrita de fluxo sem abrir CRUD)');
 p0(services.includes('minPerfilEscrita'), 'alçada minPerfilEscrita aplicada em escrita');
-p0(escritasFluxo >= 6, `6+ writes de catálogo usam checkFluxoEscrita (${escritasFluxo} achados)`);
+// A despublicação da vitrine nativa (um write de fluxo) foi retirada (ADR-0007).
+p0(escritasFluxo >= 5, `5+ writes de catálogo usam checkFluxoEscrita (${escritasFluxo} achados)`);
 const resources = ler('server/src/resources.ts');
 const empresaTrue = (resources.match(/commerce_[a-z_]+: \{[^}]*?empresa: true/g) || []).length;
 p0(empresaTrue >= 9, `9 resources commerce com empresa: true (tenancy) (${empresaTrue})`);
@@ -151,10 +153,9 @@ function arquivos(dir: string, filtro: (f: string) => boolean): string[] {
 
 const paginas = [
   ...arquivos('client/src/pages/commerce', (f) => f.endsWith('.tsx') && !f.endsWith('.test.tsx')),
-  ...arquivos('client/src/pages/commerce/loja', (f) => f.endsWith('.tsx') && !f.endsWith('.test.tsx')),
 ];
 const codigoUI = paginas.map(ler).join('\n');
-p0(paginas.length >= 17, `17+ páginas/rotas commerce+loja sem modal (${paginas.length} arquivos)`);
+p0(paginas.length >= 16, `16+ páginas/rotas commerce sem modal (${paginas.length} arquivos)`);
 p0(
   !/<Modal|<Dialog|<Drawer|<Sheet|createPortal/.test(codigoUI),
   'ZERO modal/overlay/portal nas rotas operacionais (confirmações inline)',
@@ -176,10 +177,11 @@ for (const [arquivo, minimo] of testes) {
 }
 const testesClient = [
   ...arquivos('client/src/pages/commerce', (f) => f.endsWith('.test.tsx')),
-  ...arquivos('client/src/pages/commerce/loja', (f) => f.endsWith('.test.tsx')),
 ];
 p0(testesClient.length >= 15, `15+ arquivos de teste visual/fluxo commerce (${testesClient.length})`);
-p0(ler('client/src/pages/commerce/LojaFluxoPages.test.tsx').includes("queryByRole('dialog')"), 'fluxo B2C prova ausência de diálogo modal');
+p0(!/<Modal|<Dialog|<Drawer|<Sheet|createPortal/.test(codigoUI), 'fluxo commerce prova ausência de diálogo modal (ZERO MODAL)');
+// A ausência da loja nativa é provada por teste dedicado (ADR-0007).
+p0(ler('server/test/fase2-loja-coerencia.test.ts').includes('loja nativa'), 'teste prova a retirada da loja nativa (ADR-0007)');
 
 // ------------------------------------------------------- 8. Docs e módulos
 for (const doc of ['COMMERCE-ARCHITECTURE', 'COMMERCE-GO-LIVE', 'COMMERCE-CHANNEL-MATRIX', 'COMMERCE-GAP-AUDIT']) {
@@ -201,7 +203,7 @@ p1(existsSync(join(RAIZ, 'docs/COMMERCE-GAP-AUDIT.md')), 'GAP-AUDIT documenta la
 // ---------------------------------------------------------- 10. P2 (futuro)
 p2('carrier de frete externo', 'nenhum|retirada|manual é suficiente hoje; Correios/transportadora é extensão futura');
 p2('sincronização de estoque ida-e-volta', 'canais leem o canônico + reservas; escrita por canal é reconciliação futura');
-p2('imagens de marketplace na vitrine', 'foto_url do cadastro ERP cobre a vitrine própria');
+p2('imagens de marketplace nos canais', 'foto_url do cadastro ERP cobre o catálogo; imagem por canal é extensão futura');
 p2('E2E por canal Nuvemshop/Woo/Instagram', 'ingestão implementada; golive-03 cobre o caminho marketplace→venda');
 
 // -------------------------------------------------------------- 11. Banco

@@ -3,11 +3,12 @@
 **Data:** 2026-11-07 · **Branch:** `architecture/fase-0-blueprint`
 **Decisão do Diretor (ADR-0007):** a loja nativa `/loja` **não** é mais
 experiência pública de varejo; a **RETAIL WooCommerce** passa a ser a única loja
-pública. A retirada foi **planejada para a Fase 2**, mas a **execução está
-bloqueada** por ambiente/decisão (impedimentos I-1..I-4) — a superfície nativa
-**ainda está ativa**. Ver
+pública. A retirada foi **planejada na Fase 2** e **EXECUTADA** no branch
+`operations/pre-go-live-data-sanitization` — a superfície nativa **não existe
+mais** no código. Ver
 [`NATIVE-STORE-DECOMMISSION-REPORT.md`](NATIVE-STORE-DECOMMISSION-REPORT.md).
-Este documento é a auditoria e o **plano** de retirada; nada aqui foi executado.
+Este documento preserva a auditoria e o plano originais; o estado final está no
+relatório.
 
 > **Restrições absolutas.** Não apagar tabelas/históricos/pedidos/clientes/
 > produtos/financeiro. Não remover rota administrativa só porque o caminho
@@ -171,11 +172,11 @@ Este documento é a auditoria e o **plano** de retirada; nada aqui foi executado
 
 ---
 
-*Status:* **plano entregue (Fase 0)** · execução **tentada na Fase 2 e
-bloqueada** por ambiente/decisão (impedimentos I-1..I-4) — ver
+*Status:* **plano entregue (Fase 0)** · retirada **EXECUTADA** no branch
+`operations/pre-go-live-data-sanitization` — ver
 [`NATIVE-STORE-DECOMMISSION-REPORT.md`](NATIVE-STORE-DECOMMISSION-REPORT.md).
-A retirada está **pendente para a Fase 3** (BL-015 / DEC-004); a superfície
-nativa **ainda está ativa**.
+A superfície nativa **não existe mais**; as URLs antigas respondem 301/410
+conforme a matriz abaixo.
 
 ---
 
@@ -183,9 +184,9 @@ nativa **ainda está ativa**.
 
 A tabela abaixo é o **inventário explícito** de cada rota `/loja` (SPA) e
 `/api/loja/*` (servidor), com a **classificação** e o **comportamento HTTP
-aprovado** para a retirada. Nesta fase **nada é removido**: a loja nativa
-permanece **ativa**. A matriz existe para que a Fase 3 (retirada) não precise
-reconstruir o inventário.
+aprovado** para a retirada. A retirada foi **executada**: as rotas nativas não
+existem mais e o comportamento abaixo é o das URLs antigas, tratado por
+`server/src/commerce/loja-nativa-retirada.ts`.
 
 ### 8.1 Rotas públicas da SPA (`client/src/App.tsx`)
 

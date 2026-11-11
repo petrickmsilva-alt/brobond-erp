@@ -83,15 +83,15 @@ describe('Commerce — Nova publicação (/commerce/publicacoes/novo)', () => {
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 
-  it('mostra o erro real do servidor (ex.: sem projeção no BROBOND)', async () => {
+  it('mostra o erro real do servidor (ex.: canal externo recusou a publicação)', async () => {
     fetchMock.mockResolvedValue({ produtos: [PRODUTO], total: 1 });
     renderPagina();
     await userEvent.type(screen.getByPlaceholderText(/SKU-100 ou Camiseta/), 'camiseta');
     await userEvent.click(await screen.findByRole('button', { name: /Camiseta Brobond/ }));
-    await userEvent.click(screen.getByRole('checkbox', { name: /Loja própria/ }));
-    fetchMock.mockRejectedValue(new ApiError(409, 'Projete o produto na vitrine (slug) antes de publicar no canal BROBOND.'));
+    await userEvent.click(screen.getByRole('checkbox', { name: /Mercado Livre/ }));
+    fetchMock.mockRejectedValue(new ApiError(409, 'O canal recusou a publicação: categoria obrigatória ausente.'));
     await userEvent.click(screen.getByRole('button', { name: /Publicar nos canais/ }));
-    expect(await screen.findByText(/Projete o produto na vitrine/)).toBeInTheDocument();
+    expect(await screen.findByText(/O canal recusou a publicação/)).toBeInTheDocument();
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 });

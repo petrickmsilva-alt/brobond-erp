@@ -118,11 +118,11 @@ graph TB
   LOG -->|webhook rastreio| ERP
 ```
 
-> A loja pública **nativa** `/loja` (vitrine própria) sai de cena por decisão do
-> Diretor; a experiência pública de varejo passa a ser a RETAIL WooCommerce.
-> **Estado:** decisão registrada (ADR-0007); a superfície nativa **ainda está
-> ativa** e a execução da retirada está **pendente** (Fase 3 — BL-015).
-> Ver [`NATIVE-STORE-DECOMMISSION.md`](NATIVE-STORE-DECOMMISSION.md).
+> A loja pública **nativa** `/loja` (vitrine própria) saiu de cena por decisão do
+> Diretor; a experiência pública de varejo é a RETAIL WooCommerce.
+> **Estado:** decisão registrada (ADR-0007) e retirada **EXECUTADA** — a
+> superfície nativa não existe mais no código; as URLs antigas recebem 301/410.
+> Ver [`NATIVE-STORE-DECOMMISSION-REPORT.md`](NATIVE-STORE-DECOMMISSION-REPORT.md).
 
 ### 3.2 Nível 2 — Containers (C4-L2)
 
@@ -186,8 +186,8 @@ graph LR
 
 ```mermaid
 sequenceDiagram
-  participant C as Cliente (loja)
-  participant API as API /api/loja
+  participant C as Cliente
+  participant API as API /api/commerce/checkout
   participant OMS as OMS (commerce/pedidos)
   participant WMS as WMS (estoqueCanonico)
   participant PAY as Payment Engine
@@ -238,7 +238,7 @@ sequenceDiagram
 | `commerce_outbox` | **Preservar** | Fila única com CAS/backoff/DLQ |
 | Bounded contexts `modules/*` | **Preservar** | Já desacoplados |
 | Dois caminhos Woo (`loja.ts` + `commerce/woocommerce/`) | **Refatorar incremental** | Unificar no multi-store (runbook) |
-| Loja pública nativa `/loja` | **Descontinuar** | Decisão do Diretor |
+| Loja pública nativa `/loja` | **Descontinuada (executada)** | Decisão do Diretor (ADR-0007) |
 | Padrões (API/evento/migration/auditoria) | **Formalizar** (Fase 1) | Hoje implícitos no código |
 | Integridade cross-tenant de `crm_*` no banco | **Refatorar** (Fase 2) | GAP-P2-04 |
 | Catálogo de unidades (`insumos.unidade`) | **Adiar** (GAP-P3-04) | Exige migração de dados |

@@ -1252,17 +1252,6 @@
       "teste": "client/src/pages/commerce/PublicacoesPage.test.tsx"
     },
     {
-      "id": "commerce-loja",
-      "label": "Loja própria",
-      "tipo": "modulo",
-      "recurso": "commerce_configuracoes",
-      "tabela": "commerce_configuracoes",
-      "rota": "/commerce/loja",
-      "menu": true,
-      "rbac": "gerente",
-      "teste": "client/src/pages/commerce/LojaConfigPage.test.tsx"
-    },
-    {
       "id": "commerce-promocoes",
       "label": "Promoções",
       "tipo": "modulo",
@@ -1386,16 +1375,6 @@
       "menu": false,
       "justificativa": "Edição do documento em rota própria (zero modal).",
       "teste": "client/src/pages/commerce/CupomFormPage.test.tsx"
-    },
-    {
-      "id": "commerce-vitrine",
-      "label": "Vitrine B2C (/loja)",
-      "tipo": "submodulo",
-      "parente": "commerce-loja",
-      "rota": "/loja",
-      "menu": false,
-      "justificativa": "Vitrine pública do checkout B2C (início/produto/carrinho/checkout/pedido) acessada por clientes finais sem sessão do ERP — nunca é entrada da árvore de navegação interna.",
-      "teste": "client/src/pages/commerce/LojaFluxoPages.test.tsx"
     },
     {
       "id": "service-tickets",
@@ -1526,5 +1505,7 @@
       "teste": "server/test/fase8-alertas-control-tower.test.ts"
     }
   ],
-  "recursos_sem_dono_permitido": {}
+  "recursos_sem_dono_permitido": {
+    "commerce_configuracoes": "Config compartilhada do commerce: frete (FreightProvider) usado pelo motor de logística; a tela administrativa da vitrine nativa foi retirada (ADR-0007)."
+  }
 }

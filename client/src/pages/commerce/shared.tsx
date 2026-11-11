@@ -8,7 +8,6 @@ import { Badge } from '../../components/ui';
 import { formatMoney, formatDate } from '../../lib/format';
 
 export const CANAIS_PUBLICACAO = [
-  { valor: 'BROBOND', rotulo: 'Loja própria' },
   { valor: 'MERCADOLIVRE', rotulo: 'Mercado Livre' },
   { valor: 'NUVEMSHOP', rotulo: 'Nuvemshop' },
   { valor: 'WOOCOMMERCE', rotulo: 'WooCommerce' },
@@ -16,7 +15,7 @@ export const CANAIS_PUBLICACAO = [
 ] as const;
 
 export const CANAIS_PEDIDO = [
-  { valor: 'BROBOND', rotulo: 'Loja própria' },
+  { valor: 'BROBOND', rotulo: 'Loja própria / ERP' },
   { valor: 'MERCADOLIVRE', rotulo: 'Mercado Livre' },
   { valor: 'NUVEMSHOP', rotulo: 'Nuvemshop' },
   { valor: 'MERCADOPAGO', rotulo: 'Mercado Pago' },

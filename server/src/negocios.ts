@@ -79,7 +79,7 @@ const CANAL_PARA_GRUPO: Record<string, CanalGrupo> = Object.fromEntries(
 ) as Record<string, CanalGrupo>;
 
 export const CANAL_LABEL: Record<string, string> = {
-  BROBOND: 'Loja própria (brobond.com.br)',
+  BROBOND: 'Loja própria / ERP',
   INSTAGRAM_SHOPPING: 'Instagram Shopping',
   MERCADOLIVRE: 'Mercado Livre',
   MERCADOPAGO: 'Mercado Pago (checkout)',

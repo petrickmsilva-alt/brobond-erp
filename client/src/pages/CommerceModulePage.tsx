@@ -9,7 +9,6 @@ import CommerceTrendsPage from './commerce/TrendsPage';
 import CommerceDeliveryPage from './commerce/DeliveryPage';
 import CommerceFilaPage from './commerce/FilaPage';
 import CommerceNotificacoesPage from './commerce/NotificacoesPage';
-import CommerceLojaConfigPage from './commerce/LojaConfigPage';
 import CommercePromocoesPage from './commerce/PromocoesPage';
 import CommercePromocaoFormPage from './commerce/PromocaoFormPage';
 import CommerceCuponsPage from './commerce/CuponsPage';
@@ -31,7 +30,6 @@ const COMMERCE_PAGES: Record<string, () => JSX.Element> = {
   'commerce-delivery': CommerceDeliveryPage,
   'commerce-fila': CommerceFilaPage,
   'commerce-notificacoes': CommerceNotificacoesPage,
-  'commerce-loja': CommerceLojaConfigPage,
   'commerce-promocoes': CommercePromocoesPage,
   'commerce-promocao-nova': CommercePromocaoFormPage,
   'commerce-promocao-editar': CommercePromocaoFormPage,

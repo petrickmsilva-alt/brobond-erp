@@ -167,7 +167,8 @@ Lidos por família de prefixo em `modules/payments/application/configuration.ts:
 | `WOOCOMMERCE_STATUS` | WooCommerce | `loja.ts:72` | Não | `processing` | ausente |
 | `WOOCOMMERCE_CANAL` | WooCommerce | `loja.ts:77` | Não | `site_varejo` | ausente |
 | `WOOCOMMERCE_TIMEOUT_MS` | WooCommerce | `loja.ts:85` | Não | 20 000 ms | ausente |
-| `COMMERCE_LOJA_EMPRESA_ID` | Vitrine | `server/src/commerce/loja-base.ts:25` | Condicional | Vitrine usa a regra padrão | ausente |
+| `COMMERCE_PAGAMENTO_EMPRESA_ID` | Payment Engine (serviço compartilhado) | `server/src/commerce/pagamento-ambiente.ts:24` | Condicional | Sem credencial de ambiente: exige configuração persistida por empresa | ausente |
+| `STOREFRONT_REDIRECT_URL` | Loja nativa retirada (ADR-0007) | `server/src/commerce/loja-nativa-retirada.ts:33` | Não | URLs antigas de `/loja` respondem 410 Gone | ausente |
 | *Nota (não são variáveis)* | Melhor Envio (`me_token`), Correios (`correios_senha`), Focus NFe e PlugNotas | `server/src/logistica.ts:156,168,175`; `server/src/fiscalProvider.ts:440` | — | Credenciais **por empresa**, cifradas no banco; cadastradas na tela de configuração, não no Render | — |
 | `CATALOGO_EMBED_ORIGENS` | Catálogo | `server/src/catalogos.ts:700` | Não | Usa `WOOCOMMERCE_URL` | ausente |
 | `CATALOGO_LIMIT` | Catálogo | `server/src/catalogos.ts:34` | Não | Padrão | ausente |
