@@ -20,6 +20,7 @@
 // (ver docs/OPERACAO-SANEAMENTO-GO-LIVE.md).
 // ============================================================================
 import type { Pool, PoolClient } from 'pg';
+import { verificarCobertura } from './saneamento-cobertura';
 
 /** Confirmação textual exigida para executar de verdade (evita acidente). */
 export const CONFIRMACAO_EXECUCAO = 'LIMPAR-HOMOLOGACAO';
@@ -68,18 +69,6 @@ export interface LinhaEstoque {
   valor_total: number | null;
 }
 
-export interface ResultadoSaneamento {
-  modo: 'dry-run' | 'executar';
-  empresas: number[];
-  passos: ContagemPasso[];
-  totalRemovido: number;
-  estoqueAntes: LinhaEstoque[];
-  estoqueDepois: LinhaEstoque[];
-  estoquePreservado: boolean;
-  divergencias: string[];
-  auditoriaId: number | null;
-}
-
 // ---------------------------------------------------------------------------
 // PLANO — ordem de exclusão respeitando as dependências (filhos antes dos pais).
 //
@@ -94,6 +83,9 @@ export const PLANO: PassoPlano[] = [
   // Ordem topológica derivada do grafo de FKs (filhos antes dos pais).
   // Commerce: satélites do pedido.
   { id: 'commerce_notificacoes', tabela: 'commerce_notificacoes', descricao: 'Notificações de pedidos de teste', where: POR_EMPRESA },
+  // Disputas de pagamento: evidências e eventos ANTES do cabeçalho.
+  { id: 'payment_dispute_evidence', tabela: 'payment_dispute_evidence', descricao: 'Evidências de disputa de pagamento de teste', where: POR_EMPRESA },
+  { id: 'payment_dispute_events', tabela: 'payment_dispute_events', descricao: 'Eventos de disputa de pagamento de teste', where: POR_EMPRESA },
   // Pagamentos / gateway.
   { id: 'payment_late_reviews', tabela: 'payment_late_reviews', descricao: 'Revisões tardias de pagamento de teste', where: POR_EMPRESA },
   { id: 'payment_attempts', tabela: 'payment_attempts', descricao: 'Tentativas de pagamento de teste', where: POR_EMPRESA },
@@ -141,6 +133,9 @@ export const PLANO: PassoPlano[] = [
   { id: 'logistics_webhook_inbox', tabela: 'logistics_webhook_inbox', descricao: 'Inbox de webhooks de logística de homologação', where: POR_EMPRESA },
   // Payment Engine (intents depois das operações/estornos).
   { id: 'payment_operations', tabela: 'payment_operations', descricao: 'Operações do Payment Engine de teste', where: POR_EMPRESA },
+  // Satélites de repasse (FK NÃO anulável → precisam ser apagados antes do pai).
+  { id: 'payment_payout_unlinks', tabela: 'payment_payout_unlinks', descricao: 'Desvínculos de repasse de teste', where: POR_EMPRESA },
+  { id: 'payment_payout_revisions', tabela: 'payment_payout_revisions', descricao: 'Revisões de repasse de teste', where: POR_EMPRESA },
   { id: 'payment_payouts', tabela: 'payment_payouts', descricao: 'Repasses de teste', where: POR_EMPRESA },
   { id: 'creator_attributions', tabela: 'creator_attributions', descricao: 'Atribuições de criadores em pedidos de teste', where: POR_EMPRESA },
   { id: 'comissoes_apuradas', tabela: 'comissoes_apuradas', descricao: 'Comissões apuradas de teste', where: POR_EMPRESA },
@@ -181,6 +176,13 @@ export const DESVINCULOS: { tabela: string; sets: string[]; where: string }[] = 
   { tabela: 'logistics_quotes', sets: ['venda_id = NULL'], where: POR_EMPRESA },
   { tabela: 'propostas', sets: ['venda_id = NULL'], where: POR_EMPRESA },
   { tabela: 'sales', sets: ['operational_venda_id = NULL'], where: POR_EMPRESA },
+  // Ordens de fabricação PRESERVADAS (produção real): solta só o vínculo com o
+  // ITEM DE VENDA de teste (FK composta empresa_id+demanda_item_id, anulável).
+  {
+    tabela: 'ordens_fabricacao',
+    sets: ['demanda_item_id = NULL'],
+    where: 'demanda_item_id IN (SELECT id FROM itens_venda WHERE empresa_id = ANY($1::int[]))',
+  },
   { tabela: 'vendas', sets: ['documento_fiscal_id = NULL', 'proposta_id = NULL', 'pdv_caixa_id = NULL', 'envio_id = NULL'], where: POR_EMPRESA },
 ];
 
@@ -260,25 +262,48 @@ export function chaveFisica(l: LinhaEstoque): string {
 export interface DivergenciaEstoque {
   chave: string;
   sku: string | null;
-  antes: number;
-  depois: number;
-  delta: number;
+  campo: 'quantidade_fisica' | 'custo_unitario' | 'valor_total' | 'ausente_antes' | 'ausente_depois';
+  antes: number | null;
+  depois: number | null;
+  delta: number | null;
 }
 
-/** Compara duas fotografias pelo QUANTIDADE FÍSICA por SKU/variante/local. */
+/**
+ * Compara duas fotografias célula a célula (SKU × variante × local) em TRÊS
+ * dimensões: quantidade física, custo unitário e valorização. Qualquer
+ * divergência em qualquer dimensão é reportada — a comparação de só a
+ * quantidade deixaria passar mudança de custo.
+ */
 export function compararEstoque(antes: LinhaEstoque[], depois: LinhaEstoque[]): DivergenciaEstoque[] {
   const mapA = new Map(antes.map((l) => [chaveFisica(l), l]));
   const mapD = new Map(depois.map((l) => [chaveFisica(l), l]));
   const chaves = new Set([...mapA.keys(), ...mapD.keys()]);
   const divergencias: DivergenciaEstoque[] = [];
+  const cmp = (
+    chave: string,
+    sku: string | null,
+    campo: DivergenciaEstoque['campo'],
+    a: number | null | undefined,
+    d: number | null | undefined
+  ) => {
+    const va = a ?? null;
+    const vd = d ?? null;
+    if (va !== vd) divergencias.push({ chave, sku, campo, antes: va, depois: vd, delta: va !== null && vd !== null ? vd - va : null });
+  };
   for (const chave of chaves) {
     const a = mapA.get(chave);
     const d = mapD.get(chave);
-    const qa = a?.quantidade_fisica ?? 0;
-    const qd = d?.quantidade_fisica ?? 0;
-    if (qa !== qd) {
-      divergencias.push({ chave, sku: (a ?? d)!.sku, antes: qa, depois: qd, delta: qd - qa });
+    if (!a) {
+      divergencias.push({ chave, sku: d?.sku ?? null, campo: 'ausente_antes', antes: null, depois: d?.quantidade_fisica ?? null, delta: null });
+      continue;
     }
+    if (!d) {
+      divergencias.push({ chave, sku: a.sku, campo: 'ausente_depois', antes: a.quantidade_fisica, depois: null, delta: null });
+      continue;
+    }
+    cmp(chave, a.sku, 'quantidade_fisica', a.quantidade_fisica, d.quantidade_fisica);
+    cmp(chave, a.sku, 'custo_unitario', a.custo_unitario, d.custo_unitario);
+    cmp(chave, a.sku, 'valor_total', a.valor_total, d.valor_total);
   }
   return divergencias;
 }
@@ -291,6 +316,62 @@ export function totalFisico(foto: LinhaEstoque[]): number {
 // ---------------------------------------------------------------------------
 // EXECUÇÃO
 // ---------------------------------------------------------------------------
+
+/** Chave do advisory lock que serializa execuções concorrentes do saneamento. */
+export const LOCK_SANEAMENTO = 'brobond:saneamento-go-live';
+
+export interface LinhaRelatorio {
+  tabela: string;
+  descricao: string;
+  removidos: number;
+}
+
+export interface RelatorioSku {
+  sku: string | null;
+  quantidadeFisica: number;
+  custoUnitario: number | null;
+  valorTotal: number | null;
+  celulas: number;
+}
+
+export interface ResultadoSaneamento {
+  modo: 'dry-run' | 'executar';
+  empresas: number[];
+  passos: ContagemPasso[];
+  totalRemovido: number;
+  estoqueAntes: LinhaEstoque[];
+  estoqueDepois: LinhaEstoque[];
+  estoquePreservado: boolean;
+  divergencias: string[];
+  /** Relatório por tabela (todas as tabelas limpas). */
+  relatorio: LinhaRelatorio[];
+  /** Relatório por SKU (fotografia final célula a célula, agregada por SKU). */
+  relatorioSku: RelatorioSku[];
+  /** Cobertura do grafo de FKs no momento da execução. */
+  cobertura: { totalFks: number; alvos: number; bloqueios: number };
+  auditoriaId: number | null;
+}
+
+/** Agrega a fotografia por SKU (soma peças, valorização e reservas). */
+export function relatorioPorSku(foto: LinhaEstoque[]): RelatorioSku[] {
+  const map = new Map<string, RelatorioSku>();
+  for (const l of foto) {
+    const sku = l.sku ?? `(produto ${l.produto_id ?? '—'})`;
+    const atual = map.get(sku) ?? {
+      sku: l.sku,
+      quantidadeFisica: 0,
+      custoUnitario: l.custo_unitario,
+      valorTotal: 0,
+      celulas: 0,
+    };
+    atual.quantidadeFisica += l.quantidade_fisica;
+    atual.valorTotal = (atual.valorTotal ?? 0) + (l.valor_total ?? 0);
+    atual.celulas += 1;
+    map.set(sku, atual);
+  }
+  return [...map.values()].sort((a, b) => (a.sku ?? '').localeCompare(b.sku ?? ''));
+}
+
 /**
  * Executa o plano de saneamento numa ÚNICA transação, no pool informado.
  *
@@ -298,8 +379,17 @@ export function totalFisico(foto: LinhaEstoque[]): number {
  *   limpo (sem bloqueio de FK) sem alterar um único byte.
  * - `modo: 'executar'` exige `confirmacao === CONFIRMACAO_EXECUCAO` e commita.
  *
- * Em ambos os modos confere que `estoques` não mudou; se mudou, faz ROLLBACK e
- * devolve a divergência — a execução nunca "passa" perdendo estoque físico.
+ * Garantias:
+ *   • DUAS EXECUÇÕES CONCORRENTES — um advisory lock transacional
+ *     (`pg_advisory_xact_lock`) serializa as execuções; a segunda espera ou
+ *     falha, nunca corre em paralelo.
+ *   • FOTOGRAFIA DENTRO DA TRANSAÇÃO — a posição inicial e final são lidas na
+ *     MESMA transação, com `FOR UPDATE` em `estoques`/`estoque_reservas`: nenhuma
+ *     escrita concorrente pode alterar o estoque entre a leitura e a limpeza.
+ *   • COBERTURA DE FK — o grafo de FKs é conferido antes de apagar; FK
+ *     bloqueante não tratada aborta antes de qualquer DELETE.
+ *   • ROLLBACK TOTAL — qualquer erro (inclusive divergência de estoque) desfaz
+ *     TUDO; nunca há execução parcial.
  */
 export async function executarSaneamento(pool: Pool, opcoes: OpcoesSaneamento): Promise<ResultadoSaneamento> {
   if (opcoes.modo === 'executar' && opcoes.confirmacao !== CONFIRMACAO_EXECUCAO) {
@@ -309,21 +399,41 @@ export async function executarSaneamento(pool: Pool, opcoes: OpcoesSaneamento): 
   if (!empresas.length) {
     throw new Error('Informe ao menos uma empresa (empresaIds). O saneamento nunca é global por omissão.');
   }
-  const estoqueAntes = await fotografiaEstoque(pool, empresas);
 
   const passos: ContagemPasso[] = [];
+  let estoqueAntes: LinhaEstoque[] = [];
   let estoqueDepois: LinhaEstoque[] = [];
   let auditoriaId: number | null = null;
   let divergencias: DivergenciaEstoque[] = [];
+  let coberturaInfo = { totalFks: 0, alvos: PLANO.length, bloqueios: 0 };
 
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    // 1) Desvincula referências NO ACTION (sem desabilitar constraint nenhuma).
+    // 0) Serializa execuções concorrentes (advisory lock transacional).
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [LOCK_SANEAMENTO]);
+
+    // 1) Cobertura de FK: aborta ANTES de apagar se houver aresta bloqueante.
+    const cobertura = await verificarCobertura(client, PLANO, DESVINCULOS);
+    coberturaInfo = { totalFks: cobertura.totalFks, alvos: cobertura.alvos.length, bloqueios: cobertura.bloqueios.length };
+
+    // 2) Fotografia inicial DENTRO da transação, com trava das linhas de estoque
+    //    e reservas — impede alteração concorrente entre leitura e limpeza.
+    await client.query(
+      `SELECT 1 FROM estoques WHERE empresa_id = ANY($1::int[]) FOR UPDATE`,
+      [empresas]
+    );
+    await client.query(
+      `SELECT 1 FROM estoque_reservas WHERE empresa_id = ANY($1::int[]) FOR UPDATE`,
+      [empresas]
+    );
+    estoqueAntes = await fotografiaEstoque(client, empresas);
+
+    // 3) Desvincula referências NO ACTION (sem desabilitar constraint nenhuma).
     for (const d of DESVINCULOS) {
       await client.query(`UPDATE ${d.tabela} SET ${d.sets.join(', ')} WHERE ${d.where}`, [empresas]);
     }
-    // 2) Apaga os dados de teste na ordem de dependência.
+    // 4) Apaga os dados de teste na ordem de dependência.
     for (const passo of PLANO) {
       const res = await client.query(`DELETE FROM ${passo.tabela} WHERE ${passo.where}`, [empresas]);
       passos.push({ id: passo.id, tabela: passo.tabela, descricao: passo.descricao, removidos: res.rowCount ?? 0 });
@@ -331,7 +441,10 @@ export async function executarSaneamento(pool: Pool, opcoes: OpcoesSaneamento): 
     estoqueDepois = await fotografiaEstoque(client, empresas);
     divergencias = compararEstoque(estoqueAntes, estoqueDepois);
     if (divergencias.length > 0) {
-      throw new Error(`SANEAMENTO ABORTADO: o estoque físico mudou em ${divergencias.length} célula(s).`);
+      throw new Error(
+        `SANEAMENTO ABORTADO: o estoque físico/custo/valorização divergiu em ${divergencias.length} célula(s): ` +
+          divergencias.slice(0, 10).map((d) => `${d.sku ?? d.chave}.${d.campo} ${d.antes}→${d.depois}`).join('; ')
+      );
     }
     if (opcoes.modo === 'executar') {
       const { rows } = await client.query(
@@ -342,7 +455,7 @@ export async function executarSaneamento(pool: Pool, opcoes: OpcoesSaneamento): 
           'saneamento-homologacao',
           'saneamento',
           `Saneamento pré-go-live: ${passos.reduce((s, p) => s + p.removidos, 0)} linha(s) de teste removida(s); estoque físico preservado.`,
-          JSON.stringify({ modo: opcoes.modo, empresas, passos }),
+          JSON.stringify({ modo: opcoes.modo, empresas, passos, cobertura: coberturaInfo }),
         ]
       );
       auditoriaId = rows[0]?.id ?? null;
@@ -356,6 +469,7 @@ export async function executarSaneamento(pool: Pool, opcoes: OpcoesSaneamento): 
   }
 
   const totalRemovido = passos.reduce((s, p) => s + p.removidos, 0);
+  const relatorio = passos.map((p) => ({ tabela: p.tabela, descricao: p.descricao, removidos: p.removidos }));
   return {
     modo: opcoes.modo,
     empresas,
@@ -364,7 +478,10 @@ export async function executarSaneamento(pool: Pool, opcoes: OpcoesSaneamento): 
     estoqueAntes,
     estoqueDepois,
     estoquePreservado: divergencias.length === 0,
-    divergencias: divergencias.map((d) => `${d.sku ?? d.chave}: ${d.antes} → ${d.depois}`),
+    divergencias: divergencias.map((d) => `${d.sku ?? d.chave}.${d.campo}: ${d.antes} → ${d.depois}`),
+    relatorio,
+    relatorioSku: relatorioPorSku(estoqueDepois),
+    cobertura: coberturaInfo,
     auditoriaId,
   };
 }

@@ -18,7 +18,20 @@ primeira operação oficial, preservando o **estoque físico real**.
 - Preços de varejo e atacado (`produtos.preco_venda`, `produtos.preco_atacado`).
 
 Nenhuma constraint, trigger ou mecanismo de auditoria é desabilitado. A limpeza
-roda numa **única transação**: ou limpa tudo, ou não limpa nada.
+roda numa **única transação**: ou limpa tudo, ou não limpa nada. A posição de
+estoque é lida **dentro da transação**, com trava (`FOR UPDATE`) em `estoques` e
+`estoque_reservas`, e a comparação antes/depois cobre **quantidade física, custo
+unitário e valorização** (não só a quantidade). Duas execuções concorrentes são
+serializadas por um advisory lock transacional (`pg_advisory_xact_lock`).
+
+## Cobertura de chaves estrangeiras (aborta antes de apagar)
+
+`server/src/ops/saneamento-cobertura.ts` lê o grafo REAL de FKs do PostgreSQL e
+classifica cada aresta que aponta para uma tabela do plano: `LIMPA` (filho é
+apagado antes), `DESVINCULA` (coluna zerada por um desvínculo guardado),
+`CASCATA`/`SET_NULL` (o banco resolve) ou **`BLOQUEIO`** (NO ACTION/RESTRICT sem
+cobertura). Se existir **qualquer** bloqueio, o saneamento aborta **antes do
+primeiro DELETE** — jamais se desabilita uma constraint para "fazer passar".
 
 ## O que é removido (dados de teste transacionais)
 
@@ -46,6 +59,24 @@ A lista exata e a ordem de exclusão vivem em `server/src/ops/saneamento.ts`
 
 Se não houver backup recuperável nem fotografia, **não executar**.
 
+### O que conta como backup "recuperável" (tamanho NÃO basta)
+
+O script **não** aceita a mera existência/tamanho do arquivo. No modo
+`--executar` ele:
+
+1. gera o dump com `pg_dump -Fc` (se não houver manifesto) e grava um manifesto
+   com `sha256`, tamanho, identificação da origem (host/porta/banco, sem
+   credenciais) e a **contagem por tabela** na origem;
+2. confere a integridade: o `sha256` do arquivo bate com o manifesto **e** o
+   catálogo interno abre (`pg_restore --list` lista as tabelas do manifesto);
+3. **restaura** o dump num banco DESCARTÁVEL vazio (`pg_restore`) e compara a
+   contagem de cada tabela entre origem e restaurado;
+4. só prossegue se todas as tabelas baterem; o banco descartável é removido no
+   fim (sucesso ou falha).
+
+Qualquer divergência (arquivo mudou, catálogo ilegível, contagem diferente)
+**aborta** a execução com "BACKUP NÃO RECUPERÁVEL".
+
 ## Execução
 
 ```bash
@@ -55,20 +86,25 @@ DATABASE_URL=... npm exec -- node --import tsx scripts/saneamento-go-live.ts --e
 # 2) Execução real (exige backup verificado + confirmação textual):
 DATABASE_URL=... node --import tsx scripts/saneamento-go-live.ts \
   --empresas=1 --executar --confirm=LIMPAR-HOMOLOGACAO \
-  --backup=/caminho/fora-do-repo/backup-AAAAMMDD.sql --ator="Diretor"
+  --backup=/caminho/fora-do-repo/backup.dump \
+  --manifesto=/caminho/fora-do-repo/backup.dump.manifesto.json \
+  --ator="Diretor"
 ```
 
 - `--empresas` é **obrigatório**: o saneamento nunca é global por omissão.
-- `--executar` exige `--confirm=LIMPAR-HOMOLOGACAO` **e** `--backup` existente
-  (> 1 KB). Sem isso, a rotina recusa.
+- `--executar` exige `--confirm=LIMPAR-HOMOLOGACAO` **e** `--backup` com
+  restauração verificada. Sem isso, a rotina recusa.
+- Se `--manifesto` não existir, o script gera o dump e o manifesto na hora.
 - O dry-run prova que o plano aplica limpo (sem bloqueio de FK) sem alterar um
-  único byte.
+  único byte, e imprime o **relatório por SKU** (células, peças, custo, valor).
 
 ## Depois de executar (Fase Quatro — critério obrigatório)
 
 O script compara a fotografia ANTES e DEPOIS célula a célula (SKU × variante ×
-local) e **aborta** se qualquer quantidade física divergir. Nenhuma perda,
-duplicação ou alteração inexplicada de estoque é aceita.
+local) em **três dimensões** (quantidade física, custo unitário e valorização) e
+**aborta** se qualquer uma divergir. Nenhuma perda, duplicação ou alteração
+inexplicada de estoque é aceita. Ao final imprime o **relatório por SKU** com a
+posição física final.
 
 Validações esperadas após a execução:
 
