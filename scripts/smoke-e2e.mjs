@@ -1756,15 +1756,19 @@ check('ticket de MFA não vale como token de acesso → 401', ticketComoBearer.s
   const cfgId = Number(cfgLista.json?.rows?.[0]?.id ?? (Array.isArray(cfgLista.json) ? cfgLista.json[0]?.id : 0) ?? 0);
   if (cfgId > 0) await req('PUT', `/commerce_configuracoes/${cfgId}`, { frete_provedor: 'nenhum', frete_valor: 0 });
   else await req('POST', '/commerce_configuracoes', { loja_nome: `Loja Smoke ${sfxCom}`, frete_provedor: 'nenhum', checkout_expira_minutos: 60 });
+  // ADR-0007: a loja pública nativa foi RETIRADA. A API pública `/api/loja/*`
+  // não existe mais; sem token a superfície é fail-closed (401). A loja de
+  // varejo é a RETAIL WooCommerce (brobond.com.br).
   const cfgPub = await req('GET', '/loja/config', undefined, null);
-  check('0058 COMMERCE: config da loja existe e é pública', cfgPub.status === 200 && cfgPub.json?.frete?.provedor === 'nenhum', `status ${cfgPub.status} provedor=${cfgPub.json?.frete?.provedor}`);
+  check('0058 COMMERCE: loja nativa retirada — /api/loja/config não é pública (401)', cfgPub.status === 401, `status ${cfgPub.status}`);
   const vitCom = await req('GET', '/loja/produtos?page=1&pageSize=48', undefined, null);
-  const naVit = (vitCom.json?.produtos || []).some((p) => p.slug === slugCom);
-  check('0058 COMMERCE: vitrine pública sem token lista o produto projetado', vitCom.status === 200 && naVit, `status ${vitCom.status} naVitrine=${naVit}`);
-  const prevCom = await req('POST', '/loja/preview', { itens: [{ produto_id: prodCom.json?.id, tamanho_id: null, quantidade: 1 }] }, null);
+  check('0058 COMMERCE: vitrine pública nativa não existe mais (401 sem token)', vitCom.status === 401, `status ${vitCom.status}`);
+  // O motor de checkout permanece como serviço INTERNO autenticado; o frete
+  // segue fail-closed sem provedor configurado.
+  const prevCom = await req('POST', '/commerce/checkout/preview', { itens: [{ produto_id: prodCom.json?.id, tamanho_id: null, quantidade: 1 }] });
   const fretePrev = prevCom.json?.frete || {};
   const freteMotivo = String(fretePrev.motivo || prevCom.json?.frete_motivo || '');
-  check('0058 COMMERCE: frete fail-closed responde "Frete não configurado"',
+  check('0058 COMMERCE: frete fail-closed responde "Frete não configurado" (checkout interno autenticado)',
     prevCom.status === 200 && fretePrev.disponivel === false && /frete não configurado/i.test(freteMotivo),
     `status ${prevCom.status} motivo="${freteMotivo}"`);
   const trendsCom = await req('GET', '/commerce/trends?dias=30');
