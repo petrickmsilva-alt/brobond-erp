@@ -4,12 +4,16 @@
 // Roda sem banco. Trava as invariantes que a ordem executiva exige e que não
 // podem regredir silenciosamente:
 //   • o plano NUNCA toca estoque físico, cadastros ou estrutura financeira;
-//   • os desvínculos só apontam para tabelas do próprio plano (nada fora dele);
+//   • todo desvínculo ou aponta para uma tabela do plano, ou é GUARDADO por um
+//     predicado que só alcança linhas ligadas a dado de teste (tabela do plano);
+//   • a classificação de cobertura marca como BLOQUEIO toda FK NO ACTION não
+//     coberta (grafo sintético);
 //   • as confirmações/escopo obrigatórios existem.
 // ============================================================================
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { CONFIRMACAO_EXECUCAO, DESVINCULOS, PLANO, TABELAS_PROTEGIDAS } from '../src/ops/saneamento';
+import { classificar, type FkInfo } from '../src/ops/saneamento-cobertura';
 
 test('OPS guard: o plano nunca toca estoque físico, cadastros ou estrutura financeira', () => {
   const alvos = new Set(PLANO.map((p) => p.tabela));
@@ -20,10 +24,14 @@ test('OPS guard: o plano nunca toca estoque físico, cadastros ou estrutura fina
   assert.equal(alvos.has('estoques'), false);
 });
 
-test('OPS guard: os desvínculos só apontam para tabelas do próprio plano', () => {
+test('OPS guard: todo desvínculo é em tabela do plano OU guardado por dado de teste', () => {
   const alvos = new Set(PLANO.map((p) => p.tabela));
   for (const d of DESVINCULOS) {
-    assert.equal(alvos.has(d.tabela), true, `desvínculo em "${d.tabela}" fora do plano`);
+    if (alvos.has(d.tabela)) continue; // a própria tabela é limpa
+    // Tabela PRESERVADA: o predicado precisa referenciar uma tabela do plano,
+    // senão o UPDATE zeraria coluna de dado real.
+    const guardado = [...alvos].some((t) => new RegExp(`\\b${t}\\b`).test(d.where));
+    assert.ok(guardado, `desvínculo em tabela preservada "${d.tabela}" sem guarda por dado de teste: ${d.where}`);
   }
 });
 
@@ -42,3 +50,52 @@ test('OPS guard: a confirmação de execução é textual e não trivial', () =>
   assert.equal(typeof CONFIRMACAO_EXECUCAO, 'string');
   assert.ok(CONFIRMACAO_EXECUCAO.length >= 8, 'a confirmação precisa ser explícita');
 });
+
+// ---------------------------------------------------------------------------
+// COBERTURA DE FK — a classificação é a rede que impede apagar um pai com filho
+// dependente. Testada com grafos SINTÉTICOS (sem banco).
+// ---------------------------------------------------------------------------
+function fk(filho: string, pai: string, deltype: string, colunas: string[] = ['id']): FkInfo {
+  return { nome: `fk_${filho}_${pai}`, filho, pai, colunas, deltype };
+}
+
+test('COBERTURA: FK NO ACTION não coberta é BLOQUEIO', () => {
+  const grafo = [fk('filho_x', 'pai_a', 'a')];
+  const c = classificar(grafo, [{ tabela: 'pai_a' }], []);
+  assert.equal(c.bloqueios.length, 1, 'uma FK NO ACTION sem cobertura deve bloquear');
+  assert.equal(c.bloqueios[0].filho, 'filho_x');
+});
+
+test('COBERTURA: filho no plano antes do pai é LIMPA; depois é BLOQUEIO', () => {
+  const ok = classificar([fk('filho_x', 'pai_a', 'a')], [{ tabela: 'filho_x' }, { tabela: 'pai_a' }], []);
+  assert.equal(ok.bloqueios.length, 0);
+  assert.equal(ok.classificacoes[0].classe, 'LIMPA');
+  const invertido = classificar([fk('filho_x', 'pai_a', 'a')], [{ tabela: 'pai_a' }, { tabela: 'filho_x' }], []);
+  assert.equal(invertido.bloqueios.length, 1, 'ordem invertida deve bloquear');
+});
+
+test('COBERTURA: desvínculo da coluna da FK resolve o bloqueio (inclusive composta)', () => {
+  const simples = classificar([fk('filho_x', 'pai_a', 'a', ['pai_a_id'])], [{ tabela: 'pai_a' }], [{ tabela: 'filho_x', sets: ['pai_a_id = NULL'] }]);
+  assert.equal(simples.bloqueios.length, 0);
+  assert.equal(simples.classificacoes[0].classe, 'DESVINCULA');
+  // FK composta: zerar QUALQUER coluna anula a referência.
+  const composta = classificar(
+    [fk('filho_x', 'pai_a', 'a', ['empresa_id', 'pai_a_id'])],
+    [{ tabela: 'pai_a' }],
+    [{ tabela: 'filho_x', sets: ['pai_a_id = NULL'] }]
+  );
+  assert.equal(composta.bloqueios.length, 0, 'FK composta desvinculada não pode bloquear');
+});
+
+test('COBERTURA: CASCADE e SET NULL não bloqueiam (o banco resolve)', () => {
+  const c = classificar([fk('filho_x', 'pai_a', 'c'), fk('filho_y', 'pai_a', 'n')], [{ tabela: 'pai_a' }], []);
+  assert.equal(c.bloqueios.length, 0);
+  assert.deepEqual(c.classificacoes.map((x) => x.classe).sort(), ['CASCATA', 'SET_NULL']);
+});
+
+test('COBERTURA: RESTRICT não coberto bloqueia', () => {
+  const c = classificar([fk('filho_x', 'pai_a', 'r')], [{ tabela: 'pai_a' }], []);
+  assert.equal(c.bloqueios.length, 1);
+  assert.match(c.bloqueios[0].motivo ?? '', /RESTRICT/);
+});
+

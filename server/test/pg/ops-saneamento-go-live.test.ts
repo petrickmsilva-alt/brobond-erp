@@ -14,7 +14,9 @@
 // ============================================================================
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { Client, Pool } from 'pg';
 import { BOOTSTRAP_FILE, aplicarCadeia } from './_boot-harness';
 import {
@@ -24,6 +26,16 @@ import {
   fotografiaEstoque,
   totalFisico,
 } from '../../src/ops/saneamento';
+import { DESVINCULOS, PLANO } from '../../src/ops/saneamento';
+import { verificarCobertura } from '../../src/ops/saneamento-cobertura';
+import {
+  gerarDump,
+  identificacaoOrigem,
+  inventarioDe,
+  validarIntegridade,
+  verificarComRestauracao,
+  type ManifestoBackup,
+} from '../../src/ops/backup-verificacao';
 
 if (!process.env.DATABASE_URL) {
   throw new Error('pg/ops-saneamento-go-live.test.ts exige DATABASE_URL e PostgreSQL real; não é permitido pular esta prova.');
@@ -92,7 +104,10 @@ async function seed(cliente: Client) {
 
   await cliente.query(`INSERT INTO commerce_pedidos (id, empresa_id, canal, pedido_externo, venda_id, estado)
                        VALUES (9020, 9001, 'BROBOND', 'PED-1', 9010, 'CONVERTIDO') ON CONFLICT DO NOTHING`);
-  await cliente.query(`INSERT INTO commerce_outbox (id, empresa_id, tipo, chave, estado) VALUES (9021, 9001, 'conversao', 'c-1', 'ERRO') ON CONFLICT DO NOTHING`);
+  // Evento de fila de HOMOLOGAÇÃO em estado INDETERMINADO (não reexecutável após
+  // a limpeza).
+  await cliente.query(`INSERT INTO commerce_outbox (id, empresa_id, tipo, chave, estado, tentativas)
+                       VALUES (9021, 9001, 'sincronizacao', 'ORDER_CREATED:ord-7', 'INDETERMINADO', 3) ON CONFLICT DO NOTHING`);
   await cliente.query(`INSERT INTO gateway_cobrancas (id, empresa_id, provider, metodo, valor, venda_id, status)
                        VALUES (9022, 9001, 'mercadopago', 'pix', 100, 9010, 'paga') ON CONFLICT DO NOTHING`);
   await cliente.query(`INSERT INTO lancamentos_financeiros (id, empresa_id, descricao, valor, tipo, conta_id)
@@ -101,6 +116,34 @@ async function seed(cliente: Client) {
   // Movimentação REAL de entrada (não deve ser removida: não tem venda/transferência/inventário).
   await cliente.query(`INSERT INTO movimentacoes (id, empresa_id, tipo, produto_id, tamanho_id, local, local_id, quantidade, motivo)
                        VALUES (9030, 9001, 'entrada', 9001, 9001, 'Loja', 9001, 845, 'saldo inicial real') ON CONFLICT DO NOTHING`);
+
+  // Ordem de fabricação REAL com vínculo a um ITEM DE VENDA de teste: precisa
+  // sobreviver, mas ter o vínculo (FK composta anulável) desfeito.
+  await cliente.query(`INSERT INTO ordens_fabricacao (id, empresa_id, produto_id, tamanho_id, quantidade, status, demanda_item_id)
+                       VALUES (9040, 9001, 9001, 9001, 1, 'planejada', 9011) ON CONFLICT DO NOTHING`);
+
+  // Repasse (payout) de teste com satélites de FK NÃO anulável — o plano tem de
+  // apagar os filhos antes do pai.
+  const h64 = (s: string) => s.padEnd(64, '0').slice(0, 64);
+  // Transação bancária referenciada pelo desvínculo (FK composta NÃO anulável).
+  await cliente.query(`INSERT INTO fin_extrato_transacoes (id, empresa_id, origem, linha_hash, valor, direcao, status)
+                       VALUES (9090, 9001, 'importado', $1, 10, 'entrada', 'pendente') ON CONFLICT DO NOTHING`, [h64('ft1')]);
+  await cliente.query(`INSERT INTO payment_payouts (id, empresa_id, provider, payout_reference, settlement_date, currency, net_amount, content_hash, status)
+                       VALUES (9050, 9001, 'mercadopago', 'po-1', CURRENT_DATE, 'BRL', 10, $1, 'IMPORTED') ON CONFLICT DO NOTHING`, [h64('po1')]);
+  await cliente.query(`INSERT INTO payment_payout_revisions (id, empresa_id, payout_id, revision, content_hash, report, reason)
+                       VALUES (9051, 9001, 9050, 1, $1, '{}'::jsonb, 'motivo de teste com tamanho minimo') ON CONFLICT DO NOTHING`, [h64('rev1')]);
+  await cliente.query(`INSERT INTO payment_payout_unlinks (id, empresa_id, payout_id, bank_transaction_id, reason, idempotency_key, request_hash)
+                       VALUES (9052, 9001, 9050, 9090, 'motivo de teste com tamanho minimo', 'iu-9052aa', $1) ON CONFLICT DO NOTHING`, [h64('unl1')]);
+
+  // Disputa de pagamento de teste com satélites (FK NÃO anulável → filhos antes).
+  await cliente.query(`INSERT INTO payment_intents (id, empresa_id, order_id, channel, currency, minor_units, amount, method, status, idempotency_key, correlation_id)
+                       VALUES (9080, 9001, 9020, 'BROBOND', 'BRL', 2, 100, 'pix', 'PAID', 'iu-9080aa', 'corr-9080') ON CONFLICT DO NOTHING`);
+  await cliente.query(`INSERT INTO payment_disputes (id, empresa_id, payment_intent_id, provider_reference, status, origin, version)
+                       VALUES (9081, 9001, 9080, 'dp-1', 'DISPUTE_OPENED', 'ENGINE', 1) ON CONFLICT DO NOTHING`);
+  await cliente.query(`INSERT INTO payment_dispute_evidence (id, empresa_id, dispute_id, kind, description, content, idempotency_key, request_hash)
+                       VALUES (9082, 9001, 9081, 'NOTE', 'descricao de teste', 'conteudo', 'iu-9082aa', $1) ON CONFLICT DO NOTHING`, [h64('ev1')]);
+  await cliente.query(`INSERT INTO payment_dispute_events (id, empresa_id, dispute_id, kind, to_status, idempotency_key, request_hash)
+                       VALUES (9083, 9001, 9081, 'REGISTER', 'DISPUTE_OPENED', 'iu-9083aa', $1) ON CONFLICT DO NOTHING`, [h64('de1')]);
 }
 
 test('OPS: dry-run executa o plano e faz ROLLBACK — nada muda', async () => {
@@ -134,7 +177,8 @@ test('OPS: execução limpa dados de teste e PRESERVA o estoque físico', async 
     assert.equal(r.estoquePreservado, true, 'o estoque físico não pode mudar');
     assert.ok(r.auditoriaId, 'a execução deve deixar trilha em auditoria');
 
-    for (const t of ['vendas', 'itens_venda', 'sales', 'sale_items', 'commerce_pedidos', 'commerce_outbox', 'gateway_cobrancas', 'lancamentos_financeiros', 'estoque_reservas']) {
+    for (const t of ['vendas', 'itens_venda', 'sales', 'sale_items', 'commerce_pedidos', 'commerce_outbox', 'gateway_cobrancas', 'lancamentos_financeiros', 'estoque_reservas',
+                     'payment_payouts', 'payment_payout_revisions', 'payment_payout_unlinks', 'payment_disputes', 'payment_dispute_evidence', 'payment_dispute_events']) {
       const n = Number((await cliente.query(`SELECT count(*)::int n FROM ${t}`)).rows[0].n);
       assert.equal(n, 0, `${t} deveria estar zerada`);
     }
@@ -142,6 +186,12 @@ test('OPS: execução limpa dados de teste e PRESERVA o estoque físico', async 
       const n = Number((await cliente.query(`SELECT count(*)::int n FROM ${t}`)).rows[0].n);
       assert.ok(n >= 1, `${t} não pode ser removida`);
     }
+
+    // Produção REAL preservada: a ordem de fabricação continua, só o vínculo com
+    // o item de venda de teste foi desfeito.
+    const ordens = (await cliente.query(`SELECT id, demanda_item_id FROM ordens_fabricacao`)).rows;
+    assert.equal(ordens.length, 1, 'a ordem de fabricação real não pode ser removida');
+    assert.equal(ordens[0].demanda_item_id, null, 'o vínculo com o item de venda de teste deve ser desfeito');
 
     const depois = await fotografiaEstoque(pool, [9001]);
     assert.equal(totalFisico(depois), 845, 'o total físico deve continuar 845');
@@ -184,5 +234,86 @@ test('OPS: confirmação e escopo são obrigatórios (nunca executa por acidente
     await pool.end().catch(() => undefined);
     await cliente.end().catch(() => undefined);
     await destruirBanco(url);
+  }
+});
+
+test('OPS: cobertura de FK no banco real é completa (nenhum bloqueio)', async () => {
+  const { url, cliente } = await criarBanco('cov');
+  const pool = new Pool({ connectionString: url });
+  try {
+    const c = await verificarCobertura(pool, PLANO, DESVINCULOS);
+    assert.equal(c.bloqueios.length, 0, `FKs bloqueantes: ${c.bloqueios.map((b) => `${b.filho}->${b.pai}`).join(', ')}`);
+    assert.ok(c.totalFks > 100, 'o grafo real deve ter centenas de FKs');
+  } finally {
+    await pool.end().catch(() => undefined);
+    await cliente.end().catch(() => undefined);
+    await destruirBanco(url);
+  }
+});
+
+test('OPS: cobertura detecta FK NO ACTION órfã (grafo sintético contra o banco real)', async () => {
+  const { url, cliente } = await criarBanco('cov2');
+  const pool = new Pool({ connectionString: url });
+  try {
+    // Tabela nova apontando para `vendas` (que está no plano) sem cobertura:
+    // a cobertura precisa ACUSAR o bloqueio antes de qualquer DELETE.
+    await cliente.query(`CREATE TABLE zz_filho_orfao (id int PRIMARY KEY, venda_id int REFERENCES vendas(id))`);
+    const c = await verificarCobertura(pool, PLANO, DESVINCULOS).catch((e: Error) => e);
+    assert.ok(c instanceof Error, 'deveria lançar por cobertura incompleta');
+    assert.match((c as Error).message, /zz_filho_orfao/);
+  } finally {
+    await pool.end().catch(() => undefined);
+    await cliente.end().catch(() => undefined);
+    await destruirBanco(url);
+  }
+});
+
+test('OPS: duas execuções concorrentes são serializadas (sem corrupção)', async () => {
+  const { url, cliente } = await criarBanco('conc');
+  const pool = new Pool({ connectionString: url, max: 4 });
+  try {
+    await seed(cliente);
+    const [a, b] = await Promise.all([
+      executarSaneamento(pool, { empresaIds: [9001], modo: 'executar', confirmacao: CONFIRMACAO_EXECUCAO, ator: 'A' }),
+      executarSaneamento(pool, { empresaIds: [9001], modo: 'executar', confirmacao: CONFIRMACAO_EXECUCAO, ator: 'B' }),
+    ]);
+    // As duas terminam; a segunda encontra as tabelas já vazias (0 removidos).
+    assert.equal(a.estoquePreservado && b.estoquePreservado, true, 'nenhuma execução pode mexer no estoque');
+    const removidos = [a.totalRemovido, b.totalRemovido].sort((x, y) => x - y);
+    assert.ok(removidos[0] === 0, 'a execução serializada depois encontra a base já limpa');
+    assert.equal(Number((await cliente.query(`SELECT count(*)::int n FROM estoques`)).rows[0].n), 1, 'a linha de estoque permanece');
+    assert.equal(Number((await cliente.query(`SELECT quantidade FROM estoques WHERE id = 9001`)).rows[0].quantidade), 845);
+  } finally {
+    await pool.end().catch(() => undefined);
+    await cliente.end().catch(() => undefined);
+    await destruirBanco(url);
+  }
+});
+
+test('OPS/BACKUP: dump restaura em banco vazio e o inventário bate (prova recuperável)', async () => {
+  const { url, cliente } = await criarBanco('bk');
+  const pool = new Pool({ connectionString: url });
+  const dir = mkdtempSync(join(tmpdir(), 'brobond-bk-'));
+  const arquivo = join(dir, 'dump.dump');
+  try {
+    await seed(cliente);
+    const tabelas = await inventarioDe(pool);
+    const { bytes, sha256 } = gerarDump(url, arquivo);
+    const manifesto: ManifestoBackup = { origem: identificacaoOrigem(url), geradoEm: new Date().toISOString(), ferramenta: 'pg_dump -Fc', arquivo, bytes, sha256, tabelas };
+    // Integridade: sha256 + catálogo (tamanho NÃO é prova).
+    assert.deepEqual(validarIntegridade(arquivo, manifesto), [], 'o dump recém-gerado deve ser íntegro');
+    // Recuperabilidade: restaura em banco descartável e compara contagem por tabela.
+    const v = await verificarComRestauracao({ arquivo, manifesto, baseUrl: url });
+    assert.equal(v.ok, true, `restauração deve bater: ${v.problemas.join('; ')} | divergências: ${v.divergencias.length}`);
+    assert.ok(v.tabelasConferidas > 100, 'deve conferir todas as tabelas');
+    assert.equal(v.divergencias.length, 0);
+    // Prova NEGATIVA: um byte alterado invalida a integridade (não é só tamanho).
+    const manifestoErrado = { ...manifesto, sha256: '0'.repeat(64) };
+    assert.ok(validarIntegridade(arquivo, manifestoErrado).some((p) => /sha256/.test(p)), 'sha256 divergente deve ser detectado');
+  } finally {
+    await pool.end().catch(() => undefined);
+    await cliente.end().catch(() => undefined);
+    await destruirBanco(url);
+    rmSync(dir, { recursive: true, force: true });
   }
 });
