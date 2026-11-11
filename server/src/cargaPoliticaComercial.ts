@@ -394,14 +394,62 @@ export function descricaoBase(descricao: string, cor: string): string {
   return d;
 }
 
-/** Remove o sufixo de tamanho da descrição (ex.: "CAMISETA … - P" → "CAMISETA …"). */
+/**
+ * Remove a COR da descrição onde ela apareça como palavra isolada. Nas abas de
+ * controle de estoque a cor vem no MEIO da descrição ("…GOLA O BRANCA BORDADO BB"),
+ * não no fim — sem isso cada cor viraria um produto-pai distinto em vez de um
+ * eixo de variação do mesmo produto.
+ */
+export function descricaoSemCor(descricao: string, cor: string): string {
+  const d = String(descricao ?? '').trim();
+  const c = String(cor ?? '').trim();
+  if (!c) return d;
+  const esc = c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const sem = d
+    .replace(new RegExp(`(^|[^0-9A-Za-zÀ-ÿ])${esc}(?=[^0-9A-Za-zÀ-ÿ]|$)`, 'gi'), '$1 ')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/\s*[-–—]\s*$/, '')
+    .trim();
+  return sem || d;
+}
+
+/**
+ * Remove o sufixo de tamanho da descrição (ex.: "CAMISETA … - P" → "CAMISETA …").
+ *
+ * O tamanho só é removido como TOKEN isolado no fim (precedido de separador ou
+ * fronteira de palavra). Sem isso, "MARFIM" com tamanho "M" viraria "MARFI" — e
+ * a família do produto se PARTIA em duas (bug real da planilha).
+ */
 export function descricaoSemTamanho(descricao: string, tamanho: string): string {
   const d = String(descricao ?? '').trim();
   const t = String(tamanho ?? '').trim();
   if (!t) return d;
-  const re = new RegExp(`[\\s:—-]*${t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`, 'i');
-  const sem = d.replace(re, '').trim();
+  const esc = t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const sem = d
+    .replace(new RegExp(`[\\s:—–-]+${esc}\\s*$`, 'i'), '')
+    .replace(new RegExp(`\\b${esc}\\s*$`, 'i'), '')
+    .replace(/\b(tamanho|tam)\b\s*[:\-–—]*\s*$/i, '')
+    .replace(/[\s:—–-]+$/, '')
+    .trim();
   return sem || d;
+}
+
+/**
+ * Quebra o código da aba "Roupas" no par produto × tamanho. Os códigos têm a
+ * forma `PRODUTO[-COR]-TAMANHO` (ex.: `93882-40`, `94004-AREIA-42`,
+ * `94000-branco-gg`): o produto é o prefixo numérico e o ÚLTIMO segmento é o
+ * tamanho (P/M/G/GG/XG/EG ou número). Sem separar, dois tamanhos do MESMO produto
+ * (93845-40 × 93845-42) nasceriam como dois produtos independentes.
+ */
+export function parseCodigoRoupas(codigo: string): { produto: string; cor: string; tamanho: string } {
+  const partes = String(codigo ?? '').trim().split('-').map((s) => s.trim()).filter(Boolean);
+  if (!partes.length) return { produto: '', cor: '', tamanho: '' };
+  const ehTamanho = (s: string) => /^(XXG|XG|GG|EG|P|M|G|\d{2})$/.test(normalizarTamanho(s));
+  const produto = partes[0];
+  let tamanho = '';
+  if (partes.length > 1 && ehTamanho(partes[partes.length - 1])) tamanho = normalizarTamanho(partes[partes.length - 1]);
+  const meio = tamanho ? partes.slice(1, -1) : partes.slice(1);
+  return { produto, cor: meio.join(' ').trim(), tamanho };
 }
 
 /** Slug determinístico de SKU: sem acento, maiúsculo, só A–Z, 0–9 e hífen. */
@@ -468,8 +516,9 @@ export function normalizarItem(linha: LinhaBruta, barcodePorIndustria: Map<strin
   } else if (fonte === 'roupas') {
     // Cabeçalho: Item, Categoria, Descrição, Código Industria, Tipo, Fornecedor,
     // Qtd. Estoque, Valor unitário Custo, Preço à Vista, Preço de Venda Cartão…
-    // Sem coleção/cor/tamanho/status: produto SIMPLES (SKU próprio). A
-    // "Qtd. Estoque" NÃO é importada — quantidade física é lançada depois.
+    // O código é `PRODUTO[-COR]-TAMANHO` (93882-40 × 93882-42 = MESMO produto, dois
+    // tamanhos): o produto-pai é o prefixo numérico e o tamanho vira eixo de
+    // variação (como na fonte canônica). A "Qtd. Estoque" NÃO é importada.
     categoria_master = pegar(c, 'Categoria').trim();
     colecao = '';
     cor = '';
@@ -483,15 +532,22 @@ export function normalizarItem(linha: LinhaBruta, barcodePorIndustria: Map<strin
     status = pegar(c, 'STATUS').trim().toUpperCase();
   }
 
-  const base = descricaoBase(descricaoSemTamanho(descricao, normalizarTamanho(tamanhoRaw)), cor);
-  // Família = identidade do produto-pai. Na fonte canônica agrupa as variações
-  // (cor × tamanho). Nas abas extras o SKU já é a identidade: "roupas" não traz
-  // eixo de variação (cor/tamanho), então cada LINHA é um produto SIMPLES — sem
-  // isso, duas linhas de mesma descrição (ou o mesmo SKU repetido) virariam
-  // pai+variação sem eixo. A duplicidade de SKU é reportada em `planejar`.
-  const familia = fonte === 'roupas'
-    ? [fonte, String(linha.linha)].join('|')
-    : [fonte, categoria_master, colecao, marca, base].map((x) => normalizarRotulo(x)).join('|');
+  const roupas = fonte === 'roupas' ? parseCodigoRoupas(codigo_industria) : null;
+  const tamanho = fonte === 'roupas' ? (roupas!.tamanho || normalizarTamanho(tamanhoRaw)) : normalizarTamanho(tamanhoRaw);
+  // Descrição-base do produto-pai: sem o tamanho e sem a cor. Na fonte canônica a
+  // cor vem no fim da descrição; nas de controle, no meio ("GOLA O BRANCA BORDADO").
+  const semCor = descricaoBase(descricaoSemTamanho(descricao, tamanho), cor);
+  const base = fonte === 'controle_estoque' ? descricaoSemCor(semCor, cor) : semCor;
+  // Família = identidade do produto-pai; cor e tamanho são EIXOS de variação.
+  //  • principal: categoria + coleção + marca + descrição-base;
+  //  • controle_estoque: categoria + descrição-base (cor = SUBCATEGORIA, tamanho = coluna);
+  //  • roupas: o prefixo numérico do código (93882 agrupa 93882-40 × 93882-42).
+  // Sem isso, cada cor/tamanho viraria um produto-pai distinto.
+  const familia = fonte === 'principal'
+    ? [fonte, categoria_master, colecao, marca, base].map((x) => normalizarRotulo(x)).join('|')
+    : fonte === 'roupas'
+      ? [fonte, roupas!.produto].map((x) => normalizarRotulo(x)).join('|')
+      : [fonte, categoria_master, base].map((x) => normalizarRotulo(x)).join('|');
   const pesoKg = numero(pegar(c, 'Peso KG'));
   return {
     linha: linha.linha,
@@ -502,7 +558,7 @@ export function normalizarItem(linha: LinhaBruta, barcodePorIndustria: Map<strin
     colecao,
     cor,
     descricao,
-    tamanho: normalizarTamanho(tamanhoRaw),
+    tamanho,
     codigo_industria,
     tipo,
     status,
@@ -514,12 +570,15 @@ export function normalizarItem(linha: LinhaBruta, barcodePorIndustria: Map<strin
     marca,
     codigo_barras: barcodePorIndustria.get(codigo_industria) || null,
     familia,
-    nome_pai: base || descricao || codigo_industria,
+    nome_pai: fonte === 'roupas' ? base : (base || descricao || codigo_industria),
     // SKU do produto-pai: na fonte canônica deriva de categoria+coleção (cada
-    // coleção é um produto). Nas abas extras a categoria/coleção se repetem para
-    // produtos distintos, então o pai usa a DESCRIÇÃO-base (que carrega a cor e
-    // a estampa) — sem isso, famílias diferentes colidiriam no mesmo SKU.
-    pai_sku: fonte === 'principal' ? skuPaiDe(categoria_master, colecao) : slugSku(base || descricao || codigo_industria).slice(0, 40),
+    // coleção é um produto). Em "roupas" o pai é o prefixo numérico do código
+    // (93882). Em "controle_estoque" a categoria se repete para produtos
+    // distintos, então o pai usa a DESCRIÇÃO-base — sem isso famílias diferentes
+    // colidiriam no mesmo SKU (o desempate em `planejar` cobre o resto).
+    pai_sku: fonte === 'principal' ? skuPaiDe(categoria_master, colecao)
+      : fonte === 'roupas' ? slugSku(roupas!.produto).slice(0, 40)
+      : slugSku(base || descricao || codigo_industria).slice(0, 40),
     precos: extrairPrecosOficiais(c, fonte),
   };
 }

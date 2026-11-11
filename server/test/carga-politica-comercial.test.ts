@@ -21,7 +21,7 @@ const express = (await import('express')).default;
 const request = (await import('supertest')).default;
 const { RESOURCES } = await import('../src/resources');
 const { getStore } = await import('../src/services');
-const { previewCarga, confirmarCarga, classificarColuna, normalizarItem, descricaoBase, skuPaiDe, sanitizarXlsx, extrairPrecosOficiais, hashChave } = await import(
+const { previewCarga, confirmarCarga, classificarColuna, normalizarItem, descricaoBase, descricaoSemTamanho, descricaoSemCor, parseCodigoRoupas, skuPaiDe, sanitizarXlsx, extrairPrecosOficiais, hashChave } = await import(
   '../src/cargaPoliticaComercial'
 );
 
@@ -425,15 +425,15 @@ test('hashChave distingue chaves vizinhas (não pega os dígitos de maior ordem)
 });
 
 test('a colisão de SKU de pai é desempatada e REPORTADA (famílias não se fundem)', async () => {
-  // Duas famílias de controle de estoque cujo SKU de pai trunca no mesmo valor:
-  // "…BORDADO B" × "…BORDADO BB" (o "- BB" cai no corte de 40 chars).
-  const longa = 'CAMISETA BROBOND GOLA O BRANCA BORDADO';
+  // Duas famílias de controle cujo SKU de pai colide: as descrições só diferem
+  // DEPOIS do corte de 40 chars do slug ("…PREMIUM ALFA" × "…PREMIUM BETA").
+  const comum = 'CAMISETA BROBOND GOLA O BORDADO ESPECIAL LINHA PREMIUM';
   const conteudo = await xlsxBase64(LINHAS_BASE, [], {
     controle: [
-      { Item: '1', 'COLEÇÃO': 'CLEAN', CATEGORIA: 'BORDADO B', SUBCATEGORIA: 'BRANCA', 'Descrição do produto/serviço2': `${longa} B - P`, Tamanho: 'P', 'Código Industria': '5001P', Tipo: 'PÇ' },
-      { Item: '2', 'COLEÇÃO': 'CLEAN', CATEGORIA: 'BORDADO B', SUBCATEGORIA: 'BRANCA', 'Descrição do produto/serviço2': `${longa} B - M`, Tamanho: 'M', 'Código Industria': '5002M', Tipo: 'PÇ' },
-      { Item: '3', 'COLEÇÃO': 'CLEAN', CATEGORIA: 'BORDADO BB', SUBCATEGORIA: 'BRANCA', 'Descrição do produto/serviço2': `${longa} BB - P`, Tamanho: 'P', 'Código Industria': '5003P', Tipo: 'PÇ' },
-      { Item: '4', 'COLEÇÃO': 'CLEAN', CATEGORIA: 'BORDADO BB', SUBCATEGORIA: 'BRANCA', 'Descrição do produto/serviço2': `${longa} BB - M`, Tamanho: 'M', 'Código Industria': '5004M', Tipo: 'PÇ' },
+      { Item: '1', 'COLEÇÃO': 'CLEAN', CATEGORIA: 'BORDADO B', SUBCATEGORIA: 'BRANCA', 'Descrição do produto/serviço2': `${comum} ALFA - P`, Tamanho: 'P', 'Código Industria': '5001P', Tipo: 'PÇ' },
+      { Item: '2', 'COLEÇÃO': 'CLEAN', CATEGORIA: 'BORDADO B', SUBCATEGORIA: 'BRANCA', 'Descrição do produto/serviço2': `${comum} ALFA - M`, Tamanho: 'M', 'Código Industria': '5002M', Tipo: 'PÇ' },
+      { Item: '3', 'COLEÇÃO': 'CLEAN', CATEGORIA: 'BORDADO BB', SUBCATEGORIA: 'BRANCA', 'Descrição do produto/serviço2': `${comum} BETA - P`, Tamanho: 'P', 'Código Industria': '5003P', Tipo: 'PÇ' },
+      { Item: '4', 'COLEÇÃO': 'CLEAN', CATEGORIA: 'BORDADO BB', SUBCATEGORIA: 'BRANCA', 'Descrição do produto/serviço2': `${comum} BETA - M`, Tamanho: 'M', 'Código Industria': '5004M', Tipo: 'PÇ' },
     ],
   });
   const resp = await request(app()).post('/api/carga/politica-comercial/preview').send({ conteudo, nome: 'x.xlsx' });
@@ -442,4 +442,43 @@ test('a colisão de SKU de pai é desempatada e REPORTADA (famílias não se fun
   assert.equal(new Set(skus).size, skus.length, 'cada família tem SKU de pai próprio');
   assert.ok(skus.every((s: string) => s.length <= 40), 'nenhum SKU passa de 40 chars');
   assert.equal(resp.body.validacoes.skus_pai_colididos.length, 1, 'a colisão é reportada, não escondida');
+});
+
+test('descricaoSemTamanho não come letra de palavra (MARFIM ≠ MARFI)', () => {
+  // Bug real: remover o tamanho "M" de "…BORDADA MARFIM" partia a família.
+  assert.equal(descricaoSemTamanho('SHORT LINHO BORDADA MARFIM', 'M'), 'SHORT LINHO BORDADA MARFIM');
+  assert.equal(descricaoSemTamanho('CAMISETA BORDADO B PRETA - P', 'P'), 'CAMISETA BORDADO B PRETA');
+  assert.equal(descricaoSemTamanho('CALÇA JEANS TAMANHO: 42', '42'), 'CALÇA JEANS');
+  assert.equal(descricaoSemTamanho('SHORT NAVALHADO tamanho:42', '42'), 'SHORT NAVALHADO');
+});
+
+test('código da aba Roupas é PRODUTO-TAMANHO (variação, não produto novo)', () => {
+  assert.deepEqual(parseCodigoRoupas('93882-40'), { produto: '93882', cor: '', tamanho: '40' });
+  assert.deepEqual(parseCodigoRoupas('94004-AREIA-42'), { produto: '94004', cor: 'AREIA', tamanho: '42' });
+  assert.deepEqual(parseCodigoRoupas('94000-branco-gg'), { produto: '94000', cor: 'branco', tamanho: 'GG' });
+  assert.deepEqual(parseCodigoRoupas('117176'), { produto: '117176', cor: '', tamanho: '' });
+});
+
+test('roupas: dois tamanhos do MESMO código são pai + variações (não dois produtos)', async () => {
+  const conteudo = await xlsxBase64(LINHAS_BASE, [], {
+    roupas: [
+      { Item: '1', Categoria: 'SHORT', 'Descrição do produto/serviço2': '93845 SHORT NAVALHADO:40', 'Código Industria': '93845-40', Tipo: 'UN', 'Valor unitário Custo': 89.9 },
+      { Item: '2', Categoria: 'SHORT', 'Descrição do produto/serviço2': '93845 SHORT NAVALHADO:42', 'Código Industria': '93845-42', Tipo: 'UN', 'Valor unitário Custo': 89.9 },
+    ],
+  });
+  const resp = await request(app()).post('/api/carga/politica-comercial/preview').send({ conteudo, nome: 'x.xlsx' });
+  assert.equal(resp.status, 200, JSON.stringify(resp.body));
+  const roupas = resp.body.familias.filter((f: any) => f.colecao === '' && f.categoria_master === 'SHORT');
+  assert.equal(roupas.length, 1, 'um único produto-pai para os dois tamanhos');
+  assert.equal(roupas[0].itens, 2);
+  assert.equal(roupas[0].sku, '93845');
+  assert.deepEqual([...roupas[0].tamanhos].sort(), ['40', '42']);
+});
+
+test('descricaoSemCor remove a cor no MEIO da descrição (controle de estoque)', () => {
+  assert.equal(descricaoSemCor('CAMISETA BROBOND GOLA O BRANCA BORDADO BB', 'BRANCA'), 'CAMISETA BROBOND GOLA O BORDADO BB');
+  assert.equal(descricaoSemCor('CAMISETA BROBOND GOLA O PRETA BORDADO BB', 'PRETA'), 'CAMISETA BROBOND GOLA O BORDADO BB');
+  // Não come letra de palavra.
+  assert.equal(descricaoSemCor('SHORT MARFIM', 'MARFIM'), 'SHORT');
+  assert.equal(descricaoSemCor('BLUSA VERDE', 'VERDE'), 'BLUSA');
 });

@@ -78,12 +78,25 @@ afeta o sandbox.
   "BASE CONTROLE DE ESTOQUE" (SKUs `1001P`…) e "Política Comercial Roupas (2)" (fornecedor).
   As abas de **movimentação** (entrada, saída, venda diária, situação de estoque) NUNCA viram
   produto/estoque — só entram na reconciliação (relatório).
-- SKU do produto-pai trunca em 40 chars; como as abas extras derivam o pai da descrição,
-  famílias distintas podem colidir. `desempatarSkusPai` aplica discriminador estável e
-  reporta em `validacoes.skus_pai_colididos`. O `hashChave` usa os dígitos MENOS
-  significativos do base36 (os de maior ordem não variam entre chaves vizinhas).
+- **Produto-pai × variação** — a família agrupa o produto; cor e tamanho são EIXOS:
+  - `principal`: categoria + coleção + marca + descrição-base;
+  - `controle_estoque`: categoria + descrição-base (cor = `SUBCATEGORIA`, que fica no
+    MEIO da descrição — `descricaoSemCor` remove como palavra isolada);
+  - `roupas`: o prefixo numérico do código (`93882-40` × `93882-42` = MESMO produto, dois
+    tamanhos; `parseCodigoRoupas` separa `PRODUTO[-COR]-TAMANHO`).
+  Sem isso cada cor/tamanho virava um produto-pai independente (bug real: 415 produtos
+  em vez de 75).
+- `descricaoSemTamanho` remove o tamanho só como TOKEN no fim; remover "M" de "MARFIM"
+  partia a família (`MARFI`).
+- SKU do produto-pai trunca em 40 chars; famílias distintas ainda podem colidir (descrições
+  que só diferem depois do corte). `desempatarSkusPai` aplica discriminador estável e reporta
+  em `validacoes.skus_pai_colididos`. O `hashChave` usa os dígitos MENOS significativos do
+  base36 (os de maior ordem não variam entre chaves vizinhas).
 - Quantidade física NUNCA é importada (nem "Qtd. Estoque" das abas de controle): o saldo
   é lançado depois, por operação própria.
+- Código de indústria repetido (`93845-42`, linhas 7 e 90 de "Roupas") é LINHA DUPLICADA
+  (mesmo produto/tamanho/preço): a variação é idempotente por SKU e a segunda linha é
+  ignorada — preservado e reportado em `validacoes.codigos_industria_repetidos`.
 
 ## Fases 6–8 (Commerce, CRM, BI/Control Tower)
 
