@@ -575,13 +575,23 @@ async function adapterWhatsApp(row: Row, dados: DadosPedidoNotificacao): Promise
 // Orchestrator (consumido pelo outbox)
 // ----------------------------------------------------------------------------
 
-export type DesfechoNotificacao = { status: 'processado' | 'retry'; erro?: string };
+/**
+ * `bloqueado` = o canal não tem provedor CONFIGURADO (SMTP/Meta ausente). NÃO é
+ * falha técnica: repetir 10 vezes não cria um provedor. A fila precisa marcar
+ * isso como pendência de configuração (estado `BLOQUEADO`), não como ERRO — senão
+ * o painel mostra "falha de sincronização" onde só falta configurar a chave.
+ */
+export type DesfechoNotificacao = { status: 'processado' | 'retry' | 'bloqueado'; erro?: string };
 
 /**
  * Processa um evento do outbox. Cada linha é independente: um canal com
  * provedor fora do ar não impede o outro. Linhas ENVIADO/IGNORADO jamais são
  * reenviadas (idempotência); PENDENTE/ERRO/PROCESSANDO tentam de novo.
  * Os dados do pedido são lidos UMA vez por evento e compartilhados pelos canais.
+ *
+ * Desfecho: `processado` (todos os canais resolvidos), `bloqueado` (as únicas
+ * falhas são de CONFIGURAÇÃO — terminal até alguém configurar o provedor) ou
+ * `retry` (há falha TRANSITÓRIA real do provedor, que merece backoff).
  */
 export async function processarEventoNotificacao(payload: Record<string, unknown>): Promise<DesfechoNotificacao> {
   const s = getStore();
@@ -597,6 +607,9 @@ export async function processarEventoNotificacao(payload: Record<string, unknown
   let dados: DadosPedidoNotificacao | null = null;
   const dadosDoPedido = async () => (dados ??= await carregarDadosPedido(empresaId, pedidoId, payload));
   let falhas = 0;
+  // Só uma falha TRANSITÓRIA (provedor configurado, mas fora do ar) torna o
+  // evento re-enviável. Falha por FALTA DE CONFIGURAÇÃO é terminal (bloqueado).
+  let falhasTransitorias = 0;
   for (const row of lista.rows) {
     const estado = String(row.estado);
     // An atomic claim keeps concurrent outbox workers from sending the same
@@ -623,7 +636,10 @@ export async function processarEventoNotificacao(payload: Record<string, unknown
       const resultado = canal === 'EMAIL' ? await adapterEmail(row, await dadosDoPedido())
         : canal === 'WHATSAPP' ? await adapterWhatsApp(row, await dadosDoPedido())
           : { estado: 'IGNORADO' as const, erro: 'Canal desconhecido.' };
-      if (resultado.estado === 'PENDENTE') falhas += 1;
+      if (resultado.estado === 'PENDENTE') {
+        falhas += 1;
+        if (String(resultado.providerStatus || '') !== 'NAO_CONFIGURADO') falhasTransitorias += 1;
+      }
       await s.tryUpdateIf(R_NOTIFICACOES(), Number(row.id), {
         empresa_id: empresaId, estado: 'PROCESSANDO', tentativas,
       }, {
@@ -636,6 +652,7 @@ export async function processarEventoNotificacao(payload: Record<string, unknown
       });
     } catch (e) {
       falhas += 1;
+      falhasTransitorias += 1; // exceção = provedor CONFIGURADO, mas falhou de verdade
       const mensagem = e instanceof Error ? e.message.slice(0, 300) : 'Falha no provedor de notificação.';
       // A notification failure remains re-drivable. Outbox retry/backoff
       // governs automatic attempts; after exhaustion its administrative
@@ -648,7 +665,11 @@ export async function processarEventoNotificacao(payload: Record<string, unknown
       });
     }
   }
-  return falhas ? { status: 'retry', erro: `${falhas} canal(is) aguardando retry.` } : { status: 'processado' };
+  if (!falhas) return { status: 'processado' };
+  // Falha SÓ de configuração: bloqueado (terminal). Há falha transitória: retry.
+  return falhasTransitorias
+    ? { status: 'retry', erro: `${falhasTransitorias} canal(is) aguardando retry.` }
+    : { status: 'bloqueado', erro: `${falhas} canal(is) sem provedor configurado — defina as variáveis do canal para liberar o envio.` };
 }
 
 /**

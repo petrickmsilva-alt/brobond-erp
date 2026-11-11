@@ -36,7 +36,8 @@
     "payment:go-live": "node --import tsx scripts/payment-engine-go-live-audit.ts",
     "test:payments": "node --import tsx --test server/test/payment-engine.test.ts server/test/commerce-exposure.test.ts",
     "recovery:check": "node --import tsx scripts/recovery-check.mjs",
-    "commerce:enterprise-audit": "node --import tsx scripts/commerce-enterprise-audit.ts"
+    "commerce:enterprise-audit": "node --import tsx scripts/commerce-enterprise-audit.ts",
+    "commerce:reconciliar-fila": "node --import tsx scripts/reconciliar-fila-commerce.ts"
   },
   "prisma": {
     "schema": "prisma/schema.prisma"

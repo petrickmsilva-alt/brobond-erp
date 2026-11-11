@@ -100,6 +100,20 @@ export const TONE_OUTBOX: Record<string, Tone> = {
   PROCESSANDO: 'blue',
   PROCESSADO: 'green',
   ERRO: 'red',
+  INDETERMINADO: 'amber',
+  // Configuração pendente (não é falha técnica) e aviso encerrado (histórico).
+  BLOQUEADO: 'amber',
+  OBSOLETO: 'slate',
+};
+
+export const ROTULO_OUTBOX: Record<string, string> = {
+  PENDENTE: 'Pendente',
+  PROCESSANDO: 'Processando',
+  PROCESSADO: 'Processado',
+  ERRO: 'Erro',
+  INDETERMINADO: 'Indeterminado',
+  BLOQUEADO: 'Bloqueado (configuração)',
+  OBSOLETO: 'Obsoleto',
 };
 
 export const TONE_RASTREIO: Record<string, Tone> = {

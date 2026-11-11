@@ -11,7 +11,7 @@ import { Activity, RefreshCw } from 'lucide-react';
 import { apiFetch, ApiError } from '../../lib/api';
 import { Alert, EmptyState, PageHeader, Spinner, Badge } from '../../components/ui';
 import { DataTable, FilterBar, type DataTableColumn } from '../../components/ui-kit-negocios';
-import { EstadoBadge, ROTULO_PUBLICACAO, TONE_OUTBOX, TONE_PUBLICACAO, dataHora, rotuloCanal } from './shared';
+import { EstadoBadge, ROTULO_OUTBOX, ROTULO_PUBLICACAO, TONE_OUTBOX, TONE_PUBLICACAO, dataHora, rotuloCanal } from './shared';
 import WooLojasPanel from './WooLojasPanel';
 
 type Eventos = {
@@ -22,6 +22,9 @@ type Eventos = {
     estado: string;
     tentativas: number;
     ultimo_erro: string | null;
+    motivo_encerramento: string | null;
+    encerrado_em: string | null;
+    encerrado_por: string | null;
     proxima_tentativa_em: string | null;
     atualizado_em: string | null;
   }[];
@@ -48,6 +51,7 @@ export default function CommerceFilaPage() {
   const [dados, setDados] = useState<Eventos | null>(null);
   const [carregando, setCarregando] = useState(true);
   const [reenfileirando, setReenfileirando] = useState<number | null>(null);
+  const [reconciliando, setReconciliando] = useState(false);
   const [erro, setErro] = useState('');
   const [tipo, setTipo] = useState('');
 
@@ -70,6 +74,7 @@ export default function CommerceFilaPage() {
   const outbox = (dados?.outbox ?? []).filter((o) => !tipo || o.tipo === tipo);
   const pendentes = (dados?.outbox ?? []).filter((o) => ['PENDENTE', 'PROCESSANDO'].includes(o.estado)).length;
   const erros = (dados?.outbox ?? []).filter((o) => o.estado === 'ERRO').length;
+  const bloqueados = (dados?.outbox ?? []).filter((o) => o.estado === 'BLOQUEADO').length;
 
   async function reprocessar(id: number) {
     setReenfileirando(id);
@@ -80,6 +85,18 @@ export default function CommerceFilaPage() {
       setErro(e instanceof ApiError ? e.message : 'Não foi possível reenfileirar o evento.');
     } finally {
       setReenfileirando(null);
+    }
+  }
+
+  async function reconciliar() {
+    setReconciliando(true);
+    try {
+      await apiFetch('/commerce/outbox/reconciliar', { method: 'POST' });
+      await carregar();
+    } catch (e) {
+      setErro(e instanceof ApiError ? e.message : 'Não foi possível reconciliar a fila.');
+    } finally {
+      setReconciliando(false);
     }
   }
 
@@ -97,7 +114,7 @@ export default function CommerceFilaPage() {
     {
       key: 'estado',
       header: 'Estado',
-      render: (o) => <Badge tone={TONE_OUTBOX[o.estado] ?? 'slate'}>{o.estado}</Badge>,
+      render: (o) => <EstadoBadge estado={o.estado} mapa={TONE_OUTBOX} rotulos={ROTULO_OUTBOX} />,
     },
     { key: 'tentativas', header: 'Tentativas', align: 'right', render: (o) => <span className="tabular-nums">{o.tentativas}</span> },
     {
@@ -108,22 +125,37 @@ export default function CommerceFilaPage() {
     {
       key: 'erro',
       header: 'Última mensagem',
-      render: (o) =>
-        o.ultimo_erro ? (
-          <span className="line-clamp-2 max-w-lg text-xs text-danger" title={o.ultimo_erro}>
-            {o.ultimo_erro}
+      render: (o) => {
+        const mensagem = o.motivo_encerramento ?? o.ultimo_erro;
+        if (!mensagem) return <span className="text-muted">—</span>;
+        const classe = o.estado === 'ERRO' ? 'text-danger' : 'text-muted';
+        return (
+          <span className={`line-clamp-2 max-w-lg text-xs ${classe}`} title={mensagem}>
+            {mensagem}
           </span>
-        ) : (
-          <span className="text-muted">—</span>
-        ),
+        );
+      },
     },
     { key: 'atualizado', header: 'Atualizado', render: (o) => <span className="text-sm text-muted">{dataHora(o.atualizado_em)}</span> },
-    { key: 'acao', header: 'Recuperação', render: (o) => o.estado === 'ERRO' ? (
-      <button type="button" className="btn-secondary" disabled={reenfileirando !== null}
-        onClick={() => void reprocessar(o.id)} aria-label={`Reenfileirar evento ${o.id}`}>
-        {reenfileirando === o.id ? 'Reenfileirando…' : 'Reenfileirar'}
-      </button>
-    ) : <span className="text-muted">—</span> },
+    {
+      key: 'acao',
+      header: 'Recuperação',
+      render: (o) => {
+        // Só falha técnica ou indeterminado se reenfileira. BLOQUEADO pede
+        // CONFIGURAÇÃO (não retry); OBSOLETO é terminal (não se reenvia).
+        if (o.estado === 'ERRO' || o.estado === 'INDETERMINADO') {
+          return (
+            <button type="button" className="btn-secondary" disabled={reenfileirando !== null}
+              onClick={() => void reprocessar(o.id)} aria-label={`Reenfileirar evento ${o.id}`}>
+              {reenfileirando === o.id ? 'Reenfileirando…' : 'Reenfileirar'}
+            </button>
+          );
+        }
+        if (o.estado === 'BLOQUEADO') return <span className="text-xs text-muted">Configure o canal</span>;
+        if (o.estado === 'OBSOLETO') return <span className="text-xs text-muted">Encerrado</span>;
+        return <span className="text-muted">—</span>;
+      },
+    },
   ];
 
   return (
@@ -142,11 +174,14 @@ export default function CommerceFilaPage() {
             <button type="button" className="btn-ghost" onClick={() => void carregar()}>
               <RefreshCw className="h-4 w-4" aria-hidden="true" /> Atualizar
             </button>
+            <button type="button" className="btn-secondary" onClick={() => void reconciliar()} disabled={reconciliando}>
+              <Activity className="h-4 w-4" aria-hidden="true" /> {reconciliando ? 'Reconciliando…' : 'Reconciliar fila'}
+            </button>
           </>
         }
       />
 
-      <div className="grid gap-3 sm:grid-cols-3">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <div className="rounded-xl border border-line bg-surface p-4">
           <div className="text-xs uppercase tracking-wide text-muted">Pendentes/Processando</div>
           <div className={`mt-1 text-2xl font-semibold tabular-nums ${pendentes ? 'text-warning' : ''}`}>{pendentes}</div>
@@ -154,6 +189,10 @@ export default function CommerceFilaPage() {
         <div className="rounded-xl border border-line bg-surface p-4">
           <div className="text-xs uppercase tracking-wide text-muted">Com erro esgotado</div>
           <div className={`mt-1 text-2xl font-semibold tabular-nums ${erros ? 'text-danger' : ''}`}>{erros}</div>
+        </div>
+        <div className="rounded-xl border border-line bg-surface p-4">
+          <div className="text-xs uppercase tracking-wide text-muted">Bloqueados (configuração)</div>
+          <div className={`mt-1 text-2xl font-semibold tabular-nums ${bloqueados ? 'text-warning' : ''}`}>{bloqueados}</div>
         </div>
         <div className="rounded-xl border border-line bg-surface p-4">
           <div className="text-xs uppercase tracking-wide text-muted">Processados (retidos na lista)</div>
@@ -251,7 +290,7 @@ export default function CommerceFilaPage() {
 
       <p className="flex items-center gap-2 text-xs text-muted">
         <Activity className="h-4 w-4" aria-hidden="true" />
-        Retry é do servidor (backoff exponencial até 10 tentativas). Reenfileirar registra a recuperação; o agendador continua responsável pelo processamento.
+        Retry é do servidor (backoff exponencial até 10 tentativas). Reenfileirar registra a recuperação; o agendador continua responsável pelo processamento. Bloqueados aguardam configuração do canal; obsoletos foram encerrados com trilha e não são reenviados.
       </p>
     </div>
   );

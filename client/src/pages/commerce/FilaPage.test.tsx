@@ -144,6 +144,40 @@ describe('Commerce — Fila de sincronização (/commerce/fila)', () => {
     renderPagina();
     expect(await screen.findByText('Outbox fora do ar.')).toBeInTheDocument();
   });
+
+  it('distingue BLOQUEADO (configuração) de ERRO e de OBSOLETO — sem oferecer retry onde ele não resolve', async () => {
+    const eventos = {
+      outbox: [
+        { id: 1, tipo: 'sincronizacao', chave: 'pedido:2:ORDER_CREATED', estado: 'BLOQUEADO', tentativas: 1, ultimo_erro: 'Canal sem provedor configurado.', motivo_encerramento: null, encerrado_em: null, encerrado_por: null, proxima_tentativa_em: null, atualizado_em: '2026-11-11T12:00:00Z' },
+        { id: 2, tipo: 'sincronizacao', chave: 'pedido:2:ORDER_EXPIRED', estado: 'OBSOLETO', tentativas: 1, ultimo_erro: null, motivo_encerramento: 'Pedido EXPIRADO: o aviso foi ultrapassado pelo estado terminal.', encerrado_em: '2026-11-11T12:05:00Z', encerrado_por: 'Reconciliação', proxima_tentativa_em: null, atualizado_em: '2026-11-11T12:05:00Z' },
+        { id: 3, tipo: 'sincronizacao', chave: 'pedido:2:PAYMENT_FAILED', estado: 'ERRO', tentativas: 10, ultimo_erro: 'Tentativas esgotadas (10): provedor respondeu 502.', motivo_encerramento: null, encerrado_em: null, encerrado_por: null, proxima_tentativa_em: null, atualizado_em: '2026-11-11T12:06:00Z' },
+      ],
+      publicacoes: [],
+      webhooks: [],
+    };
+    fetchMock.mockImplementation(rota({ eventos }));
+    renderPagina();
+    expect(await screen.findByText('Bloqueado (configuração)')).toBeInTheDocument();
+    expect(screen.getByText('Obsoleto')).toBeInTheDocument();
+    expect(screen.getByText('Erro')).toBeInTheDocument();
+    // Bloqueado pede configuração; obsoleto está encerrado; só o ERRO oferece reenfileirar.
+    expect(screen.getByText('Configure o canal')).toBeInTheDocument();
+    expect(screen.getByText('Encerrado')).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: /Reenfileirar evento/ })).toHaveLength(1);
+    // O motivo do encerramento aparece no lugar de um "erro" inexistente.
+    expect(screen.getByText(/ultrapassado pelo estado terminal/)).toBeInTheDocument();
+  });
+
+  it('ação "Reconciliar fila" chama o endpoint oficial', async () => {
+    fetchMock.mockImplementation(rota());
+    renderPagina();
+    await screen.findByText('pedido.convertido');
+    const botao = screen.getByRole('button', { name: /Reconciliar fila/ });
+    botao.click();
+    await vi.waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith('/commerce/outbox/reconciliar', expect.objectContaining({ method: 'POST' }))
+    );
+  });
 });
 
 describe('Commerce — painel WooCommerce multi-loja (dentro de /commerce/fila)', () => {
