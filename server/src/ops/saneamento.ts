@@ -55,6 +55,7 @@ export interface ContagemPasso {
 }
 
 export interface LinhaEstoque {
+  estoque_id: number | null;
   empresa_id: number | null;
   produto_id: number | null;
   sku: string | null;
@@ -214,7 +215,8 @@ export async function fotografiaEstoque(pool: Pool | PoolClient, empresaIds: num
         WHERE status = 'ativa'
         GROUP BY empresa_id, produto_id, tamanho_id, local_id
      )
-     SELECT e.empresa_id,
+     SELECT e.id AS estoque_id,
+            e.empresa_id,
             e.produto_id,
             p.sku,
             e.tamanho_id,
@@ -239,6 +241,7 @@ export async function fotografiaEstoque(pool: Pool | PoolClient, empresaIds: num
     empresaIds.length ? [empresaIds] : []
   );
   return rows.map((r: any) => ({
+    estoque_id: r.estoque_id === null ? null : Number(r.estoque_id),
     empresa_id: r.empresa_id === null ? null : Number(r.empresa_id),
     produto_id: r.produto_id === null ? null : Number(r.produto_id),
     sku: r.sku ?? null,
@@ -254,8 +257,13 @@ export async function fotografiaEstoque(pool: Pool | PoolClient, empresaIds: num
   }));
 }
 
-/** Chave estável da posição física (sem reservado/disponível — só o físico). */
+/**
+ * Chave estável da posição física. Prefere o ID da linha de `estoques` (garante
+ * comparação 1:1 mesmo se houver duas linhas com o mesmo SKU/variante/local);
+ * cai para a chave composta quando a origem não expõe o ID.
+ */
 export function chaveFisica(l: LinhaEstoque): string {
+  if (l.estoque_id !== null && l.estoque_id !== undefined) return `id:${l.estoque_id}`;
   return [l.empresa_id ?? '', l.produto_id ?? '', l.tamanho_id ?? '', l.local_id ?? '', l.local ?? ''].join('|');
 }
 

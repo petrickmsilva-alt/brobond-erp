@@ -12,7 +12,7 @@
 // ============================================================================
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { CONFIRMACAO_EXECUCAO, DESVINCULOS, PLANO, TABELAS_PROTEGIDAS } from '../src/ops/saneamento';
+import { CONFIRMACAO_EXECUCAO, DESVINCULOS, PLANO, TABELAS_PROTEGIDAS, compararEstoque, type LinhaEstoque } from '../src/ops/saneamento';
 import { classificar, type FkInfo } from '../src/ops/saneamento-cobertura';
 
 test('OPS guard: o plano nunca toca estoque físico, cadastros ou estrutura financeira', () => {
@@ -98,4 +98,46 @@ test('COBERTURA: RESTRICT não coberto bloqueia', () => {
   assert.equal(c.bloqueios.length, 1);
   assert.match(c.bloqueios[0].motivo ?? '', /RESTRICT/);
 });
+
+// ---------------------------------------------------------------------------
+// COMPARAÇÃO DE ESTOQUE — a chave é o ID da linha de `estoques`, então duas
+// linhas com o mesmo SKU/variante/local NÃO podem se anular na comparação.
+// ---------------------------------------------------------------------------
+function linha(estoque_id: number, quantidade: number, custo: number, local = 'Loja'): LinhaEstoque {
+  return {
+    estoque_id,
+    empresa_id: 1,
+    produto_id: 1,
+    sku: 'SKU-1',
+    tamanho_id: 1,
+    tamanho: 'M',
+    local,
+    local_id: 1,
+    quantidade_fisica: quantidade,
+    reservado: 0,
+    disponivel: quantidade,
+    custo_unitario: custo,
+    valor_total: quantidade * custo,
+  };
+}
+
+test('ESTOQUE: linhas duplicadas (mesmo SKU/variante/local) são comparadas por ID', () => {
+  const antes = [linha(1, 100, 10), linha(2, 5, 10)];
+  // Se a comparação agregasse por SKU, mover 5 peças da linha 2 para a 1 passaria
+  // batido. Por ID, é detectado.
+  const movido = [linha(1, 105, 10), linha(2, 0, 10)];
+  assert.equal(compararEstoque(antes, antes).length, 0);
+  assert.ok(compararEstoque(antes, movido).length > 0, 'mover peças entre linhas homônimas deve divergir');
+  // Perda real de uma linha inteira é detectada.
+  assert.ok(compararEstoque(antes, [linha(1, 100, 10)]).some((d) => d.campo === 'ausente_depois'));
+});
+
+test('ESTOQUE: mudança de custo e valorização é detectada (não só a quantidade)', () => {
+  const antes = [linha(1, 100, 10)];
+  const custoMudou = [linha(1, 100, 12)];
+  const d = compararEstoque(antes, custoMudou);
+  assert.ok(d.some((x) => x.campo === 'custo_unitario'), 'mudança de custo deve divergir');
+  assert.ok(d.some((x) => x.campo === 'valor_total'), 'mudança de valorização deve divergir');
+});
+
 
