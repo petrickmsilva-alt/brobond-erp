@@ -81,3 +81,25 @@ O script `test-pg-gate.mjs` recusa banco reutilizado (`relações públicas != 0
     valor ausente é `null` + limitação declarada, nunca 0. `GET /api/control-tower/painel`.
   - `alert_events.ops.delete = false` (histórico). Notificação externa segue interna até
     homologação — a regra guarda o canal, mas o envio externo não é presumido.
+
+## Fila do commerce — estados honestos (migration 0116)
+
+- `commerce_outbox.estado` tem SETE valores, e a distinção é operacional, não cosmética:
+  `ERRO` = falha técnica real (reprocessar após corrigir a causa); **`BLOQUEADO`** = o canal
+  de comunicação não está configurado (SMTP/WhatsApp ausente — retry NÃO cria provedor);
+  **`OBSOLETO`** = aviso sem efeito, encerrado com trilha. **Nunca** gravar falta de
+  configuração como `ERRO`: isso mente no painel ("falha de sincronização" onde só falta uma chave).
+- O desfecho `bloqueado` só sai quando **todas** as notificações do evento são
+  `provider_status='NAO_CONFIGURADO'`; falha transitória real (provedor respondeu/recusou)
+  domina e mantém `retry` com backoff. Regra pura `notificacaoSuperseded` em `regras.ts` é o
+  oráculo independente da supersessão (pedido EXPIRADO/CANCELADO/ESTORNADO → aviso sem efeito).
+- **Evento financeiro/estoque pendente NUNCA é encerrado pela reconciliação.** OBSOLETO é só
+  para aviso de comunicação sem efeito; preserva histórico e é auditado (`motivo_encerramento`,
+  `encerrado_em`, `encerrado_por`).
+- Reconciliação operacional: `npm run commerce:reconciliar-fila` (`scripts/reconciliar-fila-commerce.ts`)
+  é **dry-run por padrão**; escrita exige `--executar --confirm=RECONCILIAR-FILA` e PostgreSQL real.
+  Endpoint `POST /api/commerce/outbox/reconciliar` (mesmo RBAC de `reprocessarOutbox`).
+- **Migração que reexecuta SÓ PODE AMPLIAR um CHECK.** A 0099 reinstalava o CHECK antigo de 5
+  estados e quebrava quando já havia linha `BLOQUEADO`/`OBSOLETO` (o gate PROD-DB-01 pega isso).
+  Mesmo defeito que a 0094 documentou para `commerce_outbox_tipo_ck`. Ao adicionar estado novo,
+  atualize o CHECK em `schema.sql`, na migração que o criou **e** em toda migração que o reinstala.
