@@ -2431,7 +2431,8 @@ CREATE INDEX IF NOT EXISTS produto_precos_condicao_produto_idx
   ON produto_precos_condicao (empresa_id, produto_id);
 
 CREATE TABLE IF NOT EXISTS politica_preco_minimo (
-  empresa_id INTEGER PRIMARY KEY REFERENCES empresas(id) ON DELETE CASCADE,
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL UNIQUE REFERENCES empresas(id) ON DELETE CASCADE,
   margem_minima_pct NUMERIC(6,2),
   desconto_max_pct NUMERIC(6,2),
   bloqueio_ativo BOOLEAN NOT NULL DEFAULT FALSE,

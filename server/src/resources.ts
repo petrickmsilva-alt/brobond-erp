@@ -4941,6 +4941,7 @@ export const RESOURCES: Record<string, Resource> = {
     notice:
       'Parâmetro de BLOQUEIO. Nasce desligado: enquanto "bloqueio_ativo" for falso, o motor apenas INFORMA a margem. Ligar só com limite validado pelo Diretor — a missão proíbe inventar margem mínima.',
     fields: [
+      { name: 'empresa_id', label: 'Empresa', type: 'ref', ref: 'empresas' },
       { name: 'margem_minima_pct', label: 'Margem mínima (%)', type: 'percent', min: -100, max: 100, hint: 'Vazio = sem limite. Só bloqueia com o bloqueio ligado.' },
       { name: 'desconto_max_pct', label: 'Desconto máximo (%)', type: 'percent', min: 0, max: 100, hint: 'Vazio = sem limite.' },
       { name: 'bloqueio_ativo', label: 'Bloqueio ativo', type: 'boolean', default: false, hint: 'Falso (padrão) = apenas informa; não bloqueia venda.' },
@@ -4948,6 +4949,7 @@ export const RESOURCES: Record<string, Resource> = {
       { name: 'atualizado_por', label: 'Atualizado por', type: 'ref', ref: 'usuarios', list: false, readonly: true },
       ...auditFields,
     ],
+    orderBy: { field: 'empresa_id', dir: 'asc' },
   },
 
   precificacao_memoria: {
