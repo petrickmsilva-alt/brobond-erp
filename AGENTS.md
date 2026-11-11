@@ -63,6 +63,28 @@ npm run test:pg
 
 O script `test-pg-gate.mjs` recusa banco reutilizado (`relações públicas != 0`).
 
+O teste de backup (`ops-saneamento-go-live`) chama `pg_dump`/`pg_restore` do PATH. O
+cliente precisa ser da MESMA versão maior do servidor (16): um `pg_dump` 17 grava o GUC
+`transaction_timeout` no dump e o `pg_restore` contra o 16.14 falha com
+`unrecognized configuration parameter "transaction_timeout"`. Instale o cliente 16
+(`postgresql-client-16` do PGDG) e aponte `pg_dump`/`pg_restore`/`psql` para ele via
+`update-alternatives`. No CI o cliente vem da própria imagem `postgres:16.14`, então só
+afeta o sandbox.
+
+## Carga da política comercial (migration 0117)
+
+- O importador (`server/src/cargaPoliticaComercial.ts`) lê TODAS as abas de **cadastro**,
+  não só a principal: `FONTES_CADASTRO` cobre "Política Comercial Completa" (canônica),
+  "BASE CONTROLE DE ESTOQUE" (SKUs `1001P`…) e "Política Comercial Roupas (2)" (fornecedor).
+  As abas de **movimentação** (entrada, saída, venda diária, situação de estoque) NUNCA viram
+  produto/estoque — só entram na reconciliação (relatório).
+- SKU do produto-pai trunca em 40 chars; como as abas extras derivam o pai da descrição,
+  famílias distintas podem colidir. `desempatarSkusPai` aplica discriminador estável e
+  reporta em `validacoes.skus_pai_colididos`. O `hashChave` usa os dígitos MENOS
+  significativos do base36 (os de maior ordem não variam entre chaves vizinhas).
+- Quantidade física NUNCA é importada (nem "Qtd. Estoque" das abas de controle): o saldo
+  é lançado depois, por operação própria.
+
 ## Fases 6–8 (Commerce, CRM, BI/Control Tower)
 
 - **Fase 6 — Omnichannel** (`commerce_reconciliacao`): reconciliação multicanal é LEITURA;
