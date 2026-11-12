@@ -121,3 +121,19 @@ test('registrarHttp agrega por rota e limita o rótulo ao padrão declarado', ()
   assert.ok(s.http['GET /api/:resource'], 'rota agregada pelo padrão, não pela URL');
   assert.equal(s.http['GET /api/:resource'].total >= 1, true);
 });
+
+test('registrarFrontend mascara CPF, e-mail, UUID e query no servidor (defesa em profundidade)', () => {
+  metrics.registrarFrontend({
+    tela: '/clientes/123.456.789-00?email=diretor@brobond.com.br&token=segredo999',
+    ms: 120,
+  });
+  metrics.registrarFrontend({
+    tela: '/usuarios/diretor@brobond.com.br',
+    ms: 85,
+  });
+  const chaves = Object.keys(metrics.snapshot().frontend).join(' | ');
+  for (const proibido of ['123.456', '789-00', 'diretor', 'brobond.com.br', 'segredo999']) {
+    assert.ok(!chaves.includes(proibido), `RUM do servidor vazou "${proibido}": ${chaves}`);
+  }
+  assert.ok(metrics.snapshot().frontend['/clientes/:id'], `esperava /clientes/:id em: ${chaves}`);
+});

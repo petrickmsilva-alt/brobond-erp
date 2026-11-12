@@ -315,8 +315,26 @@ export interface AmostraFrontend {
   api_deduplicadas?: number;
 }
 
+/**
+ * Normaliza o rótulo de tela TAMBÉM no servidor (defesa em profundidade):
+ * descarta query/fragmento, e-mails, UUIDs, CPF/CNPJ e segmentos numéricos
+ * antes de agregar em memória, mesmo se um cliente enviar URL não normalizada.
+ */
+function normalizarTelaRum(bruto: unknown): string {
+  const semQuery = String(bruto || '').split(/[?#]/)[0];
+  return (
+    semQuery
+      .replace(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+/g, ':redigido')
+      .replace(/\b\d{2,3}\.?\d{3}\.?\d{3}[/-]?\d{2,4}(?:-?\d{2})?\b/g, ':id')
+      .replace(/\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, '/:uuid')
+      .replace(/\/\d+/g, '/:id')
+      .slice(0, 80)
+      .replace(/[^\w/:#.-]/g, '') || '(desconhecida)'
+  );
+}
+
 export function registrarFrontend(a: AmostraFrontend): void {
-  const tela = String(a.tela || '').slice(0, 80).replace(/[^\w/:#.-]/g, '') || '(desconhecida)';
+  const tela = normalizarTelaRum(a.tela);
   if (!Number.isFinite(a.ms) || a.ms < 0 || a.ms > 600_000) return;
   let amostra = frontendPorTela.get(tela);
   if (!amostra) {
