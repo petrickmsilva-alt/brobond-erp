@@ -98,6 +98,68 @@ DATABASE_URL=... node --import tsx scripts/saneamento-go-live.ts \
 - O dry-run prova que o plano aplica limpo (sem bloqueio de FK) sem alterar um
   único byte, e imprime o **relatório por SKU** (células, peças, custo, valor).
 
+### Runbook no banco publicado (Render)
+
+O banco publicado é alcançável pela `DATABASE_URL` configurada no painel da
+Render (a variável **não** está no repositório — é `sync:false`). Como a
+credencial não é versionada, o operador executa o runbook **no próprio ambiente
+que já tem a variável** (o host Render, um shell autenticado, ou o sandbox com a
+variável exportada). Nunca cole a URL em commit, issue ou log.
+
+```bash
+# 0) A variável já precisa estar no ambiente (Render panel → Environment).
+#    NUNCA imprima a URL. O script já mostra só host:porta/banco.
+test -n "$DATABASE_URL" && echo "DATABASE_URL presente (não exibida)"
+
+# 1) Conferência (ROLLBACK — não altera nada). Imprime a fotografia do estoque.
+node --import tsx scripts/saneamento-go-live.ts --empresas=1
+
+# 2) Backup recuperável FORA do repositório (gera dump + manifesto):
+mkdir -p /var/backups/brobond
+pg_dump -Fc --no-owner --no-privileges \
+  -f /var/backups/brobond/brobond_$(date +%Y%m%d_%H%M%S).dump "$DATABASE_URL"
+
+# 3) Execução real (revalida o backup por restauração antes de apagar):
+node --import tsx scripts/saneamento-go-live.ts \
+  --empresas=1 --executar --confirm=LIMPAR-HOMOLOGACAO \
+  --backup=/var/backups/brobond/<arquivo>.dump \
+  --ator="Diretor"
+```
+
+- Se a etapa 3 abortar com **BACKUP NÃO RECUPERÁVEL**, nada é apagado — repetir
+  a etapa 2 e conferir o cliente `pg_dump`/`pg_restore` da MESMA versão maior do
+  servidor (16).
+- Enquanto a `DATABASE_URL` de produção não estiver no ambiente, a etapa 1 já
+  falha com `Saneamento exige DATABASE_URL PostgreSQL.` — nenhum passo destrutivo
+  roda sem credencial.
+
+### Carga cadastral no banco publicado (após o saneamento)
+
+A carga passa pela API autenticada (RBAC de gestor em `produtos.create`):
+
+```bash
+# preview (não grava): { conteudo: <base64 do .xlsx>, nome: "..." }
+curl -sS -X POST "$APP/api/carga/politica-comercial/preview" \
+  -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+  -d "{\"conteudo\":\"$B64\",\"nome\":\"TABELA DE PREÇO BASE PARA ERP.xlsx\"}"
+
+# confirmar (grava produtos-pai + variações + preços por condição; idempotente)
+curl -sS -X POST "$APP/api/carga/politica-comercial/confirmar" \
+  -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+  -d "{\"conteudo\":\"$B64\",\"nome\":\"TABELA DE PREÇO BASE PARA ERP.xlsx\"}"
+```
+
+Conferência obrigatória no banco (não basta HTTP 200):
+
+```sql
+SELECT count(*) FILTER (WHERE produto_pai_id IS NULL) AS pais,
+       count(*) FILTER (WHERE produto_pai_id IS NOT NULL) AS variacoes,
+       count(*) FILTER (WHERE codigo_industria <> '') AS codigos_industria
+  FROM produtos;
+SELECT count(*) FROM produto_precos_condicao;     -- preços oficiais vigentes
+SELECT coalesce(sum(quantidade),0) FROM estoques; -- deve permanecer ZERO
+```
+
 ## Depois de executar (Fase Quatro — critério obrigatório)
 
 O script compara a fotografia ANTES e DEPOIS célula a célula (SKU × variante ×
@@ -165,3 +227,32 @@ próprio host Render — e autorizar o passo operacional.
 O saneamento no banco publicado **só** ocorre após autorização expressa e
 backup comprovado. Não confundir o código entregue com os dados efetivamente
 saneados.
+
+### Ensaio integral em PostgreSQL 16.14 real (2026-11-12)
+
+O runbook foi executado **de ponta a ponta** contra um PostgreSQL 16.14 real
+(`postgres:16.14`, porta 5433), com migrações aplicadas (120 registradas em
+`schema_migrations`, incluindo `0120_pim_atributos_produto.sql`) e dados de
+teste sintéticos, para provar que cada passo funciona contra o motor real — não
+só em teste unitário.
+
+| Campo | Valor |
+|---|---|
+| Motor | PostgreSQL `16.14` (Debian 16.14-1.pgdg13+1) — mesma versão do gate |
+| Migrações aplicadas | 120 (`schema_migrations`); última `0120_pim_atributos_produto.sql` |
+| Backup gerado | `pg_dump -Fc` (arquivo **fora** do repositório), manifesto com `sha256` + tamanho + host/porta/banco (sem credenciais) |
+| Backup verificado | **RECUPERÁVEL** — `230` tabelas restauradas em banco descartável com contagem idêntica; banco descartável removido |
+| Saneamento | `--executar --confirm=LIMPAR-HOMOLOGACAO` — **7 linhas** de teste removidas (vendas, itens, reservas, movimentações, lançamentos, pedidos commerce, outbox) |
+| Estoque físico | **PRESERVADO** — 42 peças antes e depois; 1 célula; custo e valorização idênticos |
+| Divergências de estoque | **0** |
+| Tabelas protegidas | intactas (`estoques`, `produtos`, `tamanhos`, `cores`, `colecoes`, `empresas`, `usuarios`, `plano_contas`, `contas_financeiras`, `centros_custo`, `categorias`) |
+| Auditoria | registro `saneamento-homologacao` gravado (`auditoria.id`) |
+| Carga cadastral | `POST /api/carga/politica-comercial/confirmar` → **75 produtos-pai**, **384 variações**, **3558 preços** por condição, **1** código de indústria repetido ignorado |
+| Idempotência | 2ª carga → `0` produto, `0` preço gravado, `415` ignorados (mesmo valor = no-op) |
+| Estoque importado | **nenhum** — nenhuma quantidade física veio da planilha |
+| Gate PostgreSQL | `npm run test:pg` — `491` verificações, `0` falhas |
+
+Conclusão do ensaio: **o código e o runbook estão prontos e provados contra
+PostgreSQL real**. A execução no banco PUBLICADO continua bloqueada **apenas**
+pela ausência da `DATABASE_URL` de produção neste ambiente (ver §"Bloqueio
+operacional identificado").
