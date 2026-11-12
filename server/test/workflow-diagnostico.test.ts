@@ -10,7 +10,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { BRANCH_AUTORIZADA, verificarWorkflow, WORKFLOW_PADRAO } from '../../scripts/verificar-workflow-diagnostico.mjs';
+import { BRANCH_AUTORIZADA, ENVIRONMENT_AUTORIZADO, ENVIRONMENT_PROIBIDO, verificarWorkflow, WORKFLOW_PADRAO } from '../../scripts/verificar-workflow-diagnostico.mjs';
 
 const RAIZ = fileURLToPath(new URL('../../', import.meta.url));
 const textoDoWorkflow = readFileSync(`${RAIZ}${WORKFLOW_PADRAO}`, 'utf8');
@@ -85,4 +85,60 @@ test('reprova ausência de concorrência e de timeout', () => {
 
 test('reprova YAML inválido', () => {
   assert.equal(detalhe('jobs: [\n', 'yaml-valido')?.ok, false);
+});
+
+// ── Isolamento do Environment (migration-diagnostic, nunca production) ──────
+
+test('o workflow usa o environment isolado migration-diagnostic', () => {
+  assert.match(textoDoWorkflow, /^\s*environment:\s*migration-diagnostic\s*$/m);
+  assert.equal(detalhe(textoDoWorkflow, 'environment-isolado')?.ok, true);
+  assert.equal(ENVIRONMENT_AUTORIZADO, 'migration-diagnostic');
+});
+
+test('o workflow não usa production como environment', () => {
+  assert.equal(ENVIRONMENT_PROIBIDO, 'production');
+  assert.doesNotMatch(textoDoWorkflow, /^\s*environment:\s*production\s*$/m);
+  assert.equal(detalhe(textoDoWorkflow, 'environment-proibido-ausente')?.ok, true);
+});
+
+test('o verificador aprova o YAML com o environment correto', () => {
+  const r = verificarWorkflow(textoDoWorkflow);
+  assert.equal(r.ok, true);
+  assert.equal(r.checagens.find((c) => c.nome === 'environment-isolado')?.ok, true);
+});
+
+test('o verificador reprova um workflow adulterado para usar production', () => {
+  const adulterado = textoDoWorkflow.replace('environment: migration-diagnostic', 'environment: production');
+  assert.notEqual(adulterado, textoDoWorkflow);
+  assert.equal(aprovado(adulterado), false);
+  assert.equal(detalhe(adulterado, 'environment-isolado')?.ok, false);
+  assert.equal(detalhe(adulterado, 'environment-proibido-ausente')?.ok, false);
+});
+
+test('o verificador reprova environment diferente do isolado', () => {
+  const adulterado = textoDoWorkflow.replace('environment: migration-diagnostic', 'environment: homologacao');
+  assert.equal(detalhe(adulterado, 'environment-isolado')?.ok, false);
+  assert.equal(detalhe(adulterado, 'environment-proibido-ausente')?.ok, true);
+});
+
+test('todas as proteções anteriores continuam aprovadas no workflow entregue', () => {
+  const nomes = verificarWorkflow(textoDoWorkflow).checagens.map((c) => c.nome);
+  for (const protecao of [
+    'yaml-valido',
+    'gatilho-exclusivo-workflow_dispatch',
+    'permissao-minima',
+    'environment-isolado',
+    'branch-restrita',
+    'concorrencia',
+    'timeout',
+    'node-compativel',
+    'instalacao-reproduzivel',
+    'segredo-somente-no-step-de-conexao',
+    'sem-comandos-destrutivos',
+    'sem-exposicao-de-segredo',
+    'acoes-fixadas',
+    'environment-proibido-ausente',
+  ]) {
+    assert.ok(nomes.includes(protecao), `proteção ausente: ${protecao}`);
+  }
 });

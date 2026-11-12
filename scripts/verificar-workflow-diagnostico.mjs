@@ -7,7 +7,7 @@
 //
 //   • YAML válido e gatilho único `workflow_dispatch`;
 //   • permissão mínima (`contents: read`, nada de escrita);
-//   • environment `production` e branch de execução restrita;
+//   • environment ISOLADO `migration-diagnostic` (nunca `production`) e branch de execução restrita;
 //   • concorrência e timeout declarados;
 //   • Node compatível com o projeto e instalação reproduzível (`npm ci`);
 //   • `secrets.DATABASE_URL` injetado SOMENTE no step que abre a conexão;
@@ -29,6 +29,10 @@ const RAIZ = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const BRANCH_AUTORIZADA = 'ops/workflow-migracao-producao-diagnostico';
 export const WORKFLOW_PADRAO = '.github/workflows/brobond-migracao-producao.yml';
 export const NODE_COMPATIVEL = '24';
+/** Environment ISOLADO da homologação. O de `production` NÃO pode ser usado aqui. */
+export const ENVIRONMENT_AUTORIZADO = 'migration-diagnostic';
+/** Environment que o workflow JAMAIS deve usar (isola a homologação do de produção). */
+export const ENVIRONMENT_PROIBIDO = 'production';
 
 // Assinaturas REAIS de operação que altera o banco — o veredito é sobre o que o
 // step EXECUTA, não sobre palavras soltas na prosa. `SELECT`, `pg_catalog`,
@@ -71,7 +75,7 @@ function stepsDoWorkflow(doc) {
  * Verifica o conteúdo do workflow. Função pura: recebe o texto, devolve as
  * checagens. Não acessa disco, rede nem banco.
  */
-export function verificarWorkflow(texto, { branch = BRANCH_AUTORIZADA, nodeCompativel = NODE_COMPATIVEL } = {}) {
+export function verificarWorkflow(texto, { branch = BRANCH_AUTORIZADA, nodeCompativel = NODE_COMPATIVEL, environment = ENVIRONMENT_AUTORIZADO } = {}) {
   const checagens = [];
   const registrar = (nome, ok, detalhe) => checagens.push({ nome, ok: !!ok, detalhe });
 
@@ -109,10 +113,20 @@ export function verificarWorkflow(texto, { branch = BRANCH_AUTORIZADA, nodeCompa
   registrar('job-unico', umJob, umJob ? `job: ${ids[0]}` : `jobs: ${JSON.stringify(ids)}`);
   const job = umJob ? jobs[ids[0]] : null;
 
+  const ambientes = Object.values(jobs)
+    .map((j) => j?.environment)
+    .filter((e) => e !== undefined && e !== null);
+  const ambienteDoJob = ambientes.length === 1 ? ambientes[0] : ambientes.length === 0 ? null : ambientes;
+  const usaProibido = ambientes.some((e) => e === ENVIRONMENT_PROIBIDO);
+  const ambienteOk = job?.environment === environment && !usaProibido;
   registrar(
-    'environment-producao',
-    job?.environment === 'production',
-    `environment: ${JSON.stringify(job?.environment ?? null)}`
+    'environment-isolado',
+    ambienteOk,
+    usaProibido
+      ? `environment ${ENVIRONMENT_PROIBIDO} é PROIBIDO — use o isolado "${environment}"`
+      : job?.environment === environment
+        ? `environment isolado: "${environment}"`
+        : `environment: ${JSON.stringify(ambienteDoJob ?? null)} (esperado "${environment}")`
   );
 
   const passos = stepsDoWorkflow(doc);
@@ -187,6 +201,18 @@ export function verificarWorkflow(texto, { branch = BRANCH_AUTORIZADA, nodeCompa
   const actions = passos.map(({ step }) => step?.uses).filter((u) => typeof u === 'string');
   const frouxas = actions.filter((u) => /@(?:main|master)$/i.test(u) || !/@/.test(u));
   registrar('acoes-fixadas', frouxas.length === 0, frouxas.length === 0 ? `actions fixadas: ${actions.join(', ')}` : `actions sem versão: ${frouxas.join(', ')}`);
+
+  // Trava dura: `environment: production` não pode reaparecer em NENHUM lugar do
+  // arquivo (nem em comentário ou mensagem), para não reacoplar a homologação ao
+  // Environment de produção.
+  const apontaProducao = new RegExp(`environment:\\s*${ENVIRONMENT_PROIBIDO}\\b`).test(texto);
+  registrar(
+    'environment-proibido-ausente',
+    !apontaProducao,
+    apontaProducao
+      ? `o workflow aponta para "environment: ${ENVIRONMENT_PROIBIDO}" — a homologação deve usar "${ENVIRONMENT_AUTORIZADO}"`
+      : `nenhuma referência a "environment: ${ENVIRONMENT_PROIBIDO}"`
+  );
 
   return { ok: checagens.every((c) => c.ok), checagens };
 }

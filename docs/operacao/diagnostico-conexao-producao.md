@@ -25,22 +25,37 @@ Nenhuma escrita: sem `INSERT`, `UPDATE`, `DELETE`, `TRUNCATE`, `DROP`; sem migra
 carga cadastral, alteração de estoque, publicação ou sincronização externa. Isso é verificado
 automaticamente pelo step "Verificação estática do workflow" (e pelo teste `workflow-diagnostico`).
 
-## Pré-requisitos (GitHub → Settings → Environments → `production`)
+## Dois sentidos de "production" — não confundir
+
+- **Environment do GitHub** = `migration-diagnostic`. É onde ficam o secret e as variables deste
+  workflow. Isola a homologação; o Environment `production` do GitHub **não** é usado e permanece
+  intocado.
+- **Branch do Neon** = `production`. É a branch do banco no Neon, informada pela variable
+  `NEON_BRANCH_NAME` e confirmada pelas GUCs `neon.*`.
+
+São coisas distintas: uma é o cofre de credenciais no GitHub, a outra é o banco de destino no Neon.
+
+## Pré-requisitos (GitHub → Settings → Environments → `migration-diagnostic`)
 
 | Tipo | Nome | Valor |
 |---|---|---|
 | Secret | `DATABASE_URL` | credencial do banco publicado (Neon) |
 | Variable | `NEON_PROJECT_ID` | id do projeto BROBOND-ERP no Neon (obrigatório) |
-| Variable | `NEON_BRANCH_NAME` | `production` (opcional; é o padrão) |
-| Variable | `NEON_BRANCH_ID` | id da branch (opcional; alternativa ao nome) |
+| Variable | `NEON_BRANCH_NAME` | `production` — branch do **Neon**, não o Environment do GitHub |
+| Variable | `NEON_BRANCH_ID` | id da branch do Neon (opcional; alternativa ao nome) |
 
 Sem `NEON_PROJECT_ID` o workflow interrompe antes de conectar: o destino não é confirmável.
+
+O Environment `migration-diagnostic` está configurado com **Deployment branches: Selected branches
+and tags**, autorizando apenas `ops/workflow-migracao-producao-diagnostico`, e com
+**Allow administrators to bypass** desativado.
 
 ## Como executar
 
 1. GitHub → **Actions** → **Brobond — Diagnóstico de conexão à produção (Neon, somente leitura)**.
 2. **Run workflow** → branch `ops/workflow-migracao-producao-diagnostico` → **Run**.
-3. O job aparece no environment `production` (sujeito às regras de proteção do environment).
+3. O job aparece no environment `migration-diagnostic` (sujeito às regras de proteção dele; a
+   branch autorizada é a única que consegue rodar).
 
 Via CLI:
 
@@ -52,8 +67,8 @@ gh workflow run brobond-migracao-producao.yml \
 
 ## Como ler o resultado
 
-- `✔ Destino CONFIRMADO` — host do Neon, `neon.project_id` esperado, branch `production` e o
-  schema do ERP. Saída 0.
+- `✔ Destino CONFIRMADO` — host do Neon, `neon.project_id` esperado, branch do Neon `production` e
+  o schema do ERP. Saída 0.
 - `✖ DESTINO NÃO CONFIRMADO` — alguma verificação reprovou; a execução para com saída ≠ 0 e
   **nenhuma operação** é executada. As linhas `✖` dizem qual sinal faltou.
 
