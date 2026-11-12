@@ -1,0 +1,101 @@
+# ============================================================================
+# DIAGNÓSTICO DE CONEXÃO AO POSTGRESQL DE PRODUÇÃO (Neon) — SOMENTE LEITURA.
+#
+# Homologação inicial do acesso do GitHub Actions ao banco publicado. O workflow
+# abre UMA conexão e roda apenas consultas de leitura (identificação do destino:
+# current_database(), current_user, current_schema(), version(), now() e as GUCs
+# do Neon). Ele NÃO executa escrita alguma: sem INSERT/UPDATE/DELETE/TRUNCATE/
+# DROP, sem migração, sem saneamento, sem carga cadastral, sem estoque, sem
+# publicação ou sincronização externa. A sessão do banco roda em transação
+# `READ ONLY` e termina com ROLLBACK.
+#
+# Escopo desta primeira homologação: execução MANUAL e restrita à branch
+# `ops/workflow-migracao-producao-diagnostico`. O gatilho é exclusivamente
+# `workflow_dispatch` (nenhum push, PR ou agenda dispara o workflow).
+#
+# Pré-requisitos no GitHub (Settings → Environments → production):
+#   • Secret  `DATABASE_URL`            = credencial do banco publicado (Neon).
+#   • Variable `NEON_PROJECT_ID`        = id do projeto BROBOND-ERP no Neon.
+#   • Variable `NEON_BRANCH_NAME`       = `production` (branch de produção).
+#   • Variable `NEON_BRANCH_ID`         = id da branch (opcional, alternativa ao nome).
+# O segredo NÃO é impresso: a origem aparece apenas como host:porta/banco.
+# ============================================================================
+name: Brobond — Diagnóstico de conexão à produção (Neon, somente leitura)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Uma execução por vez: nunca duas conexões simultâneas ao banco publicado.
+concurrency:
+  group: brobond-migracao-producao-diagnostico
+  cancel-in-progress: false
+
+jobs:
+  diagnostico:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          # Mesma versão do CI do projeto (Node 24): o runner de `node --test`
+          # do v22.x não é usado aqui, mas manter a versão evita divergência.
+          node-version: 24
+          cache: npm
+
+      - name: Restringir execução à branch de homologação
+        run: |
+          autorizada="ops/workflow-migracao-producao-diagnostico"
+          if [ "$GITHUB_REF_NAME" != "$autorizada" ]; then
+            echo "::error title=Branch não autorizada::Execução permitida apenas em '$autorizada' (recebido '$GITHUB_REF_NAME')."
+            exit 1
+          fi
+          echo "Branch autorizada: $GITHUB_REF_NAME"
+
+      - name: Exigir a identificação do destino (fail-closed)
+        env:
+          NEON_PROJECT_ID: ${{ vars.NEON_PROJECT_ID }}
+        run: |
+          if [ -z "$NEON_PROJECT_ID" ]; then
+            echo "::error title=Destino não identificado::Defina a variable NEON_PROJECT_ID (projeto BROBOND-ERP) em Settings → Environments → production. Sem o id do projeto o destino NÃO pode ser confirmado."
+            exit 1
+          fi
+          echo "Projeto esperado informado (valor não impresso)."
+
+      - name: Instalar dependências (reproduzível, a partir do lockfile)
+        run: npm ci --no-audit --no-fund
+
+      - name: Verificação estática do workflow (sem rede, sem banco)
+        run: node scripts/verificar-workflow-diagnostico.mjs
+
+      - name: Diagnóstico de conexão (somente leitura)
+        # ÚNICO step com a credencial: o segredo é injetado aqui e em nenhum
+        # outro lugar. O script nunca imprime a DATABASE_URL. Os valores entram
+        # por `env` (não interpolados no shell) para não haver injeção de comando.
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          NEON_PROJECT_ID: ${{ vars.NEON_PROJECT_ID }}
+          NEON_BRANCH_NAME: ${{ vars.NEON_BRANCH_NAME }}
+          NEON_BRANCH_ID: ${{ vars.NEON_BRANCH_ID }}
+        run: |
+          node --import tsx scripts/diagnostico-conexao-producao.ts \
+            --projeto="$NEON_PROJECT_ID" \
+            --branch="${NEON_BRANCH_NAME:-production}" \
+            --branch-id="$NEON_BRANCH_ID"
+
+      - name: Resumo
+        if: ${{ always() }}
+        run: |
+          echo "### Diagnóstico de conexão à produção (Neon)" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Executor exclusivamente diagnóstico: apenas consultas de leitura." >> "$GITHUB_STEP_SUMMARY"
+          echo "Nenhuma escrita, migração, saneamento, carga ou sincronização foi executada." >> "$GITHUB_STEP_SUMMARY"
