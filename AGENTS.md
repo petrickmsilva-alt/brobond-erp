@@ -89,7 +89,10 @@ O `postgresql-client-16` do PGDG depende de `sensible-utils` (só resolvido com 
   - `controle_estoque`: categoria + descrição-base (cor = `SUBCATEGORIA`, que fica no
     MEIO da descrição — `descricaoSemCor` remove como palavra isolada);
   - `roupas`: o prefixo numérico do código (`93882-40` × `93882-42` = MESMO produto, dois
-    tamanhos; `parseCodigoRoupas` separa `PRODUTO[-COR]-TAMANHO`).
+    tamanhos; `parseCodigoRoupas` separa `PRODUTO[-COR]-TAMANHO`). A **cor vem do CÓDIGO**
+    (`94000-nude-gg`), não de coluna: ela alimenta `cor`/`variacao_chave` (`COR:…|TAM:…`).
+    Sem isso duas cores do mesmo tamanho colidiam em `TAM:G` e a 2ª linha era REJEITADA —
+    variações reais eram perdidas na carga (bug real, corrigido).
   Sem isso cada cor/tamanho virava um produto-pai independente (bug real: 415 produtos
   em vez de 75).
 - `descricaoSemTamanho` remove o tamanho só como TOKEN no fim; remover "M" de "MARFIM"
