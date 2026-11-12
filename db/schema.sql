@@ -9516,3 +9516,20 @@ ALTER TABLE produtos ADD COLUMN IF NOT EXISTS codigo_categoria TEXT;
 ALTER TABLE produtos ADD COLUMN IF NOT EXISTS codigo_industria TEXT;
 CREATE INDEX IF NOT EXISTS produtos_codigo_industria_idx ON produtos (empresa_id, codigo_industria);
 CREATE INDEX IF NOT EXISTS produtos_codigo_item_idx ON produtos (empresa_id, codigo_item);
+
+-- ============================================================================
+-- ESPELHO da migração 0120 — PIM: ATRIBUTOS DE PRODUTO
+-- (a autoridade é db/migrations/0120_pim_atributos_produto.sql; este espelho
+--  existe para o parser de schema e o contrato de colunas dos recursos)
+-- ============================================================================
+ALTER TABLE produtos ADD COLUMN IF NOT EXISTS material TEXT;
+ALTER TABLE produtos ADD COLUMN IF NOT EXISTS modelagem TEXT;
+ALTER TABLE produtos ADD COLUMN IF NOT EXISTS genero TEXT;
+ALTER TABLE produtos ADD COLUMN IF NOT EXISTS origem_dados TEXT;
+ALTER TABLE produtos ADD COLUMN IF NOT EXISTS atributos_adicionais JSONB NOT NULL DEFAULT '{}'::jsonb;
+CREATE INDEX IF NOT EXISTS produtos_origem_dados_idx ON produtos (empresa_id, origem_dados);
+CREATE INDEX IF NOT EXISTS produtos_atributos_adicionais_gin ON produtos USING gin (atributos_adicionais);
+ALTER TABLE produtos DROP CONSTRAINT IF EXISTS produtos_atributos_adicionais_obj_ck;
+ALTER TABLE produtos
+  ADD CONSTRAINT produtos_atributos_adicionais_obj_ck
+  CHECK (jsonb_typeof(atributos_adicionais) = 'object');

@@ -77,6 +77,7 @@ const SECOES: { titulo: string; icon: typeof Tag }[] = [
   { titulo: 'Informações básicas', icon: Tag },
   { titulo: 'Identificação e catálogo', icon: BadgeCheck },
   { titulo: 'Classificação', icon: Layers },
+  { titulo: 'Características', icon: Shirt },
   { titulo: 'Comercial', icon: Wallet },
   { titulo: 'Varejo e atacado', icon: Wallet },
   { titulo: 'Estoque e suprimento', icon: Boxes },
@@ -124,6 +125,10 @@ function valoresDaLinha(fields: Field[], row: Record<string, any>): Valores {
     }
     if (f.type === 'boolean') {
       out[f.name] = v ? 'true' : 'false';
+    } else if (f.type === 'json') {
+      // O formulário edita a coluna JSONB como TEXTO; sem isto o objeto
+      // viraria "[object Object]" e o payload perderia os atributos.
+      out[f.name] = typeof v === 'string' ? v : JSON.stringify(v, null, 2);
     } else if (MONEY.has(f.name) || PERCENT.has(f.name) || f.type === 'money' || f.type === 'percent') {
       const n = Number(v);
       out[f.name] = Number.isFinite(n) ? maskMoneyInput(String(n).replace('.', ',')) : '';
@@ -140,6 +145,7 @@ function valoresIniciais(fields: Field[]): Valores {
   const out: Valores = {};
   for (const f of fields) {
     if (f.type === 'boolean') out[f.name] = f.default ? 'true' : 'false';
+    else if (f.type === 'json') out[f.name] = f.default && typeof f.default === 'object' ? JSON.stringify(f.default, null, 2) : '';
     else out[f.name] = f.default !== undefined && f.default !== null ? String(f.default) : '';
   }
   return out;
@@ -264,6 +270,16 @@ export default function ProdutoFormPage() {
     if (gtin) errs.gtin_tributario = gtin;
     const est = erroEstoqueMax(values.estoque_min, values.estoque_max);
     if (est) errs.estoque_max = est;
+    for (const f of campos) {
+      if (f.type !== 'json') continue;
+      const bruto = String(values[f.name] ?? '').trim();
+      if (bruto === '') continue;
+      try {
+        JSON.parse(bruto);
+      } catch {
+        errs[f.name] = 'JSON inválido — confira a sintaxe.';
+      }
+    }
     return errs;
   }
 
@@ -275,6 +291,19 @@ export default function ProdutoFormPage() {
       const vazio = bruto.trim() === '';
       if (f.type === 'boolean') {
         out[f.name] = values[f.name] === 'true';
+        continue;
+      }
+      if (f.type === 'json') {
+        // A coluna é JSONB: vai o OBJETO (o store serializa). Vazio é `null`.
+        if (vazio) {
+          out[f.name] = null;
+          continue;
+        }
+        try {
+          out[f.name] = JSON.parse(bruto);
+        } catch {
+          out[f.name] = bruto;
+        }
         continue;
       }
       if (vazio) {
@@ -656,6 +685,27 @@ function CampoProduto({
             </option>
           ))}
         </select>
+        {ajuda}
+      </div>
+    );
+  }
+
+  // ---- coluna JSONB (atributos adicionais): editor de texto JSON
+  if (f.type === 'json') {
+    return (
+      <div className="sm:col-span-2">
+        {label}
+        <textarea
+          id={id}
+          className={`${classe} min-h-[120px] font-mono text-xs`}
+          value={valor}
+          onChange={(e) => onChange(e.target.value)}
+          onBlur={onBlur}
+          placeholder={f.placeholder ?? '{\n  "chave": "valor"\n}'}
+          spellCheck={false}
+          aria-invalid={erro ? true : undefined}
+          aria-describedby={[idErro, idDica].filter(Boolean).join(' ') || undefined}
+        />
         {ajuda}
       </div>
     );

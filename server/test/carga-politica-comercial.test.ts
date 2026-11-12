@@ -475,6 +475,34 @@ test('roupas: dois tamanhos do MESMO código são pai + variações (não dois p
   assert.deepEqual([...roupas[0].tamanhos].sort(), ['40', '42']);
 });
 
+// ---------------------------------------------------------------------------
+// COR NA ABA ROUPAS (bug real): o código é `PRODUTO-COR-TAMANHO`, então a cor
+// vem do CÓDIGO, não de coluna. Se o parser não alimentasse a cor, duas cores
+// do mesmo tamanho geravam a MESMA chave de variação (`TAM:G`) e a segunda era
+// rejeitada como duplicada — variações reais eram PERDIDAS na carga.
+// ---------------------------------------------------------------------------
+test('roupas: cores diferentes do mesmo tamanho são variações distintas (não colidem)', async () => {
+  const conteudo = await xlsxBase64(LINHAS_BASE, [], {
+    roupas: [
+      { Item: '1', Categoria: 'CAMISETA', 'Descrição do produto/serviço2': '94000 CAMISETA BAS:g', 'Código Industria': '94000-azulclaro-g', Tipo: 'UN', 'Valor unitário Custo': 30 },
+      { Item: '2', Categoria: 'CAMISETA', 'Descrição do produto/serviço2': '94000 CAMISETA BAS:g', 'Código Industria': '94000-caramelo-g', Tipo: 'UN', 'Valor unitário Custo': 30 },
+      { Item: '3', Categoria: 'CAMISETA', 'Descrição do produto/serviço2': '94000 CAMISETA BAS:gg', 'Código Industria': '94000-nude-gg', Tipo: 'UN', 'Valor unitário Custo': 30 },
+    ],
+  });
+  const resp = await request(app()).post('/api/carga/politica-comercial/preview').send({ conteudo, nome: 'x.xlsx' });
+  assert.equal(resp.status, 200, JSON.stringify(resp.body));
+  const variacoes = resp.body.amostra.filter((i: any) => i.acao === 'criar_variacao' && String(i.sku).startsWith('94000'));
+  assert.equal(variacoes.length, 3, 'as três cores/tamanhos são variações');
+  const chaves = variacoes.map((i: any) => i.cor && i.tamanho ? `COR:${i.cor}|TAM:${i.tamanho}` : '');
+  assert.equal(new Set(chaves).size, 3, 'cada cor×tamanho tem chave própria (nenhuma colisão)');
+  const confirm = await request(app()).post('/api/carga/politica-comercial/confirmar').send({ conteudo, nome: 'x.xlsx' });
+  assert.equal(confirm.status, 200, JSON.stringify(confirm.body));
+  assert.equal(confirm.body.rejeitados.length, 0, 'nenhuma variação é rejeitada por colisão falsa');
+  const s = getStore();
+  const doPai = await s.countWhere(RESOURCES.produtos, { empresa_id: 1, variacao_chave: 'COR:nude|TAM:GG' });
+  assert.equal(doPai, 1, 'a variação NUDE/GG foi realmente persistida');
+});
+
 test('descricaoSemCor remove a cor no MEIO da descrição (controle de estoque)', () => {
   assert.equal(descricaoSemCor('CAMISETA BROBOND GOLA O BRANCA BORDADO BB', 'BRANCA'), 'CAMISETA BROBOND GOLA O BORDADO BB');
   assert.equal(descricaoSemCor('CAMISETA BROBOND GOLA O PRETA BORDADO BB', 'PRETA'), 'CAMISETA BROBOND GOLA O BORDADO BB');
@@ -482,3 +510,65 @@ test('descricaoSemCor remove a cor no MEIO da descrição (controle de estoque)'
   assert.equal(descricaoSemCor('SHORT MARFIM', 'MARFIM'), 'SHORT');
   assert.equal(descricaoSemCor('BLUSA VERDE', 'VERDE'), 'BLUSA');
 });
+
+// ---------------------------------------------------------------------------
+// ATRIBUTOS DE PRODUTO (migration 0120): unidade do "Tipo", fornecedor e
+// atributos adicionais. O que precisa ser verdade:
+//   • "Tipo" vira unidade CANÔNICA (PÇ→pc, UN→un) e é NULO quando não casa
+//     (nunca inventa unidade);
+//   • o fornecedor da origem é preservado e exposto no produto;
+//   • colunas de cadastro sem coluna tipada vão para `atributos_adicionais`;
+//   • PREÇO, MOVIMENTO e CÁLCULO (margem/imposto) NUNCA entram como atributo;
+//   • nada disso cria estoque nem movimentação.
+// ---------------------------------------------------------------------------
+test('unidadeDoTipo traduz só o conhecido e nunca inventa unidade', async () => {
+  const { unidadeDoTipo } = await import('../src/cargaPoliticaComercial');
+  assert.equal(unidadeDoTipo('PÇ'), 'pc');
+  assert.equal(unidadeDoTipo('pc'), 'pc');
+  assert.equal(unidadeDoTipo('UN'), 'un');
+  assert.equal(unidadeDoTipo(' UN '), 'un');
+  assert.equal(unidadeDoTipo('KG'), 'kg');
+  assert.equal(unidadeDoTipo(''), null, 'vazio não vira unidade');
+  assert.equal(unidadeDoTipo('CAIXA DE PAPELÃO'), null, 'desconhecido não é inventado');
+});
+
+test('a confirmação grava unidade, fornecedor e atributos adicionais — sem preço/movimento', async () => {
+  const { atributosAdicionais } = await import('../src/cargaPoliticaComercial');
+  const conteudo = await xlsxBase64(LINHAS_BASE, [], {
+    roupas: [
+      { Item: '1', Categoria: 'SHORT', 'Descrição do produto/serviço2': '93882 SHORT FITA:40', 'Código Industria': '93882-40', Tipo: 'UN', Fornecedor: 'LEMONETTE', 'Qtd. Estoque': 3, 'Valor unitário Custo': 89.9, 'Preço à Vista  10% Desc.': 128.43, 'Preço de Venda Cartão': 142.7 },
+    ],
+  });
+  const resp = await request(app()).post('/api/carga/politica-comercial/confirmar').send({ conteudo, nome: 'x.xlsx' });
+  assert.equal(resp.status, 200, JSON.stringify(resp.body));
+
+  const s = getStore();
+  const roupas = await s.findOneWhere(RESOURCES.produtos, { sku: '93882-40', empresa_id: 1 });
+  assert.ok(roupas, 'o produto foi criado');
+  assert.equal(roupas!.unidade, 'un', 'o Tipo UN vira unidade un');
+  assert.equal(roupas!.origem_dados, 'planilha', 'a procedência é auditável');
+  const attrs = roupas!.atributos_adicionais as Record<string, string>;
+  assert.equal(attrs.Fornecedor, 'LEMONETTE', 'o fornecedor da origem é preservado');
+  assert.ok(!('Qtd. Estoque' in attrs), 'quantidade de controle NÃO vira atributo');
+  assert.ok(!('Preço de Venda Cartão' in attrs), 'preço oficial NÃO vira atributo (tem tabela própria)');
+  assert.ok(!('Valor unitário Custo' in attrs), 'custo não vira atributo livre');
+
+  // Nem estoque nem movimentação nascem da carga.
+  assert.equal(await s.countWhere(RESOURCES.movimentacoes, { empresa_id: 1 }), 0);
+  assert.equal(await s.countWhere(RESOURCES.estoques, { empresa_id: 1 }), 0);
+});
+
+test('atributos adicionais ignoram preço, cálculo e movimento — só cadastro livre', async () => {
+  const { atributosAdicionais } = await import('../src/cargaPoliticaComercial');
+  const attrs = atributosAdicionais({
+    Fornecedor: 'CEREJA DOCE',
+    'Material Predominante': 'LINHO',
+    'Margem MGB (%)': '60',
+    'Preço Varejo': '79.9',
+    'Qtd. Estoque': '12',
+    'Data Compra': '2024-01-01',
+    Coluna7: 'lixo',
+  });
+  assert.deepEqual(attrs, { Fornecedor: 'CEREJA DOCE', 'Material Predominante': 'LINHO' });
+});
+

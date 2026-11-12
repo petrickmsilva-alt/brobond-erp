@@ -366,6 +366,17 @@ export type ItemNormalizado = {
   familia: string;
   nome_pai: string;
   pai_sku: string;
+  /** Unidade de medida normalizada do "Tipo" da origem (PÇ→pc, UN→un). */
+  unidade: string | null;
+  /** Nome do fornecedor da origem, quando a aba traz (ex.: Roupas). */
+  fornecedor: string;
+  /**
+   * Propriedades de cadastro da origem SEM coluna tipada própria (colunas
+   * próprias de cada aba, metadados de fornecedor). Preservadas como
+   * chave→valor para não descartar nada em silêncio. NÃO substituem as colunas
+   * canônicas (SKU, preço, cor, tamanho, categoria).
+   */
+  atributos_adicionais: Record<string, string>;
   /** Preços oficiais da linha, por condição de pagamento (dados de ENTRADA). */
   precos: { canal: 'atacado' | 'varejo'; condicao: string; preco: number }[];
 };
@@ -384,6 +395,68 @@ const STATUS_VALIDOS = new Set(['ATIVO', 'INATIVO']);
 /** Normaliza o tamanho: sem espaços, maiúsculo (a planilha traz " P", "p"). */
 export function normalizarTamanho(t: string): string {
   return String(t ?? '').replace(/\s+/g, '').toUpperCase();
+}
+
+/** Códigos de "Tipo" da origem → unidade de medida canônica do ERP. */
+const UNIDADE_POR_TIPO: Record<string, string> = {
+  'PC': 'pc', 'PÇ': 'pc', 'PCS': 'pc', 'PECA': 'pc', 'PEÇA': 'pc',
+  'UN': 'un', 'UND': 'un', 'UNID': 'un', 'UNIDADE': 'un',
+  'KG': 'kg', 'G': 'g', 'M': 'm', 'CM': 'cm', 'L': 'l', 'RL': 'rl', 'CX': 'cx', 'PCT': 'pct',
+};
+
+/**
+ * Traduz o "Tipo" da planilha para a unidade de medida do ERP. Sem
+ * correspondência conhecida devolve `null` — a unidade NÃO é inventada (o
+ * recurso aplica o default `un`); o valor bruto fica em `atributos_adicionais`.
+ */
+export function unidadeDoTipo(tipo: string): string | null {
+  const t = normalizarRotulo(tipo).toUpperCase().replace(/[.\s]/g, '');
+  return UNIDADE_POR_TIPO[t] ?? null;
+}
+
+/** Rótulos de coluna que já viram coluna tipada — não repetir em atributos. */
+const ROTULOS_TIPADOS = new Set([
+  'item', 'cod categoria', 'marca', 'categoria master', 'categoria', 'colecao', 'coleção',
+  'variante cor', 'subcategoria', 'descricao', 'descrição', 'descricao do produto/servico2',
+  'descricao do produto/servico', 'tamanho', 'codigo industria', 'tipo', 'status', 'fornecedor',
+  'peso kg', 'altura cm', 'largura cm', 'comprimento ou profundidade cm',
+  'custo unitario fabricacao', 'valor unitario custo',
+]);
+
+/**
+ * Colunas que NÃO são cadastro e por isso NUNCA entram em `atributos_adicionais`:
+ * quantidade/saldo de estoque (movimento), preço (tabela própria), margem/
+ * imposto/faturamento (cálculo da planilha — só conferência), data/compra/venda
+ * (fato) e colunas auxiliares sem rótulo. Guardá-las como "atributo" do produto
+ * faria o ERP tratar fórmula e movimento como cadastro — exatamente o que a
+ * regra proíbe.
+ */
+const NAO_CADASTRAL = /\bqtd\b|quantidade|estoque|saldo|preco|preço|valor|vrj|atacado|varejo|cart[aã]o|boleto|parcel|desconto|\bdesc\b|combo|subtotal|frete|faturamento|lucro|margem|total|imposto|\bpis\b|cofins|\bicms\b|simples|\bipi\b|\biss\b|csll|irpj|\bcusto\b|\bdata\b|compra|venda|entrada|sa[ií]da|movimenta|vencimento|previs[aã]o|coluna\d/;
+
+/**
+ * Propriedades de cadastro da linha que NÃO têm coluna tipada própria (colunas
+ * próprias de cada aba, metadados de fornecedor) — preservadas para não
+ * descartar informação em silêncio. Preço, cálculo e movimento ficam FORA (ver
+ * NAO_CADASTRAL): preço tem tabela própria e margem/imposto é conferência.
+ */
+export function atributosAdicionais(celulas: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  const fornecedor = pegar(celulas, 'Fornecedor').trim();
+  if (fornecedor) out['Fornecedor'] = fornecedor;
+  for (const [rotulo, valor] of Object.entries(celulas)) {
+    const v = String(valor ?? '').trim();
+    if (!v) continue;
+    const r = normalizarRotulo(rotulo);
+    if (!r || ROTULOS_TIPADOS.has(r)) continue;
+    const classe = classificarColuna(rotulo);
+    // Só a coluna NÃO reconhecida é preservada como atributo livre.
+    if (classe.natureza !== 'ignorada') continue;
+    if (NAO_CADASTRAL.test(r)) continue;
+    if (Object.prototype.hasOwnProperty.call(out, rotulo)) continue;
+    out[rotulo] = v.slice(0, 200);
+    if (Object.keys(out).length >= 25) break;
+  }
+  return out;
 }
 
 /** Descrição-base do produto-pai: remove o sufixo de cor da descrição. */
@@ -534,6 +607,12 @@ export function normalizarItem(linha: LinhaBruta, barcodePorIndustria: Map<strin
 
   const roupas = fonte === 'roupas' ? parseCodigoRoupas(codigo_industria) : null;
   const tamanho = fonte === 'roupas' ? (roupas!.tamanho || normalizarTamanho(tamanhoRaw)) : normalizarTamanho(tamanhoRaw);
+  // Na aba "roupas" a cor é EIXO de variação e vem no CÓDIGO (`94000-nude-gg`):
+  // o código separa cor e tamanho, então a cor precisa vir do parser, não da
+  // coluna. Sem isso, cores distintas do mesmo tamanho colidiam na chave de
+  // variação (`TAM:G` para azul claro × caramelo) e a segunda era rejeitada
+  // como duplicada — variações reais eram perdidas.
+  if (roupas?.cor) cor = roupas.cor;
   // Descrição-base do produto-pai: sem o tamanho e sem a cor. Na fonte canônica a
   // cor vem no fim da descrição; nas de controle, no meio ("GOLA O BRANCA BORDADO").
   const semCor = descricaoBase(descricaoSemTamanho(descricao, tamanho), cor);
@@ -579,6 +658,9 @@ export function normalizarItem(linha: LinhaBruta, barcodePorIndustria: Map<strin
     pai_sku: fonte === 'principal' ? skuPaiDe(categoria_master, colecao)
       : fonte === 'roupas' ? slugSku(roupas!.produto).slice(0, 40)
       : slugSku(base || descricao || codigo_industria).slice(0, 40),
+    unidade: unidadeDoTipo(tipo),
+    fornecedor: pegar(c, 'Fornecedor').trim(),
+    atributos_adicionais: atributosAdicionais(c),
     precos: extrairPrecosOficiais(c, fonte),
   };
 }
@@ -1007,6 +1089,7 @@ export async function previewCarga(req: Request, res: Response) {
         linha: it.linha, fonte: it.fonte, item: it.item, sku: it.codigo_industria, pai_sku: it.pai_sku,
         categoria_master: it.categoria_master, colecao: it.colecao, cor: it.cor, tamanho: it.tamanho,
         codigo_barras: it.codigo_barras, acao: it.acao, erros: it.erros,
+        unidade: it.unidade, fornecedor: it.fornecedor || null, atributos_adicionais: it.atributos_adicionais,
         precos: it.precos, precos_conflitantes: it.precos_conflitantes,
       })),
       limite: LIMITE_CARGA,
@@ -1327,7 +1410,7 @@ async function executarCarga(plano: Plano, actor: { id?: number; name?: string }
 // Montagem dos payloads canônicos (só campos de ENTRADA; nada calculado).
 // ---------------------------------------------------------------------------
 function camposComuns(it: ItemNormalizado, empresaId: number): Payload {
-  return {
+  const base: Payload = {
     sku: it.codigo_industria,
     nome: (it.descricao || it.nome_pai).slice(0, 120),
     ativo: it.status !== 'INATIVO',
@@ -1344,8 +1427,16 @@ function camposComuns(it: ItemNormalizado, empresaId: number): Payload {
     largura_mm: it.largura_mm,
     profundidade_mm: it.profundidade_mm,
     codigo_barras: it.codigo_barras || null,
+    // Procedência auditável do cadastro + atributos livres da origem (colunas
+    // próprias de cada aba). NUNCA substituem SKU/preço/cor/tamanho/categoria.
+    origem_dados: 'planilha',
+    atributos_adicionais: it.atributos_adicionais,
     empresa_id: empresaId,
   };
+  // Unidade só quando o "Tipo" da planilha casa com uma unidade do ERP — o
+  // valor bruto permanece em `atributos_adicionais` quando não casa.
+  if (it.unidade) base.unidade = it.unidade;
+  return base;
 }
 
 function payloadPai(familia: PlanoFamilia, it: ItemNormalizado, categoria_id: number | null, colecao_id: number | null, empresaId: number, ehVariacao: boolean): Payload {
