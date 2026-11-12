@@ -232,6 +232,15 @@
       "justificativa": "Trilha append-only da origem de cada preço aplicado (auditoria). Sem superfície de produto própria."
     },
     {
+      "id": "cap-politica_comercial_descontos_cumulativos",
+      "label": "Descontos cumulativos autorizados",
+      "tipo": "submodulo",
+      "recurso": "politica_comercial_descontos_cumulativos",
+      "tabela": "politica_comercial_descontos_cumulativos",
+      "menu": false,
+      "justificativa": "Autorização explícita para um desconto adicional incidir sobre o preço oficial de uma condição. Sem ela, o preço da condição é final. Consumido pelo motor de preços."
+    },
+    {
       "id": "territorios",
       "label": "Territórios",
       "tipo": "modulo",

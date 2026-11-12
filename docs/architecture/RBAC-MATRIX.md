@@ -29,7 +29,7 @@ Regras aplicadas por `checkAccess(r, actor, op)`:
 > **O perfil vem sempre da identidade autenticada** — nunca de `role` ou
 > `empresa_id` enviados pelo cliente.
 
-## 2. Matriz por recurso (189 recursos)
+## 2. Matriz por recurso (191 recursos)
 
 Colunas: **Recurso** · **Perfil mínimo** (regra de acesso) · **Ops** (C=incluir,
 U=alterar, D=excluir no CRUD genérico; `-` = somente leitura) · **Tabela** ·
@@ -71,7 +71,9 @@ U=alterar, D=excluir no CRUD genérico; `-` = somente leitura) · **Tabela** ·
 | `commerce_reconciliacao` | gerente | - | commerce_reconciliacao | sim |
 | `condicoes_pagamento` | gerente | CUD | condicoes_pagamento | sim |
 | `produto_precos_condicao` | gerente | CUD | produto_precos_condicao | sim |
+| `produto_precos_condicao_historico` | operador+ (leitura) | - | produto_precos_condicao_historico | sim |
 | `politica_preco_minimo` | gerente | CUD | politica_preco_minimo | sim |
+| `politica_comercial_descontos_cumulativos` | gerente | CUD | politica_comercial_descontos_cumulativos | sim |
 | `precificacao_memoria` | gerente | - | precificacao_memoria | sim |
 | `compra_recebimento_itens` | operador+ (leitura) | - | compra_recebimento_itens | sim |
 | `compra_recebimentos` | operador+ (leitura) | - | compra_recebimentos | sim |

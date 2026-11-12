@@ -77,6 +77,55 @@ export const PRECOS_OFICIAIS: PrecoOficial[] = [
 ];
 const PRECOS_OFICIAIS_POR_ROTULO = new Map(PRECOS_OFICIAIS.map((p) => [normalizarRotulo(p.rotulo), p]));
 
+// ---------------------------------------------------------------------------
+// FONTES DE CADASTRO da planilha (todas as abas que trazem CADASTRO).
+//
+// A aba principal é a fonte canônica dos produtos com preço por condição. DUAS
+// abas adicionais trazem universos de produto DISTINTOS (códigos que nunca
+// colidem com a principal) — ignorá-las deixaria produtos FORA do ERP, que foi
+// exatamente a lacuna apontada pelo Diretor:
+//   • "BASE CONTROLE DE ESTOQUE" — SKUs de controle (1001P…), custo e preços;
+//   • "Política Comercial Roupas (2)" — shorts de fornecedor (93882-40…), custo.
+//
+// As abas de MOVIMENTAÇÃO (entrada, saída, venda diária, situação de estoque)
+// NÃO são cadastro: o adendo proíbe importá-las como fato transacional. Elas só
+// entram na reconciliação (relatório), nunca como produto/estoque/quantidade.
+// ---------------------------------------------------------------------------
+export type FonteCadastro = 'principal' | 'controle_estoque' | 'roupas';
+export type FonteSpec = { id: FonteCadastro; aba: string; cabecalho: number; primeira_linha: number; descricao: string };
+export const FONTES_CADASTRO: FonteSpec[] = [
+  { id: 'principal', aba: ABA_FONTE, cabecalho: LINHA_CABECALHO, primeira_linha: PRIMEIRA_LINHA_DADOS, descricao: 'Vestuário/óculos com preço por condição (fonte canônica).' },
+  { id: 'controle_estoque', aba: 'BASE CONTROLE DE ESTOQUE', cabecalho: 11, primeira_linha: 12, descricao: 'SKUs de controle de estoque (código próprio) com custo e preços-base.' },
+  { id: 'roupas', aba: 'Política Comercial Roupas (2)', cabecalho: 4, primeira_linha: 5, descricao: 'Roupas de fornecedor (código próprio) com custo e preço de venda.' },
+];
+
+/** Preços OFICIAIS explícitos da aba "Política Comercial Roupas (2)". */
+export const PRECOS_ROUPAS: PrecoOficial[] = [
+  { rotulo: 'Preço à Vista  10% Desc.', canal: 'varejo', condicao: 'varejo_vista', base: 'varejo' },
+  { rotulo: 'Preço de Venda Cartão', canal: 'varejo', condicao: 'cartao_parcelado' },
+];
+const PRECOS_ROUPAS_POR_ROTULO = new Map(PRECOS_ROUPAS.map((p) => [normalizarRotulo(p.rotulo), p]));
+
+/**
+ * Preços OFICIAIS da aba "BASE CONTROLE DE ESTOQUE" (rótulos próprios). Só as
+ * colunas de preço explícitas entram; as colunas com sufixo ("…2") são
+ * duplicatas calculadas e NÃO casam (o rótulo normalizado é diferente).
+ */
+export const PRECOS_CONTROLE: PrecoOficial[] = [
+  { rotulo: 'ATACADO À Vista Min. 10 Pças', canal: 'atacado', condicao: 'atacado_vista', base: 'atacado' },
+  { rotulo: 'ATACADO BOLETO Mín. 10 pças', canal: 'atacado', condicao: 'boleto_30' },
+  { rotulo: 'VRJ À VISTA', canal: 'varejo', condicao: 'varejo_vista', base: 'varejo' },
+  { rotulo: 'VRJ =/> 2 PÇ', canal: 'varejo', condicao: 'varejo_2un' },
+  { rotulo: 'VR CARTÃO À VISTA', canal: 'varejo', condicao: 'cartao_vista' },
+  { rotulo: 'VRJ =/> 2 PÇ CARTÃO PRAZO', canal: 'varejo', condicao: 'cartao_parcelado' },
+];
+const PRECOS_CONTROLE_POR_ROTULO = new Map(PRECOS_CONTROLE.map((p) => [normalizarRotulo(p.rotulo), p]));
+
+/** Localiza uma aba pelo nome exato ou normalizado (tolera acento/espaço). */
+export function localizarAba(wb: ExcelJS.Workbook, nome: string): ExcelJS.Worksheet | null {
+  return wb.getWorksheet(nome) ?? wb.worksheets.find((w) => normalizarRotulo(w.name) === normalizarRotulo(nome)) ?? null;
+}
+
 /** Condição de pagamento correspondente (cadastro estrutural) para cada preço. */
 export const CONDICOES_DAS_PLANILHA: { codigo: string; nome: string; canal: 'atacado' | 'varejo'; parcelas: number; prazo_dias: number }[] = [
   { codigo: 'atacado_vista', nome: 'Atacado à vista', canal: 'atacado', parcelas: 1, prazo_dias: 0 },
@@ -143,6 +192,7 @@ export function classificarColuna(rotulo: string): { natureza: NaturezaColuna; n
 export type LinhaBruta = { linha: number; celulas: Record<string, string> };
 export type Leitura = {
   aba: string;
+  fonte: FonteCadastro;
   cabecalho: string[];
   linhas: LinhaBruta[];
   classificacao: { coluna: string; natureza: NaturezaColuna; nota: string }[];
@@ -162,9 +212,9 @@ export function celulaTexto(v: unknown): string {
   return String(v);
 }
 
-/** Lê a aba-fonte de um worksheet já carregado. */
-export function extrairLinhas(ws: ExcelJS.Worksheet): Leitura {
-  const cabRow = ws.getRow(LINHA_CABECALHO);
+/** Lê uma aba-fonte (cabeçalho e dados em linhas configuráveis por fonte). */
+export function extrairLinhas(ws: ExcelJS.Worksheet, spec: FonteSpec = FONTES_CADASTRO[0]): Leitura {
+  const cabRow = ws.getRow(spec.cabecalho);
   const cabecalho: string[] = [];
   const colunas: { index: number; rotulo: string }[] = [];
   const maxCol = Math.max(ws.columnCount || 0, cabRow.cellCount || 0);
@@ -174,7 +224,7 @@ export function extrairLinhas(ws: ExcelJS.Worksheet): Leitura {
     colunas.push({ index: c, rotulo });
   }
   const linhas: LinhaBruta[] = [];
-  for (let r = PRIMEIRA_LINHA_DADOS; r <= ws.rowCount; r++) {
+  for (let r = spec.primeira_linha; r <= ws.rowCount; r++) {
     const row = ws.getRow(r);
     const celulas: Record<string, string> = {};
     let vazia = true;
@@ -188,7 +238,7 @@ export function extrairLinhas(ws: ExcelJS.Worksheet): Leitura {
     linhas.push({ linha: r, celulas });
   }
   const classificacao = cabecalho.filter((c) => c).map((coluna) => ({ coluna, ...classificarColuna(coluna) }));
-  return { aba: ws.name, cabecalho: cabecalho.filter((c) => c), linhas, classificacao };
+  return { aba: ws.name, fonte: spec.id, cabecalho: cabecalho.filter((c) => c), linhas, classificacao };
 }
 
 /**
@@ -295,6 +345,7 @@ export function abaFonte(wb: ExcelJS.Workbook): ExcelJS.Worksheet {
 // ---------------------------------------------------------------------------
 export type ItemNormalizado = {
   linha: number;
+  fonte: FonteCadastro;
   item: string;
   codigo_categoria: string;
   categoria_master: string;
@@ -343,6 +394,64 @@ export function descricaoBase(descricao: string, cor: string): string {
   return d;
 }
 
+/**
+ * Remove a COR da descrição onde ela apareça como palavra isolada. Nas abas de
+ * controle de estoque a cor vem no MEIO da descrição ("…GOLA O BRANCA BORDADO BB"),
+ * não no fim — sem isso cada cor viraria um produto-pai distinto em vez de um
+ * eixo de variação do mesmo produto.
+ */
+export function descricaoSemCor(descricao: string, cor: string): string {
+  const d = String(descricao ?? '').trim();
+  const c = String(cor ?? '').trim();
+  if (!c) return d;
+  const esc = c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const sem = d
+    .replace(new RegExp(`(^|[^0-9A-Za-zÀ-ÿ])${esc}(?=[^0-9A-Za-zÀ-ÿ]|$)`, 'gi'), '$1 ')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/\s*[-–—]\s*$/, '')
+    .trim();
+  return sem || d;
+}
+
+/**
+ * Remove o sufixo de tamanho da descrição (ex.: "CAMISETA … - P" → "CAMISETA …").
+ *
+ * O tamanho só é removido como TOKEN isolado no fim (precedido de separador ou
+ * fronteira de palavra). Sem isso, "MARFIM" com tamanho "M" viraria "MARFI" — e
+ * a família do produto se PARTIA em duas (bug real da planilha).
+ */
+export function descricaoSemTamanho(descricao: string, tamanho: string): string {
+  const d = String(descricao ?? '').trim();
+  const t = String(tamanho ?? '').trim();
+  if (!t) return d;
+  const esc = t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const sem = d
+    .replace(new RegExp(`[\\s:—–-]+${esc}\\s*$`, 'i'), '')
+    .replace(new RegExp(`\\b${esc}\\s*$`, 'i'), '')
+    .replace(/\b(tamanho|tam)\b\s*[:\-–—]*\s*$/i, '')
+    .replace(/[\s:—–-]+$/, '')
+    .trim();
+  return sem || d;
+}
+
+/**
+ * Quebra o código da aba "Roupas" no par produto × tamanho. Os códigos têm a
+ * forma `PRODUTO[-COR]-TAMANHO` (ex.: `93882-40`, `94004-AREIA-42`,
+ * `94000-branco-gg`): o produto é o prefixo numérico e o ÚLTIMO segmento é o
+ * tamanho (P/M/G/GG/XG/EG ou número). Sem separar, dois tamanhos do MESMO produto
+ * (93845-40 × 93845-42) nasceriam como dois produtos independentes.
+ */
+export function parseCodigoRoupas(codigo: string): { produto: string; cor: string; tamanho: string } {
+  const partes = String(codigo ?? '').trim().split('-').map((s) => s.trim()).filter(Boolean);
+  if (!partes.length) return { produto: '', cor: '', tamanho: '' };
+  const ehTamanho = (s: string) => /^(XXG|XG|GG|EG|P|M|G|\d{2})$/.test(normalizarTamanho(s));
+  const produto = partes[0];
+  let tamanho = '';
+  if (partes.length > 1 && ehTamanho(partes[partes.length - 1])) tamanho = normalizarTamanho(partes[partes.length - 1]);
+  const meio = tamanho ? partes.slice(1, -1) : partes.slice(1);
+  return { produto, cor: meio.join(' ').trim(), tamanho };
+}
+
 /** Slug determinístico de SKU: sem acento, maiúsculo, só A–Z, 0–9 e hífen. */
 export function slugSku(valor: unknown): string {
   return String(valor ?? '')
@@ -358,6 +467,16 @@ export function skuPaiDe(categoriaMaster: string, colecao: string): string {
   return [slugSku(categoriaMaster), slugSku(colecao)].filter(Boolean).join('-').slice(0, 40);
 }
 
+/** Discriminador estável (base36, 6 chars) de uma chave — desempata SKU de pai. */
+export function hashChave(chave: string): string {
+  let h = 5381;
+  for (let i = 0; i < chave.length; i++) h = ((h * 33) ^ chave.charCodeAt(i)) >>> 0;
+  // Os dígitos MENOS significativos variam mais entre chaves vizinhas; pegar os
+  // de maior ordem ("slice(0,6)") faria chaves como "roupas|5" e "roupas|6"
+  // colidirem.
+  return h.toString(36).toUpperCase().padStart(6, '0').slice(-6);
+}
+
 function numero(v: string): number | null {
   const n = parseNumeroTexto(v);
   return n === null || !Number.isFinite(n) ? null : n;
@@ -369,49 +488,107 @@ function cmParaMm(cm: number | null): number | null {
   return mm > 0 ? mm : null;
 }
 
-/** Normaliza uma linha bruta (sem consultar o banco). */
-export function normalizarItem(linha: LinhaBruta, barcodePorIndustria: Map<string, string>): ItemNormalizado {
+/** Normaliza uma linha bruta (sem consultar o banco), por fonte de cadastro. */
+export function normalizarItem(linha: LinhaBruta, barcodePorIndustria: Map<string, string>, fonte: FonteCadastro = 'principal'): ItemNormalizado {
   const c = linha.celulas;
-  const descricao = pegar(c, 'DESCRIÇÃO').trim();
-  const cor = pegar(c, 'VARIANTE COR').trim();
+  const descricao = pegar(c, 'DESCRIÇÃO', 'Descrição do produto/serviço2', 'Descrição do produto/serviço').trim();
   const codigo_industria = pegar(c, 'Código Industria').trim();
-  const categoria_master = pegar(c, 'CATEGORIA MASTER').trim();
-  const colecao = pegar(c, 'COLEÇÃO').trim();
   const marca = pegar(c, 'MARCA').trim();
-  const base = descricaoBase(descricao, cor);
-  const familia = [categoria_master, colecao, marca, base].map((x) => normalizarRotulo(x)).join('|');
+  const tamanhoRaw = pegar(c, 'Tamanho').trim();
+  const custo = pegar(c, 'Custo Unitário Fabricação', 'Valor unitário Custo', 'Valor\nunitário Custo');
+
+  let categoria_master: string;
+  let colecao: string;
+  let cor: string;
+  let tipo: string;
+  let status: string;
+
+  if (fonte === 'controle_estoque') {
+    // Cabeçalho: Item, COLEÇÃO, CATEGORIA, SUBCATEGORIA, Descrição, Tamanho,
+    // Código Industria, Tipo, Fornecedor, Valor unitário Custo…
+    // Sem MARCA e sem STATUS na origem: o produto nasce ATIVO (a aba é de
+    // controle de estoque ativo; não há coluna de inativação).
+    categoria_master = pegar(c, 'CATEGORIA').trim();
+    colecao = pegar(c, 'COLEÇÃO').trim();
+    cor = pegar(c, 'SUBCATEGORIA').trim();
+    tipo = pegar(c, 'Tipo').trim();
+    status = 'ATIVO';
+  } else if (fonte === 'roupas') {
+    // Cabeçalho: Item, Categoria, Descrição, Código Industria, Tipo, Fornecedor,
+    // Qtd. Estoque, Valor unitário Custo, Preço à Vista, Preço de Venda Cartão…
+    // O código é `PRODUTO[-COR]-TAMANHO` (93882-40 × 93882-42 = MESMO produto, dois
+    // tamanhos): o produto-pai é o prefixo numérico e o tamanho vira eixo de
+    // variação (como na fonte canônica). A "Qtd. Estoque" NÃO é importada.
+    categoria_master = pegar(c, 'Categoria').trim();
+    colecao = '';
+    cor = '';
+    tipo = pegar(c, 'Tipo').trim();
+    status = 'ATIVO';
+  } else {
+    categoria_master = pegar(c, 'CATEGORIA MASTER').trim();
+    colecao = pegar(c, 'COLEÇÃO').trim();
+    cor = pegar(c, 'VARIANTE COR').trim();
+    tipo = pegar(c, 'Tipo').trim();
+    status = pegar(c, 'STATUS').trim().toUpperCase();
+  }
+
+  const roupas = fonte === 'roupas' ? parseCodigoRoupas(codigo_industria) : null;
+  const tamanho = fonte === 'roupas' ? (roupas!.tamanho || normalizarTamanho(tamanhoRaw)) : normalizarTamanho(tamanhoRaw);
+  // Descrição-base do produto-pai: sem o tamanho e sem a cor. Na fonte canônica a
+  // cor vem no fim da descrição; nas de controle, no meio ("GOLA O BRANCA BORDADO").
+  const semCor = descricaoBase(descricaoSemTamanho(descricao, tamanho), cor);
+  const base = fonte === 'controle_estoque' ? descricaoSemCor(semCor, cor) : semCor;
+  // Família = identidade do produto-pai; cor e tamanho são EIXOS de variação.
+  //  • principal: categoria + coleção + marca + descrição-base;
+  //  • controle_estoque: categoria + descrição-base (cor = SUBCATEGORIA, tamanho = coluna);
+  //  • roupas: o prefixo numérico do código (93882 agrupa 93882-40 × 93882-42).
+  // Sem isso, cada cor/tamanho viraria um produto-pai distinto.
+  const familia = fonte === 'principal'
+    ? [fonte, categoria_master, colecao, marca, base].map((x) => normalizarRotulo(x)).join('|')
+    : fonte === 'roupas'
+      ? [fonte, roupas!.produto].map((x) => normalizarRotulo(x)).join('|')
+      : [fonte, categoria_master, base].map((x) => normalizarRotulo(x)).join('|');
   const pesoKg = numero(pegar(c, 'Peso KG'));
   return {
     linha: linha.linha,
+    fonte,
     item: pegar(c, 'Item').trim(),
     codigo_categoria: pegar(c, 'Cód Categoria').trim(),
     categoria_master,
     colecao,
     cor,
     descricao,
-    tamanho: normalizarTamanho(pegar(c, 'Tamanho')),
+    tamanho,
     codigo_industria,
-    tipo: pegar(c, 'Tipo').trim(),
-    status: pegar(c, 'STATUS').trim().toUpperCase(),
+    tipo,
+    status,
     peso_g: pesoKg === null ? null : Math.round(pesoKg * 1000),
     altura_mm: cmParaMm(numero(pegar(c, 'Altura CM', 'Altura\nCM'))),
     largura_mm: cmParaMm(numero(pegar(c, 'Largura CM', 'Largura\nCM'))),
     profundidade_mm: cmParaMm(numero(pegar(c, 'Comprimento ou profundidade CM', 'Comprimento ou profundidade\nCM'))),
-    custo_base: numero(pegar(c, 'Custo Unitário Fabricação')),
+    custo_base: numero(custo),
     marca,
     codigo_barras: barcodePorIndustria.get(codigo_industria) || null,
     familia,
-    nome_pai: base || descricao || codigo_industria,
-    pai_sku: skuPaiDe(categoria_master, colecao),
-    precos: extrairPrecosOficiais(c),
+    nome_pai: fonte === 'roupas' ? base : (base || descricao || codigo_industria),
+    // SKU do produto-pai: na fonte canônica deriva de categoria+coleção (cada
+    // coleção é um produto). Em "roupas" o pai é o prefixo numérico do código
+    // (93882). Em "controle_estoque" a categoria se repete para produtos
+    // distintos, então o pai usa a DESCRIÇÃO-base — sem isso famílias diferentes
+    // colidiriam no mesmo SKU (o desempate em `planejar` cobre o resto).
+    pai_sku: fonte === 'principal' ? skuPaiDe(categoria_master, colecao)
+      : fonte === 'roupas' ? slugSku(roupas!.produto).slice(0, 40)
+      : slugSku(base || descricao || codigo_industria).slice(0, 40),
+    precos: extrairPrecosOficiais(c, fonte),
   };
 }
 
-/** Lê os preços oficiais da linha (canal × condição). Ignora célula vazia. */
-export function extrairPrecosOficiais(celulas: Record<string, string>): { canal: 'atacado' | 'varejo'; condicao: string; preco: number }[] {
+/** Lê os preços oficiais da linha (canal × condição), conforme a fonte. */
+export function extrairPrecosOficiais(celulas: Record<string, string>, fonte: FonteCadastro = 'principal'): { canal: 'atacado' | 'varejo'; condicao: string; preco: number }[] {
   const out: { canal: 'atacado' | 'varejo'; condicao: string; preco: number }[] = [];
+  const mapa = fonte === 'roupas' ? PRECOS_ROUPAS_POR_ROTULO : fonte === 'controle_estoque' ? PRECOS_CONTROLE_POR_ROTULO : PRECOS_OFICIAIS_POR_ROTULO;
   for (const [k, v] of Object.entries(celulas)) {
-    const spec = PRECOS_OFICIAIS_POR_ROTULO.get(normalizarRotulo(k));
+    const spec = mapa.get(normalizarRotulo(k));
     if (!spec) continue;
     const p = numero(v);
     if (p === null || p <= 0) continue;
@@ -467,7 +644,26 @@ export type Validacoes = {
   precos_oficiais: number;
   /** Conflito DENTRO do arquivo: mesmo SKU+canal+condição com valores distintos. */
   precos_conflitantes_arquivo: string[];
+  /** SKUs de produto-pai que colidiram entre famílias e foram desempatados. */
+  skus_pai_colididos: string[];
 };
+
+/**
+ * Desempata SKUs de produto-pai repetidos entre FAMÍLIAS distintas (in-place),
+ * anexando um discriminador estável derivado da chave da família. Devolve a lista
+ * de SKUs que colidiram (para o relatório). Sem colisão, nada muda.
+ */
+export function desempatarSkusPai(familias: PlanoFamilia[]): string[] {
+  const porSku = new Map<string, number[]>();
+  familias.forEach((f, i) => { const a = porSku.get(f.sku) ?? []; a.push(i); porSku.set(f.sku, a); });
+  const colididos: string[] = [];
+  for (const [sku, idxs] of porSku) {
+    if (idxs.length < 2) continue;
+    colididos.push(sku);
+    for (const i of idxs) familias[i].sku = `${sku.slice(0, 33)}-${hashChave(familias[i].chave)}`;
+  }
+  return colididos;
+}
 
 export type Plano = { itens: PlanoItem[]; familias: PlanoFamilia[]; validacoes: Validacoes };
 
@@ -478,7 +674,7 @@ export type Plano = { itens: PlanoItem[]; familias: PlanoFamilia[]; validacoes: 
  * é um produto simples.
  */
 export function planejar(leitura: Leitura, barcodePorIndustria: Map<string, string>, opcoes: { codigos_barras_concat?: number; codigos_barras_invalidos?: number } = {}): Plano {
-  const itens = leitura.linhas.map((l) => normalizarItem(l, barcodePorIndustria));
+  const itens = leitura.linhas.map((l) => normalizarItem(l, barcodePorIndustria, leitura.fonte));
 
   const porFamilia = new Map<string, number[]>();
   itens.forEach((it, idx) => {
@@ -505,6 +701,12 @@ export function planejar(leitura: Leitura, barcodePorIndustria: Map<string, stri
     });
   }
 
+  // Colisão de SKU do pai: duas FAMÍLIAS distintas que geram o mesmo SKU. A
+  // principal é protegida pelo próprio código da indústria; as fontes extras
+  // derivam o SKU da descrição e podem truncar em 40 chars — sem desempate, duas
+  // famílias (ex.: "BORDADO BB" × "BORDADO B") cairiam no MESMO produto-pai.
+  const skusPaiColididos = desempatarSkusPai(familias);
+
   const vistosItem = new Set<string>();
   const vistosSku = new Set<string>();
   const dupItem: string[] = [];
@@ -520,8 +722,13 @@ export function planejar(leitura: Leitura, barcodePorIndustria: Map<string, stri
     if (it.item) { if (vistosItem.has(it.item)) dupItem.push(it.item); vistosItem.add(it.item); }
     if (it.codigo_industria) { if (vistosSku.has(it.codigo_industria)) dupSku.push(it.codigo_industria); vistosSku.add(it.codigo_industria); }
     const multi = (porFamilia.get(it.familia)?.length ?? 0) > 1;
+    // A COR é eixo de variação na fonte canônica (variações cor × tamanho) e na
+    // de controle de estoque (SUBCATEGORIA). Na fonte "roupas" não há eixo de
+    // cor — cobrar cor ali seria falso positivo. O tamanho só é obrigatório
+    // quando a família TEM mais de uma linha (variação real).
+    const exigeCor = it.fonte !== 'roupas';
     if (multi && !it.tamanho) semTamanho.push(it.item || it.codigo_industria);
-    if (!it.cor) semCor.push(it.item || it.codigo_industria);
+    if (exigeCor && !it.cor) semCor.push(it.item || it.codigo_industria);
     if (!it.descricao) semDesc.push(it.item || it.codigo_industria);
     if (it.status && !STATUS_VALIDOS.has(it.status)) statusInv.push(`${it.item}:${it.status}`);
     if (it.codigo_barras && it.codigo_industria) {
@@ -596,6 +803,7 @@ export function planejar(leitura: Leitura, barcodePorIndustria: Map<string, stri
       linhas_com_preco: linhasComPreco,
       precos_oficiais: totalPrecos,
       precos_conflitantes_arquivo: precosConflitoArquivo,
+      skus_pai_colididos: skusPaiColididos,
     },
   };
 }
@@ -609,17 +817,178 @@ function exigirGestor(actor: { perfil?: string }) {
   if (actor.perfil === 'operador') throw new HttpError(403, 'Somente gerentes e administradores executam a carga da política comercial.');
 }
 
-/** Lê o arquivo do corpo e devolve leitura + plano (com códigos de barras válidos). */
-export async function lerPlano(body: Record<string, unknown>): Promise<{ leitura: Leitura; plano: Plano; barcodes: { validos: number; concat: number; invalidos: number } }> {
+// ---------------------------------------------------------------------------
+// RECONCILIAÇÃO DAS ABAS (relatório, sem gravar nada).
+//
+// O adendo exige examinar TODAS as abas e não descartar nenhuma em silêncio. As
+// abas de cadastro viram produto; as abas de MOVIMENTAÇÃO/estoque/venda entram
+// só como conferência (nunca como fato transacional). Nenhuma quantidade física
+// é importada daqui.
+// ---------------------------------------------------------------------------
+export type ReconciliacaoAba = {
+  aba: string;
+  classificacao: string;
+  registros: number;
+  identificadores: number;
+  usada_como_cadastro: boolean;
+  nota: string;
+};
+export type Reconciliacao = {
+  abas: ReconciliacaoAba[];
+  codigos_aba_ausentes_na_principal: Record<string, string[]>;
+  produtos_por_fonte: Record<string, number>;
+  total_produtos_distintos: number;
+};
+
+/** Identifica a coluna de código de uma aba (por rótulo normalizado). */
+function colunaCodigo(ws: ExcelJS.Worksheet, cabecalho: number): { col: number; rotulo: string } | null {
+  const row = ws.getRow(cabecalho);
+  for (let c = 1; c <= Math.max(ws.columnCount, row.cellCount); c++) {
+    const rot = normalizarRotulo(celulaTexto(row.getCell(c).value));
+    if (rot === 'codigo industria' || rot === 'codigo internto industria' || rot === 'codigo cadastro') return { col: c, rotulo: celulaTexto(row.getCell(c).value) };
+  }
+  return null;
+}
+
+/** Classificação documentada de cada aba da planilha (conferência × cadastro). */
+const CLASSIFICACAO_ABAS: { aba: string; classificacao: string; cadastro: boolean; nota: string }[] = [
+  { aba: ABA_FONTE, classificacao: 'Cadastro mestre + produto-pai + SKU/variação + preço + custo', cadastro: true, nota: 'Fonte canônica: cadastro e preços oficiais por condição.' },
+  { aba: 'BASE CONTROLE DE ESTOQUE', classificacao: 'Cadastro mestre (código próprio) + custo + preço-base', cadastro: true, nota: 'Universo de SKU próprio (1001P…): entra como cadastro, sem importar a quantidade de controle.' },
+  { aba: 'Política Comercial Roupas (2)', classificacao: 'Cadastro mestre (código próprio) + custo + preço de venda', cadastro: true, nota: 'Produtos de fornecedor (93882-40…): cadastro próprio; a Qtd. Estoque NÃO é importada.' },
+  { aba: 'Código de Barras', classificacao: 'Código de barras (conferência)', cadastro: false, nota: 'Só entra GTIN com dígito verificador válido; a concatenação (coleção+cor+SKU) é descartada.' },
+  { aba: 'Estrutura de Descr. Produtos', classificacao: 'Descrição (conferência)', cadastro: false, nota: 'Estrutura de montagem da descrição; serve para conferir o texto, não cria produto.' },
+  { aba: 'Estoque Com Jefferson', classificacao: 'Controle de estoque / histórico (conferência)', cadastro: false, nota: 'Contagem física por pessoa — NÃO é saldo canônico; não gera movimentação.' },
+  { aba: 'SITUAÇÃO ESTOQUE', classificacao: 'Controle de estoque / histórico (conferência)', cadastro: false, nota: 'Muitas células em #REF!/#N/A: planilha de controle, não de cadastro.' },
+  { aba: 'ENTRADA MERCADORIA', classificacao: 'Entrada (histórico — conferência)', cadastro: false, nota: 'Entradas históricas NÃO viram estoque atual.' },
+  { aba: 'CONTROLE ESTOQUE SAÍDA', classificacao: 'Saída / venda histórica (conferência)', cadastro: false, nota: 'Saídas históricas NÃO viram movimentação nem estoque.' },
+  { aba: 'CONT. VENDA DIÁRIA JEFF E PETR', classificacao: 'Venda histórica (conferência)', cadastro: false, nota: 'Venda diária histórica por pessoa — não é fato transacional do ERP.' },
+  { aba: 'Planilha3', classificacao: 'Filtro auxiliar', cadastro: false, nota: 'Painel de filtros da planilha (MARCA/CATEGORIA MASTER); sem cadastro.' },
+];
+
+/**
+ * Examina TODAS as abas do arquivo: identifica a coluna de código de cada uma,
+ * quantifica os identificadores e aponta quais códigos existem fora da aba
+ * principal (os "produtos que ainda não aparecem no ERP").
+ */
+export function reconciliarAbas(wb: ExcelJS.Workbook, principal: Leitura): Reconciliacao {
+  const codigosPrincipal = new Set(principal.linhas.map((l) => normalizarItem(l, new Map()).codigo_industria).filter(Boolean));
+  const abas: ReconciliacaoAba[] = [];
+  const ausentes: Record<string, string[]> = {};
+  const porFonte: Record<string, number> = { principal: codigosPrincipal.size };
+  const todosCodigos = new Set(codigosPrincipal);
+
+  for (const ws of wb.worksheets) {
+    const meta = CLASSIFICACAO_ABAS.find((c) => normalizarRotulo(c.aba) === normalizarRotulo(ws.name));
+    // Descobre o cabeçalho da aba (procura a linha com 'Código Industria').
+    let cabecalho = 0;
+    let col: { col: number; rotulo: string } | null = null;
+    for (let r = 1; r <= Math.min(ws.rowCount, 15); r++) {
+      const achado = colunaCodigo(ws, r);
+      if (achado) { cabecalho = r; col = achado; break; }
+    }
+    const codigos = new Set<string>();
+    if (col) {
+      for (let r = cabecalho + 1; r <= ws.rowCount; r++) {
+        const v = celulaTexto(ws.getRow(r).getCell(col.col).value).trim();
+        if (v) codigos.add(v);
+      }
+    }
+    const registros = col ? codigos.size : 0;
+    abas.push({
+      aba: ws.name,
+      classificacao: meta?.classificacao ?? 'Histórico/controle complementar',
+      registros,
+      identificadores: codigos.size,
+      usada_como_cadastro: meta?.cadastro ?? false,
+      nota: meta?.nota ?? 'Aba sem cadastro identificado — mantida como conferência.',
+    });
+    if (meta?.cadastro && normalizarRotulo(ws.name) !== normalizarRotulo(ABA_FONTE)) {
+      porFonte[FONTES_CADASTRO.find((f) => normalizarRotulo(f.aba) === normalizarRotulo(ws.name))?.id ?? ws.name] = codigos.size;
+    }
+    if (col) {
+      const fora = [...codigos].filter((c) => !codigosPrincipal.has(c));
+      if (fora.length) ausentes[ws.name] = fora.slice(0, 500);
+      for (const c of codigos) todosCodigos.add(c);
+    }
+  }
+
+  return { abas, codigos_aba_ausentes_na_principal: ausentes, produtos_por_fonte: porFonte, total_produtos_distintos: todosCodigos.size };
+}
+
+/** Concatena planos (principal + fontes extras) numa leitura unificada. */
+function mesclarPlanos(planos: Plano[]): Plano {
+  const familias: PlanoFamilia[] = [];
+  const itens: PlanoItem[] = [];
+  // `familia_idx` aponta para o array de famílias do PRÓPRIO plano; ao
+  // concatenar, é preciso reindexar pelo deslocamento acumulado — sem isso um
+  // item de uma fonte extra apontaria para a família de outra fonte.
+  for (const p of planos) {
+    const offset = familias.length;
+    for (const it of p.itens) itens.push({ ...it, familia_idx: it.familia_idx + offset });
+    familias.push(...p.familias);
+  }
+  const soma = (f: (v: Validacoes) => number) => planos.reduce((a, p) => a + f(p.validacoes), 0);
+  const junto = (f: (v: Validacoes) => string[]) => planos.flatMap((p) => f(p.validacoes));
+  // SKU do pai colidido ENTRE fontes (ou com o código de um produto simples): o
+  // desempate por plano não enxerga o outro plano, então reaplica sobre o todo.
+  const jaColididos = junto((v) => v.skus_pai_colididos);
+  const colididosAgora = desempatarSkusPai(familias).filter((sku) => !jaColididos.includes(sku));
+  return {
+    itens,
+    familias,
+    validacoes: {
+      registros: soma((v) => v.registros),
+      itens_distintos: soma((v) => v.itens_distintos),
+      skus_distintos: soma((v) => v.skus_distintos),
+      familias: familias.length,
+      identificadores_duplicados: junto((v) => v.identificadores_duplicados),
+      codigos_industria_repetidos: junto((v) => v.codigos_industria_repetidos),
+      variantes_sem_tamanho: junto((v) => v.variantes_sem_tamanho),
+      sem_cor: junto((v) => v.sem_cor),
+      sem_descricao: junto((v) => v.sem_descricao),
+      status_invalidos: junto((v) => v.status_invalidos),
+      codigos_barras_conflitantes: junto((v) => v.codigos_barras_conflitantes),
+      codigos_barras_validos: soma((v) => v.codigos_barras_validos),
+      codigos_barras_concat: soma((v) => v.codigos_barras_concat),
+      codigos_barras_invalidos: soma((v) => v.codigos_barras_invalidos),
+      campos_conferencia: soma((v) => v.campos_conferencia),
+      colunas_nao_reconhecidas: junto((v) => v.colunas_nao_reconhecidas),
+      linhas_com_preco: soma((v) => v.linhas_com_preco),
+      precos_oficiais: soma((v) => v.precos_oficiais),
+      precos_conflitantes_arquivo: junto((v) => v.precos_conflitantes_arquivo),
+      skus_pai_colididos: [...jaColididos, ...colididosAgora],
+    },
+  };
+}
+
+/**
+ * Lê o arquivo do corpo e devolve a leitura unificada (todas as fontes de
+ * cadastro), o plano mesclado, a reconciliação das abas e os códigos de barras.
+ */
+export async function lerPlano(body: Record<string, unknown>): Promise<{ leitura: Leitura; plano: Plano; reconciliacao: Reconciliacao; barcodes: { validos: number; concat: number; invalidos: number } }> {
   const wb = await abrirWorkbook(String(body?.conteudo ?? ''), String(body?.nome ?? ''));
-  const ws = abaFonte(wb);
-  const leitura = extrairLinhas(ws);
-  if (!leitura.linhas.length) {
+  const wsPrincipal = abaFonte(wb);
+  const principal = extrairLinhas(wsPrincipal, FONTES_CADASTRO[0]);
+  if (!principal.linhas.length) {
     throw new HttpError(400, `A aba "${ABA_FONTE}" está vazia ou sem linhas de dados a partir da linha ${PRIMEIRA_LINHA_DADOS}.`);
   }
   const { mapa, concat, invalidos } = extrairCodigosBarras(wb);
-  const plano = planejar(leitura, mapa, { codigos_barras_concat: concat, codigos_barras_invalidos: invalidos });
-  return { leitura, plano, barcodes: { validos: mapa.size, concat, invalidos } };
+  const opcoes = { codigos_barras_concat: concat, codigos_barras_invalidos: invalidos };
+
+  const planos: Plano[] = [planejar(principal, mapa, opcoes)];
+  const fontesExtra: Leitura[] = [];
+  for (const spec of FONTES_CADASTRO.slice(1)) {
+    const ws = localizarAba(wb, spec.aba);
+    if (!ws) continue;
+    const leitura = extrairLinhas(ws, spec);
+    if (!leitura.linhas.length) continue;
+    fontesExtra.push(leitura);
+    planos.push(planejar(leitura, mapa));
+  }
+
+  const plano = planos.length > 1 ? mesclarPlanos(planos) : planos[0];
+  const reconciliacao = reconciliarAbas(wb, principal);
+  return { leitura: principal, plano, reconciliacao, barcodes: { validos: mapa.size, concat, invalidos } };
 }
 
 export async function previewCarga(req: Request, res: Response) {
@@ -627,14 +996,15 @@ export async function previewCarga(req: Request, res: Response) {
   exigirGestor(actor);
   checkAccess(RESOURCES.produtos, actor, 'create');
   try {
-    const { leitura, plano } = await lerPlano((req.body || {}) as Record<string, unknown>);
+    const { leitura, plano, reconciliacao } = await lerPlano((req.body || {}) as Record<string, unknown>);
     res.json({
       aba: leitura.aba,
       total: plano.validacoes.registros,
       validacoes: plano.validacoes,
+      reconciliacao,
       familias: plano.familias.map((f) => ({ nome: f.nome, sku: f.sku, categoria_master: f.categoria_master, colecao: f.colecao, itens: f.itens, tamanhos: f.tamanhos, cores: f.cores })),
       amostra: plano.itens.slice(0, 200).map((it) => ({
-        linha: it.linha, item: it.item, sku: it.codigo_industria, pai_sku: it.pai_sku,
+        linha: it.linha, fonte: it.fonte, item: it.item, sku: it.codigo_industria, pai_sku: it.pai_sku,
         categoria_master: it.categoria_master, colecao: it.colecao, cor: it.cor, tamanho: it.tamanho,
         codigo_barras: it.codigo_barras, acao: it.acao, erros: it.erros,
         precos: it.precos, precos_conflitantes: it.precos_conflitantes,
@@ -655,7 +1025,7 @@ export async function confirmarCarga(req: Request, res: Response) {
   const escopo = escopoDe(actor);
   const s = getStore();
   try {
-    const { plano } = await lerPlano((req.body || {}) as Record<string, unknown>);
+    const { plano, reconciliacao } = await lerPlano((req.body || {}) as Record<string, unknown>);
     if (plano.itens.length > LIMITE_CARGA) {
       throw new HttpError(413, `A carga aceita no máximo ${LIMITE_CARGA} linhas por vez. Divida a planilha.`);
     }
@@ -663,10 +1033,12 @@ export async function confirmarCarga(req: Request, res: Response) {
     res.json({
       ok: true,
       ...resultado,
+      abas_examinadas: reconciliacao.abas.length,
+      reconciliacao,
       estoque_importado: false,
       precos_sobrescritos: false,
       formulas_importadas: false,
-      observacao: 'Preços oficiais gravados como DADOS de entrada (produto_precos_condicao). A base do canal só foi preenchida onde estava zerada. Margens, impostos e formação de preço do ERP não foram tocados.',
+      observacao: 'Todas as abas de CADASTRO foram processadas (principal + controle de estoque + roupas). Preços oficiais gravados como DADOS de entrada (produto_precos_condicao). A base do canal só foi preenchida onde estava zerada. Margens, impostos e formação de preço do ERP não foram tocados; nenhuma quantidade física foi importada.',
     });
   } catch (e) {
     throw toHttpError(e, RESOURCES.produtos);
@@ -678,15 +1050,22 @@ export async function confirmarCarga(req: Request, res: Response) {
 // ---------------------------------------------------------------------------
 async function executarCarga(plano: Plano, actor: { id?: number; name?: string }, escopo: Escopo, tx: Tx) {
   const s = getStore();
+  // Autoria: só grava o id se o usuário existir de fato. Em banco novo (ou no
+  // modo demonstração) o ator é sintético e uma FK inválida rejeitaria TODA a
+  // gravação de preço — preferimos a autoria ausente à carga inteira perdida.
+  const autorId = actor.id != null && (await s.get(RESOURCES.usuarios, Number(actor.id), tx)) ? Number(actor.id) : null;
   let produtos = 0;
   let variacoes = 0;
   let ignorados = 0;
   let precosGravados = 0;
   let precosIgnorados = 0;
+  let precosVersionados = 0;
   let basePrecoDefinida = 0;
   const conflitosPreco: string[] = [];
   const rejeitados: { linha: number; motivo: string }[] = [];
   const ids: number[] = [];
+  /** Fontes de cadastro efetivamente processadas nesta execução. */
+  const fontesPresentes = [...new Set(plano.itens.map((it) => it.fonte))];
 
   const catCache = new Map<string, number>();
   const colCache = new Map<string, number>();
@@ -752,29 +1131,54 @@ async function executarCarga(plano: Plano, actor: { id?: number; name?: string }
 
   /**
    * Grava os preços OFICIAIS (dados de ENTRADA) do item em
-   * `produto_precos_condicao`. Idempotente: reimportar ATUALIZA a linha do
-   * mesmo (produto, canal, condição) — nunca duplica. Divergência de valor
-   * vira registro no relatório (transparência), não descarte silencioso.
+   * `produto_precos_condicao`, VERSIONANDO o preço anterior — nunca o apagando.
+   *
+   *   • sem preço vigente → cria a linha vigente (`vigencia_fim IS NULL`);
+   *   • valor igual       → nada muda (idempotência: reimportar não versiona);
+   *   • valor diferente   → FECHA a vigência anterior e abre uma nova; a linha
+   *     fechada permanece como HISTÓRICO, e a mudança entra em
+   *     `produto_precos_condicao_historico` (auditável).
+   *
+   * Divergência de valor vira registro no relatório (transparência), não
+   * descarte silencioso.
    */
   async function gravarPrecos(produtoId: number, it: ItemNormalizado): Promise<void> {
+    const hoje = new Date().toISOString().slice(0, 10);
     for (const preco of it.precos) {
-      const existente = await s.findOneWhere(
+      const valor = round2(preco.preco);
+      const { rows } = await s.list(
         RESOURCES.produto_precos_condicao,
-        { empresa_id: escopo.empresaId, produto_id: produtoId, canal: preco.canal, condicao: preco.condicao },
+        { page: 1, pageSize: 500, filter: { empresa_id: escopo.empresaId, produto_id: produtoId, canal: preco.canal, condicao: preco.condicao } },
         tx
       );
-      const valor = round2(preco.preco);
-      if (!existente) {
+      const vigente = rows.find((r) => r.vigencia_fim === null || r.vigencia_fim === undefined) ?? null;
+
+      if (!vigente) {
         await s.insert(RESOURCES.produto_precos_condicao, {
-          empresa_id: escopo.empresaId, produto_id: produtoId, canal: preco.canal, condicao: preco.condicao, preco: valor, origem: 'planilha',
+          empresa_id: escopo.empresaId, produto_id: produtoId, canal: preco.canal, condicao: preco.condicao, preco: valor,
+          origem: 'planilha', vigencia_inicio: hoje, vigencia_fim: null, criado_por: autorId, atualizado_por: autorId,
+        }, tx);
+        await s.insert(RESOURCES.produto_precos_condicao_historico, {
+          empresa_id: escopo.empresaId, produto_id: produtoId, canal: preco.canal, condicao: preco.condicao,
+          preco_anterior: null, preco_novo: valor, vigencia_inicio: hoje, vigencia_fim: null, origem: 'planilha', usuario_id: autorId,
         }, tx);
         precosGravados++;
-      } else if (round2(Number(existente.preco)) !== valor) {
-        await s.update(RESOURCES.produto_precos_condicao, Number(existente.id), { preco: valor, origem: 'planilha' }, tx);
-        precosGravados++;
-        conflitosPreco.push(`${it.codigo_industria}|${preco.canal}|${preco.condicao}: ${Number(existente.preco)} → ${valor}`);
-      } else {
+      } else if (round2(Number(vigente.preco)) === valor) {
         precosIgnorados++;
+      } else {
+        // Fecha a vigência anterior (histórico) e abre a nova. Um dia de
+        // sobreposição é aceitável; o motor resolve pela vigência mais recente.
+        await s.update(RESOURCES.produto_precos_condicao, Number(vigente.id), { vigencia_fim: hoje, atualizado_por: autorId }, tx);
+        await s.insert(RESOURCES.produto_precos_condicao, {
+          empresa_id: escopo.empresaId, produto_id: produtoId, canal: preco.canal, condicao: preco.condicao, preco: valor,
+          origem: 'planilha', vigencia_inicio: hoje, vigencia_fim: null, criado_por: autorId, atualizado_por: autorId,
+        }, tx);
+        await s.insert(RESOURCES.produto_precos_condicao_historico, {
+          empresa_id: escopo.empresaId, produto_id: produtoId, canal: preco.canal, condicao: preco.condicao,
+          preco_anterior: round2(Number(vigente.preco)), preco_novo: valor, vigencia_inicio: hoje, vigencia_fim: null, origem: 'planilha', usuario_id: autorId,
+        }, tx);
+        precosVersionados++;
+        conflitosPreco.push(`${it.codigo_industria}|${preco.canal}|${preco.condicao}: ${Number(vigente.preco)} → ${valor}`);
       }
     }
   }
@@ -897,8 +1301,8 @@ async function executarCarga(plano: Plano, actor: { id?: number; name?: string }
       acao: 'importar',
       recurso: 'produtos',
       registro_id: null,
-      descricao: `Carga da política comercial: ${produtos} produto(s)-pai, ${variacoes} variação(ões), ${ignorados} ignorado(s), ${precosGravados} preço(s) oficial(is) gravado(s), ${rejeitados.length} rejeitado(s). Nenhuma quantidade física importada; nenhuma margem/fórmula do ERP sobrescrita.`,
-      dados: { produtos, variacoes, ignorados, precos_gravados: precosGravados, precos_ignorados: precosIgnorados, base_preco_definida: basePrecoDefinida, conflitos_preco: conflitosPreco.slice(0, 100), rejeitados: rejeitados.slice(0, 100), ids: ids.slice(0, 100) },
+      descricao: `Carga da política comercial (todas as abas de cadastro): ${produtos} produto(s)-pai, ${variacoes} variação(ões), ${ignorados} ignorado(s), ${precosGravados} preço(s) oficial(is) gravado(s), ${precosVersionados} preço(s) versionado(s), ${rejeitados.length} rejeitado(s). Nenhuma quantidade física importada; nenhuma margem/fórmula do ERP sobrescrita.`,
+      dados: { produtos, variacoes, ignorados, precos_gravados: precosGravados, precos_ignorados: precosIgnorados, precos_versionados: precosVersionados, base_preco_definida: basePrecoDefinida, fontes: fontesPresentes, conflitos_preco: conflitosPreco.slice(0, 100), rejeitados: rejeitados.slice(0, 100), ids: ids.slice(0, 100) },
       empresa_id: empresaDoAtorAudit(actor),
     },
     tx
@@ -908,8 +1312,10 @@ async function executarCarga(plano: Plano, actor: { id?: number; name?: string }
     produtos,
     variacoes,
     ignorados,
+    fontes: fontesPresentes,
     precos_gravados: precosGravados,
     precos_ignorados: precosIgnorados,
+    precos_versionados: precosVersionados,
     base_preco_definida: basePrecoDefinida,
     conflitos_preco: conflitosPreco,
     rejeitados,

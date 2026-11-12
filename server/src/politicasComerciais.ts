@@ -6,6 +6,8 @@ import { diaISO } from './utils';
 export type PoliticaAplicada = {
   id: number; nome: string; escopo: string; desconto_pct: number; pedido_min_valor: number;
   pedido_min_pecas: number; produto_min_qtd: number; multiplo_qtd: number; reserva_horas: number;
+  /** Quando true, a política autoriza o desconto a CUMULAR sobre um preço oficial por condição. */
+  autoriza_cumulativo: boolean;
 };
 
 const peso: Record<string, number> = { geral: 0, canal: 1, colecao: 2, catalogo: 3, cliente: 4 };
@@ -38,7 +40,7 @@ export async function resolverPoliticaComercial(ctx: { empresaId: number; catalo
     return p.escopo === 'geral';
   }).sort((a, b) => (peso[String(b.escopo)] ?? -1) - (peso[String(a.escopo)] ?? -1) || num(b.prioridade) - num(a.prioridade) || Number(b.id) - Number(a.id));
   const p = validas[0];
-  return p ? { id: Number(p.id), nome: String(p.nome), escopo: String(p.escopo), desconto_pct: num(p.desconto_pct), pedido_min_valor: num(p.pedido_min_valor), pedido_min_pecas: num(p.pedido_min_pecas), produto_min_qtd: num(p.produto_min_qtd), multiplo_qtd: Math.max(1, num(p.multiplo_qtd, 1)), reserva_horas: num(p.reserva_horas) } : null;
+  return p ? { id: Number(p.id), nome: String(p.nome), escopo: String(p.escopo), desconto_pct: num(p.desconto_pct), pedido_min_valor: num(p.pedido_min_valor), pedido_min_pecas: num(p.pedido_min_pecas), produto_min_qtd: num(p.produto_min_qtd), multiplo_qtd: Math.max(1, num(p.multiplo_qtd, 1)), reserva_horas: num(p.reserva_horas), autoriza_cumulativo: p.autoriza_cumulativo === true } : null;
 }
 
 export function precoComPolitica(preco: number, politica: PoliticaAplicada | null): number {

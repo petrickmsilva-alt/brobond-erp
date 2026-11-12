@@ -1265,6 +1265,7 @@ CREATE TABLE IF NOT EXISTS politicas_comerciais (
   multiplo_qtd INTEGER NOT NULL DEFAULT 1 CHECK (multiplo_qtd >= 1),
   reserva_horas INTEGER NOT NULL DEFAULT 0 CHECK (reserva_horas >= 0),
   ativo BOOLEAN NOT NULL DEFAULT TRUE,
+  autoriza_cumulativo BOOLEAN NOT NULL DEFAULT FALSE,
   criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
   atualizado_em TIMESTAMPTZ
 );

@@ -63,6 +63,47 @@ npm run test:pg
 
 O script `test-pg-gate.mjs` recusa banco reutilizado (`relações públicas != 0`).
 
+O teste de backup (`ops-saneamento-go-live`) chama `pg_dump`/`pg_restore` do PATH. O
+cliente precisa ser da MESMA versão maior do servidor (16): um `pg_dump` 17 grava o GUC
+`transaction_timeout` no dump e o `pg_restore` contra o 16.14 falha com
+`unrecognized configuration parameter "transaction_timeout"`. Instale o cliente 16
+(`postgresql-client-16` do PGDG) e aponte `pg_dump`/`pg_restore`/`psql` para ele via
+`update-alternatives`. No CI o cliente vem da própria imagem `postgres:16.14`, então só
+afeta o sandbox.
+
+Num sandbox RECÉM-CRIADO o daemon Docker pode estar parado e o container `brobond-pg`
+ausente. Suba o daemon (`sudo dockerd > /tmp/dockerd.log 2>&1 &`) e recrie o container:
+`sudo docker run -d --name brobond-pg -e POSTGRES_USER=brobond -e POSTGRES_PASSWORD=brobond -p 5433:5432 postgres:16.14`.
+O `postgresql-client-16` do PGDG depende de `sensible-utils` (só resolvido com o
+`apt-get update` completo, que traz o repositório Debian principal).
+
+## Carga da política comercial (migration 0117)
+
+- O importador (`server/src/cargaPoliticaComercial.ts`) lê TODAS as abas de **cadastro**,
+  não só a principal: `FONTES_CADASTRO` cobre "Política Comercial Completa" (canônica),
+  "BASE CONTROLE DE ESTOQUE" (SKUs `1001P`…) e "Política Comercial Roupas (2)" (fornecedor).
+  As abas de **movimentação** (entrada, saída, venda diária, situação de estoque) NUNCA viram
+  produto/estoque — só entram na reconciliação (relatório).
+- **Produto-pai × variação** — a família agrupa o produto; cor e tamanho são EIXOS:
+  - `principal`: categoria + coleção + marca + descrição-base;
+  - `controle_estoque`: categoria + descrição-base (cor = `SUBCATEGORIA`, que fica no
+    MEIO da descrição — `descricaoSemCor` remove como palavra isolada);
+  - `roupas`: o prefixo numérico do código (`93882-40` × `93882-42` = MESMO produto, dois
+    tamanhos; `parseCodigoRoupas` separa `PRODUTO[-COR]-TAMANHO`).
+  Sem isso cada cor/tamanho virava um produto-pai independente (bug real: 415 produtos
+  em vez de 75).
+- `descricaoSemTamanho` remove o tamanho só como TOKEN no fim; remover "M" de "MARFIM"
+  partia a família (`MARFI`).
+- SKU do produto-pai trunca em 40 chars; famílias distintas ainda podem colidir (descrições
+  que só diferem depois do corte). `desempatarSkusPai` aplica discriminador estável e reporta
+  em `validacoes.skus_pai_colididos`. O `hashChave` usa os dígitos MENOS significativos do
+  base36 (os de maior ordem não variam entre chaves vizinhas).
+- Quantidade física NUNCA é importada (nem "Qtd. Estoque" das abas de controle): o saldo
+  é lançado depois, por operação própria.
+- Código de indústria repetido (`93845-42`, linhas 7 e 90 de "Roupas") é LINHA DUPLICADA
+  (mesmo produto/tamanho/preço): a variação é idempotente por SKU e a segunda linha é
+  ignorada — preservado e reportado em `validacoes.codigos_industria_repetidos`.
+
 ## Fases 6–8 (Commerce, CRM, BI/Control Tower)
 
 - **Fase 6 — Omnichannel** (`commerce_reconciliacao`): reconciliação multicanal é LEITURA;
@@ -112,12 +153,27 @@ O script `test-pg-gate.mjs` recusa banco reutilizado (`relações públicas != 0
   do canal (`preco_atacado`/`preco_venda`) só é preenchida quando está ZERADA (nunca
   sobrescreve preço já definido). Estoque NÃO é importado.
 - `server/src/commerce/motorPrecos.ts` **orquestra** os serviços canônicos
-  (`listasPreco.precoDe`, `politicasComerciais`) — não duplica tabelas nem regras. Ordem
-  de resolução: base do canal → lista vigente → preço por condição → desconto da política.
-  Preço ausente é `null`, nunca chute.
+  (`listasPreco.precoDe`, `politicasComerciais`) — não duplica tabelas nem regras.
+  Ordem de resolução: **preço OFICIAL por condição (FINAL) → lista vigente → base do
+  canal**, e o desconto da política só incide onde é autorizado. Preço ausente é
+  `null`, nunca chute; canal ATACADO sem `preco_atacado` NÃO cai para o varejo.
+- **Cumulatividade é EXPLÍCITA (0119):** o preço da condição é FINAL por padrão. Um
+  desconto adicional só incide com `politicas_comerciais.autoriza_cumulativo` OU uma
+  regra de `politica_comercial_descontos_cumulativos` que case (escopo/canal/cliente/
+  condição/prioridade/limite). Nada de "desconto sobre desconto" silencioso.
+- **Preço por condição é VERSIONADO (0119):** `produto_precos_condicao` tem vigência
+  (`vigencia_inicio`/`vigencia_fim`) e uma única linha vigente (`vigencia_fim IS NULL`)
+  por (empresa, produto, canal, condição). Reimportar com valor diferente FECHA a
+  vigência anterior (vira histórico) e abre a nova, registrando em
+  `produto_precos_condicao_historico`; reimportar o mesmo valor não versiona (idempotência).
+  A memória de preço é histórico: FK `produto_id`/`empresa_id` é RESTRICT (produto se
+  desativa, não se exclui).
 - `politica_preco_minimo.bloqueio_ativo` nasce **DESLIGADO**: sem bloqueio ligado, margem
   e desconto são apenas INFORMADOS; nenhum limite é inventado. `precificacao_memoria` é
   append-only (grava a origem do cálculo para auditoria).
+- Ordem de declaração em `db/schema.sql` importa: `empresas` só nasce na linha ~1410,
+  então tabela nova com `REFERENCES empresas(id)` precisa entrar DEPOIS dela (bloco
+  Commerce Engine, ~2440) — senão o bootstrap aborta e a cadeia versionada inteira falha.
 - O `regras` da memória é JSONB e precisa de campo `type: 'json'` no recurso, senão o
   memdb (e o PG) não serializam o objeto.
 - Auditoria de recurso: todo recurso novo exige linha em `docs/architecture/RBAC-MATRIX.md`

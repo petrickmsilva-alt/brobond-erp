@@ -1,26 +1,26 @@
 {
-  "gerado_em": "2026-11-11T18:59:18.316Z",
+  "gerado_em": "2026-11-11T23:53:30.263Z",
   "fonte_de_verdade_do_schema": "db/schema.sql + db/migrations/*.sql (PostgreSQL); Prisma = bounded context do commerce",
   "migrations": {
-    "sql": 118,
-    "sql_com_conteudo": 118,
+    "sql": 119,
+    "sql_com_conteudo": 119,
     "prisma": 7
   },
   "tabelas": {
-    "total": 227,
-    "com_empresa_id": 206,
+    "total": 229,
+    "com_empresa_id": 208,
     "sem_empresa_id": 21,
-    "fora_do_prisma": 216
+    "fora_do_prisma": 218
   },
-  "indices": 635,
-  "constraints": 441,
+  "indices": 638,
+  "constraints": 451,
   "recursos": {
-    "total": 189,
-    "com_tabela": 189,
-    "multiempresa": 170,
-    "somente_leitura": 91,
-    "rbac_restrito": 93,
-    "cobertura_tenant_pct": 89.9
+    "total": 191,
+    "com_tabela": 191,
+    "multiempresa": 172,
+    "somente_leitura": 92,
+    "rbac_restrito": 94,
+    "cobertura_tenant_pct": 90.1
   },
   "crm": [
     {
@@ -208,13 +208,13 @@
   "testes": {
     "server": {
       "arquivos": 319,
-      "casos": 2654
+      "casos": 2669
     },
     "client": {
       "arquivos": 130,
       "casos": 1100
     },
-    "total": 3754
+    "total": 3769
   },
   "integracoes": {
     "arquivos_modules": 81,
@@ -405,6 +405,16 @@
       "nivel": "AVISO",
       "regra": "TENANT_SEM_TESTE",
       "mensagem": "O recurso \"produto_precos_condicao\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TENANT_SEM_TESTE",
+      "mensagem": "O recurso \"produto_precos_condicao_historico\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TENANT_SEM_TESTE",
+      "mensagem": "O recurso \"politica_comercial_descontos_cumulativos\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
     },
     {
       "nivel": "AVISO",
@@ -647,6 +657,7 @@
     "pdv_pagamentos",
     "plano_contas",
     "planos_comissao",
+    "politica_comercial_descontos_cumulativos",
     "politica_preco_minimo",
     "politicas_comerciais",
     "portal_acessos",
@@ -660,6 +671,7 @@
     "produto_composicao",
     "produto_fornecedor_skus",
     "produto_precos_condicao",
+    "produto_precos_condicao_historico",
     "proposta_eventos",
     "proposta_itens",
     "propostas",
