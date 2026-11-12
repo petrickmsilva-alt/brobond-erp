@@ -92,8 +92,10 @@ describe('Commerce — Omnichannel (/commerce/omnichannel)', () => {
     expect(screen.getByText('gateway 502')).toBeInTheDocument();
     expect(fetchMock.mock.calls.some(([p]) => String(p).includes('/commerce/omnichannel/painel'))).toBe(true);
     // Fase 9.4 — canais oficiais com estado REAL (REPRESENTATIVES não conectado).
+    // O título do painel nasce no mount; os canais chegam depois (fetch próprio),
+    // então a asserção do estado espera o dado REAL em vez de correr com ele.
     expect(await screen.findByText('Canais comerciais oficiais')).toBeInTheDocument();
-    expect(screen.getByText('Homologação pendente')).toBeInTheDocument();
+    expect(await screen.findByText('Homologação pendente')).toBeInTheDocument();
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 
