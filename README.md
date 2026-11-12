@@ -94,6 +94,30 @@ apaga**; toda entidade nova respeita `empresa_id`, RBAC, auditoria, FK explícit
 e o padrão de tela **LISTA → PÁGINA**
 ([`docs/PADRAO-CADASTROS-AUXILIARES.md`](docs/PADRAO-CADASTROS-AUXILIARES.md)).
 
+## Performance e capacidade
+
+A operação de latência (diagnóstico, correções, metas e a comparação
+Render × VPS) está documentada em
+**[`docs/PERFORMANCE/DIAGNOSTICO-E-PLANO.md`](docs/PERFORMANCE/DIAGNOSTICO-E-PLANO.md)**.
+Resumo do que existe hoje no código:
+
+- **Diagnóstico próprio** (sem APM pago): `GET /api/admin/metrics` (JSON) e
+  `/api/admin/metrics.prom` (Prometheus) com **P50/P95/P99 por rota**, tempo de
+  banco, espera de pool, chamadas externas, CPU, memória e lag do event loop.
+  Cada resposta também traz `Server-Timing` (fases `app`, `db`, `pool`,
+  `externo`) e `X-Request-ID` para correlação. Nada de corpo, token ou dado
+  pessoal é registrado.
+- **Ferramentas** (`scripts/perf/`): `npm run perf:diagnostico` (latência por
+  rota, com cold start separado), `npm run perf:carga` (estágios progressivos de
+  usuários simultâneos), `npm run perf:explain` (`EXPLAIN ANALYZE` em banco de
+  teste, somente leitura), `npm run perf:indices` (`CREATE INDEX CONCURRENTLY`,
+  dry-run por padrão) e `npm run perf:benchmark` (Render × VPS com o mesmo
+  código e o mesmo banco).
+- **Sonda de banco**: `GET /api/health/db` devolve a latência de ida e volta
+  API↔PostgreSQL — serve de termômetro e de keep-alive para o Neon.
+- **VPS**: `deploy/vps/` tem `Dockerfile` + `docker-compose.yml` para rodar a
+  MESMA versão da aplicação num ambiente paralelo de medição.
+
 ## Como rodar localmente
 
 ```bash

@@ -3,9 +3,10 @@ import { planejarDemanda } from './producaoPlanejamento';
 import { paymentsRouter, checkoutMethods } from '../../modules/payments/api/routes';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import cors from 'cors';
+import compression from 'compression';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { bootFailure, dbBootState, dbConnectionEstablished, dbStatus, hasDatabaseUrl, isDbConnected, isDbDegraded, migrate, migrationError } from './db';
+import { bootFailure, dbBootState, dbConnectionEstablished, dbStatus, hasDatabaseUrl, isDbConnected, isDbDegraded, migrate, migrationError, query as queryDb } from './db';
 import {
   ADMIN_EMAIL,
   changePassword,
@@ -59,6 +60,7 @@ import { reconciliarWebhooksLegados } from './webhookReconciliacao';
 import { assertProductionSecrets, bancoAusenteEmProducao, bloquearSenhaProvisoria, corsOrigin, loginRateLimit, securityHeaders, trustProxySetting } from './security';
 import { initSentry, log, reportarErro } from './log';
 import { requestObservability } from './observability';
+import { iniciarColetaDeProcesso, instrumentarFetchGlobal, prometheus, registrarFrontend, snapshot } from './metrics';
 import { smtpConfigurado } from './mail';
 import { carregarOrigemDoBanco, revisarConfiguracaoOrigem, statusOrigemAsync } from './urlPublica';
 import { obterEnderecoPublico, removerEnderecoPublico, salvarEnderecoPublico } from './configSistema';
@@ -475,6 +477,10 @@ if (!(process.env.ADMIN_PASSWORD || '').trim()) {
 // Avisamos no boot em vez de deixar o usuário descobrir que o link é "URL inválida".
 const AVISO_ORIGEM = revisarConfiguracaoOrigem();
 initSentry();
+// PERF-01 — diagnóstico de latência: lag do event loop, CPU, memória e
+// chamadas a serviços externos (a captura fica em server/src/metrics.ts).
+iniciarColetaDeProcesso();
+instrumentarFetchGlobal();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const VERSION = process.env.npm_package_version || '0.6.0';
@@ -489,6 +495,26 @@ app.disable('x-powered-by');
 app.set('trust proxy', trustProxySetting());
 app.use(securityHeaders);
 app.use(requestObservability);
+// PERF-02 — COMPRESSÃO HTTP. As respostas do ERP são JSON volumoso: o
+// `/api/meta` (metadados de todos os módulos) e as listagens paginadas com
+// fotos chegam a centenas de KB. Sem gzip, esse payload é transferido inteiro
+// a cada tela. `compression` negocia por Accept-Encoding e respeita
+// `no-transform`. Recusa comprimir abaixo do limiar (custo > ganho) e nunca
+// comprime upload/download binário já comprimido (imagens, xlsx, pdf).
+app.use(
+  compression({
+    threshold: 1024, // bytes mínimos para valer a pena
+    level: Number(process.env.HTTP_COMPRESSION_LEVEL) || 6,
+    // Event streams passam intactos (bufferizar quebraria o streaming).
+    // Para o resto, a decisão fica com o filtro padrão, que usa a base
+    // `compressible` (conhece image/*, zip, pdf, xlsx etc. como não
+    // compressíveis) e respeita `no-transform`.
+    filter: (req, res) => {
+      if (/event-stream/i.test(String(res.getHeader('Content-Type') || ''))) return false;
+      return compression.filter(req, res);
+    },
+  })
+);
 // Endpoints públicos também são consumidos por FORA do ERP: o site de varejo
 // (brobond.com.br) busca o catálogo por JavaScript e o incorpora em iframe.
 // Liberamos a leitura por CORS (sem credenciais, sem cookie) — os dados do
@@ -551,10 +577,13 @@ const wrap =
   };
 
 /** Carrega o recurso da rota (404 se não existir). */
-function resourceParam(req: Request, _res: Response, next: NextFunction) {
+function resourceParam(req: Request, res: Response, next: NextFunction) {
   const r = getPublicResource(req.params.resource);
   if (!r) return next(new HttpError(404, 'Recurso não encontrado'));
   (req as any).resource = r;
+  // PERF-01: rótulo da métrica. Só o slug VALIDADO (recurso existente) vira
+  // série temporal — texto arbitrário do cliente nunca entra em log/métrica.
+  res.locals.recurso = r.key;
   next();
 }
 
@@ -638,6 +667,42 @@ app.get('/api/health', (_req, res) => {
 });
 
 // ----------------------------------------------------------------------------
+// PERF-10 — SONDA DE LATÊNCIA DO BANCO (`GET /api/health/db`).
+//
+// Faz um `SELECT 1` e devolve o tempo de ida e volta. Serve a duas coisas:
+//
+//   1. MEDIÇÃO — é a latência PURA entre a API e o PostgreSQL (Render ↔ Neon),
+//      que entra em TODA consulta de toda tela. Sem esse número não se sabe se
+//      a lentidão é do servidor, do banco ou da rede entre os dois;
+//   2. KEEP-ALIVE — plano gratuito da Neon suspende o compute após alguns
+//      minutos ociosos, e o primeiro acesso depois disso paga o acordar. Um
+//      monitor externo chamando este endpoint a cada poucos minutos mantém
+//      compute e pool acordados durante o horário comercial.
+//
+// Público e sem dado de negócio (não exige sessão, não expõe esquema, versão do
+// servidor nem mensagem de erro crua). Responde 503 se o banco não estiver
+// pronto — o monitor aprende com isso.
+// ----------------------------------------------------------------------------
+app.get('/api/health/db', wrap(async (_req: Request, res: Response) => {
+  if (!hasDatabaseUrl()) {
+    return res.status(503).json({ ok: false, db: 'memory' });
+  }
+  if (!isDbConnected()) {
+    return res.status(503).json({ ok: false, db: isDbDegraded() ? 'postgres-degraded' : 'postgres-conectando' });
+  }
+  const inicio = process.hrtime.bigint();
+  try {
+    await queryDb('SELECT 1 AS ok');
+    const ms = Number(process.hrtime.bigint() - inicio) / 1e6;
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({ ok: true, db: 'postgres', db_ms: Math.round(ms * 100) / 100 });
+  } catch {
+    // Sem detalhe de erro: mensagem de driver pode conter host/usuário.
+    return res.status(503).json({ ok: false, db: 'postgres-indisponivel' });
+  }
+}));
+
+// ----------------------------------------------------------------------------
 // PROD-DB-01.1 — prontidão do banco obrigatório.
 //
 // Quando DATABASE_URL existe mas o banco não está pronto (conectando,
@@ -646,19 +711,74 @@ app.get('/api/health', (_req, res) => {
 // diagnóstica) seguem respondendo; rotas de negócio e cron respondem 503.
 // ----------------------------------------------------------------------------
 const ROTAS_PERMITIDAS_SEM_BANCO_PRONTO = [/^\/api\/auth\//];
-function bloqueioDeProntidao(req: Request, res: Response, next: NextFunction) {
+
+// ---------------------------------------------------------------------------
+// PERF-06 — ESPERA DE PRONTIDÃO NO BOOT (em vez de 503 imediato).
+//
+// O processo passa a aceitar conexões ANTES de migrar (necessário para a
+// plataforma enxergar a porta). Durante essa janela, o gate respondia 503.
+// O problema não era o 503 em si, e sim o efeito no cliente: `apiFetch` repete
+// toda leitura em 5xx com backoff de 1s e depois 2s (`client/src/lib/api.ts`),
+// então cada acesso feito durante um cold start custava ~3s EXTRA além do
+// tempo de boot — e, se o boot fosse mais longo que a segunda tentativa, o
+// usuário via erro. É exatamente o formato do relato "8 a 10 segundos".
+//
+// Aqui a requisição ESPERA a prontidão por até BOOT_HOLD_MS (20s por padrão) e
+// então segue normalmente: uma requisição lenta-porém-correta em vez de duas
+// falhas e três segundos de backoff.
+//
+// O que NÃO muda:
+//   • banco DEGRADADO (falha de conexão/migração) continua 503 imediato — ali
+//     não há o que esperar, e segurar a conexão esconderia o incidente;
+//   • `/api/health` responde na hora (é o health check da plataforma);
+//   • rotas de autenticação de emergência seguem liberadas;
+//   • passado o limite, o comportamento volta a ser 503 com a mesma mensagem.
+// BOOT_HOLD_MS=0 desliga (volta ao 503 imediato).
+// ---------------------------------------------------------------------------
+const BOOT_HOLD_MS = Math.max(0, Number(process.env.BOOT_HOLD_MS ?? 20_000) || 0);
+let sinalizarProntidao: (() => void) | null = null;
+const promessaDeProntidao = new Promise<void>((resolve) => {
+  sinalizarProntidao = resolve;
+});
+function marcarProntoParaTrafego(): void {
+  appReady = true;
+  sinalizarProntidao?.();
+}
+
+async function aguardarProntidao(limiteMs: number): Promise<boolean> {
+  if (appReady) return true;
+  if (limiteMs <= 0) return false;
+  let temporizador: NodeJS.Timeout | undefined;
+  const expirou = new Promise<boolean>((resolve) => {
+    temporizador = setTimeout(() => resolve(false), limiteMs);
+    temporizador.unref?.();
+  });
+  try {
+    return await Promise.race([promessaDeProntidao.then(() => true), expirou]);
+  } finally {
+    if (temporizador) clearTimeout(temporizador);
+  }
+}
+
+async function bloqueioDeProntidao(req: Request, res: Response, next: NextFunction) {
   if (req.path === '/api/health') return next();
   // R-3: produção sem DATABASE_URL não atende negócio (defesa além do boot).
   if (bancoAusenteEmProducao(process.env, hasDatabaseUrl())) {
     return res.status(503).json({ error: 'Banco de dados obrigatório em produção não configurado.' });
   }
-  if (hasDatabaseUrl() && (isDbDegraded() || !appReady)) {
-    if (ROTAS_PERMITIDAS_SEM_BANCO_PRONTO.some((re) => re.test(req.path))) return next();
+  const liberada = () => ROTAS_PERMITIDAS_SEM_BANCO_PRONTO.some((re) => re.test(req.path));
+  // Degradado = falha real: nada a esperar.
+  if (hasDatabaseUrl() && isDbDegraded()) {
+    if (liberada()) return next();
     return res.status(503).json({ error: 'Banco de dados não está pronto. O serviço está indisponível até a migração concluir.' });
   }
-  if (!hasDatabaseUrl() && !appReady) {
-    if (ROTAS_PERMITIDAS_SEM_BANCO_PRONTO.some((re) => re.test(req.path))) return next();
-    return res.status(503).json({ error: 'Aplicação ainda está inicializando.' });
+  // Ainda inicializando (conectando/migrando/bootstrap): espera, não recusa.
+  if (!appReady) {
+    if (liberada()) return next();
+    const ficouPronto = await aguardarProntidao(BOOT_HOLD_MS);
+    if (!ficouPronto) {
+      return res.status(503).json({ error: 'Banco de dados não está pronto. O serviço está indisponível até a migração concluir.' });
+    }
   }
   next();
 }
@@ -762,6 +882,47 @@ app.use('/api', (req: Request, res: Response, next: NextFunction) => {
     code: 'EMERGENCIA_RESTRITA',
   });
 });
+
+// ----------------------------------------------------------------------------
+// PERF-01 — DIAGNÓSTICO DE PERFORMANCE (instrumentação própria, sem APM pago).
+//
+// `/api/admin/metrics` devolve P50/P95/P99 por rota, tempo de banco, espera de
+// pool, chamadas externas, CPU/memória e lag do event loop. Somente admin.
+// `/api/admin/metrics.prom` serve o mesmo em formato Prometheus (scrape
+// opcional). Nenhum valor de parâmetro, corpo ou dado pessoal é exposto: as
+// consultas aparecem por impressão digital (verbo + tabelas).
+//
+// Montado ANTES das rotas genéricas `/api/:resource` — senão "metrics" cairia
+// como nome de recurso e receberia 404.
+// ----------------------------------------------------------------------------
+app.get('/api/admin/metrics', requireRole('admin'), (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.json(snapshot());
+});
+app.get('/api/admin/metrics.prom', requireRole('admin'), (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Content-Type', 'text/plain; version=0.0.4; charset=utf-8');
+  res.send(prometheus());
+});
+// RUM do frontend: tempo de tela, TTFB, bytes e chamadas de API por tela.
+// Autenticado; corpo mínimo e validado — o navegador nunca envia dados de
+// formulário, apenas contagens e milissegundos.
+app.post('/api/metrics/frontend', wrap(async (req: Request, res: Response) => {
+  const corpo = (req.body ?? {}) as Record<string, unknown>;
+  const amostras = Array.isArray(corpo.amostras) ? corpo.amostras.slice(0, 50) : [];
+  for (const bruto of amostras) {
+    const a = (bruto ?? {}) as Record<string, unknown>;
+    registrarFrontend({
+      tela: String(a.tela ?? ''),
+      ms: Number(a.ms),
+      ttfb_ms: a.ttfb_ms === undefined ? undefined : Number(a.ttfb_ms),
+      api_bytes: a.api_bytes === undefined ? undefined : Number(a.api_bytes),
+      api_chamadas: a.api_chamadas === undefined ? undefined : Number(a.api_chamadas),
+      api_deduplicadas: a.api_deduplicadas === undefined ? undefined : Number(a.api_deduplicadas),
+    });
+  }
+  res.status(204).end();
+}));
 
 // SEC-03 — TODO o prefixo /api/admin/* exige privilégio administrativo
 // verificado no SERVIDOR (guard canônico requireRole, derivado da identidade
@@ -1747,16 +1908,24 @@ async function start() {
   // Commerce OS: hooks síncronos em memória (só executam mediante tráfego/cron).
   registrarHooksCommerce();
   await ensureAdmin();
-  await migrarSenhasLegadas();
-  // Endereço público salvo no banco (Configurações › Sistema): já entra no
-  // cache do urlPublica.ts antes da primeira requisição, para o primeiro
-  // convite do processo já sair com a base certa.
-  await carregarOrigemDoBanco(true);
-  await limpezaPeriodica();
+  // PERF-07 — o que é INDEPENDENTE roda em paralelo.
+  //
+  // Estas três tarefas não dependem umas das outras (hash de senhas legadas,
+  // cache do endereço público, limpeza de sessões/buckets). Em série, cada uma
+  // pagava seu próprio round-trip antes de a instância declarar prontidão —
+  // e é justamente essa janela que o usuário sente como "lentidão no acesso".
+  await Promise.all([
+    migrarSenhasLegadas(),
+    // Endereço público salvo no banco (Configurações › Sistema): já entra no
+    // cache do urlPublica.ts antes da primeira requisição, para o primeiro
+    // convite do processo já sair com a base certa.
+    carregarOrigemDoBanco(true),
+    limpezaPeriodica(),
+  ]);
 
   // Só declara prontidão para tráfego após banco conectado/migrado e bootstrap
   // inicial concluído. Workers/filas/motores em segundo plano iniciam depois.
-  appReady = true;
+  marcarProntoParaTrafego();
 
   // Motor analítico 1. MEU NEGÓCIOS: só inicia após a prontidão confirmada.
   initNegociosEngine();

@@ -357,18 +357,38 @@ export async function listRecords(r: Resource, p: ListParams, escopoOuAtor?: Esc
   // corretos — e, quando não há recorte por equipe, a listagem segue 100% SQL.
   const out = (r.key === 'representantes' ? await listRepresentantesPorEquipe(r, params, escopo) : null)
     ?? (await getStore().list(r, params));
+  // Segurança de tenant primeiro: se alguma referência não pertence ao tenant do
+  // registro raiz, a listagem termina em 404 — não se gasta consulta anotando
+  // linha que não será devolvida.
   await validarReferenciasDeSaida(r, out.rows, escopo);
-  await attachImages(r, out.rows);
+  // Síncrona e sem I/O: roda antes do lote paralelo (era uma linha solta entre
+  // os awaits e não pode ser perdida na reorganização).
   anotarStatusSenha(r, out.rows);
-  await anotarUsoLocal(r, out.rows);
-  await anotarUsoVinculado(r, out.rows, escopo);
-  await anotarUsoColecao(r, out.rows, escopo);
-  await attachGradeTamanhos(r, out.rows);
+  // PERF-04 — ANOTAÇÕES INDEPENDENTES EM PARALELO.
+  //
+  // Cada anotador grava campos VIRTUAIS distintos na mesma linha (fotos,
+  // uso, tamanhos, saldo). Antes eram awaits em série: a tela pagava a soma de
+  // todos os round-trips (`/api/produtos` numa instância distante do banco:
+  // 2 consultas = 2×RTT, mas nas telas de grades/insumos chegavam a 6).
+  // Em paralelo, o custo é o MAIOR deles, não a soma.
+  //
+  // `anotarGrades` fica de fora deste lote porque LÊ `uso_vinculado` — campo
+  // escrito por `anotarUsoVinculado` — para compor o rótulo de uso; roda logo
+  // depois, preservando a regra atual.
+  await Promise.all([
+    attachImages(r, out.rows),
+    anotarUsoLocal(r, out.rows),
+    anotarUsoVinculado(r, out.rows, escopo),
+    anotarUsoColecao(r, out.rows, escopo),
+    attachGradeTamanhos(r, out.rows),
+    anotarEstoqueInsumos(r, out.rows, escopo),
+    // Equipe vigente e carteira: projeção em lote (uma consulta por tabela),
+    // recortada pela empresa ativa — nunca um N+1.
+    r.key === 'representantes'
+      ? anotarComercialRepresentantes(getStore(), out.rows, escopo)
+      : Promise.resolve(),
+  ]);
   await anotarGrades(r, out.rows, escopo);
-  await anotarEstoqueInsumos(r, out.rows, escopo);
-  // Equipe vigente e carteira: projeção em lote (uma consulta por tabela),
-  // recortada pela empresa ativa — nunca um N+1.
-  if (r.key === 'representantes') await anotarComercialRepresentantes(getStore(), out.rows, escopo);
   // Outbox payload é de processamento interno e pode conter dados sensíveis.
   if (r.key === 'commerce_outbox') for (const row of out.rows) delete row.payload;
   return out;
@@ -2457,22 +2477,57 @@ export async function usoDoLocal(local: Row, tx?: Tx): Promise<UsoLocal> {
   return { saldos, movimentacoes, inventarios, emUso: saldos + movimentacoes + inventarios > 0 };
 }
 
-/** Anota cada local com o uso (a UI usa isso para avisar antes de excluir/renomear). */
+/**
+ * Anota cada local com o uso (a UI usa isso para avisar antes de excluir/renomear).
+ *
+ * PERF-03 — SEM N+1. Antes, cada local da página disparava 5 consultas
+ * (4 contagens em `usoDoLocal` + a contagem de ativos), ou seja 25 consultas
+ * para uma página de 5 locais e 50 para uma de 10 — cada uma um round-trip
+ * completo ao PostgreSQL gerenciado. Agora o custo é CONSTANTE em relação ao
+ * número de linhas: 4 agregações (GROUP BY) para a página inteira + 1 contagem
+ * por EMPRESA distinta (locais são poucos por tenant).
+ *
+ * Os números devolvidos são idênticos aos de `usoDoLocal` (mesmas tabelas,
+ * mesmas colunas, mesmo recorte — inclusive sem filtro de empresa na contagem
+ * de vínculos, porque o `id` do local já é único no tenant).
+ */
 async function anotarUsoLocal(r: Resource, rows: Row[]): Promise<void> {
   if (r.key !== 'locais' || !rows.length) return;
+  const ids = rows.map((row) => Number(row.id)).filter((n) => Number.isInteger(n) && n > 0);
+  if (!ids.length) return;
   const s = getStore();
+  const estoques = getResource('estoques')!;
+  const movimentacoes = getResource('movimentacoes')!;
+  const inventarios = getResource('inventarios')!;
+
+  const empresas = [
+    ...new Set(rows.map((row) => Number(row.empresa_id ?? EMPRESA_PADRAO)).filter((n) => Number.isInteger(n))),
+  ];
+  const empresaDoRow = (row: Row) => Number(row.empresa_id ?? EMPRESA_PADRAO);
+
+  const [saldos, movOrigem, movDestino, inventariosPorLocal, ativosPorEmpresa] = await Promise.all([
+    s.countByColumn(estoques, 'local_id', ids),
+    s.countByColumn(movimentacoes, 'local_id', ids),
+    s.countByColumn(movimentacoes, 'local_destino_id', ids),
+    s.countByColumn(inventarios, 'local_id', ids),
+    Promise.all(
+      empresas.map(async (empresaId) => [
+        empresaId,
+        await s.countWhere(r, { empresa_id: empresaId, ativo: true }),
+      ] as const)
+    ).then((pares) => new Map<number, number>(pares)),
+  ]);
+
   for (const row of rows) {
-    const uso = await usoDoLocal(row);
-    const ativos = await s.list(r, {
-      page: 1,
-      pageSize: 1,
-      filter: { empresa_id: Number(row.empresa_id), ativo: true },
-    });
-    row.em_uso = uso.emUso;
-    row.uso_saldos = uso.saldos;
-    row.uso_movimentacoes = uso.movimentacoes;
-    row.uso_inventarios = uso.inventarios;
-    row.eh_ultimo_ativo = ativoYn(row) && ativos.total <= 1;
+    const id = Number(row.id);
+    const nSaldos = saldos.get(id) ?? 0;
+    const nMovs = (movOrigem.get(id) ?? 0) + (movDestino.get(id) ?? 0);
+    const nInv = inventariosPorLocal.get(id) ?? 0;
+    row.em_uso = nSaldos + nMovs + nInv > 0;
+    row.uso_saldos = nSaldos;
+    row.uso_movimentacoes = nMovs;
+    row.uso_inventarios = nInv;
+    row.eh_ultimo_ativo = ativoYn(row) && (ativosPorEmpresa.get(empresaDoRow(row)) ?? 0) <= 1;
   }
 }
 

@@ -1,4 +1,4 @@
-import { Fragment, lazy, Suspense } from 'react';
+import { Fragment, lazy, Suspense, useEffect } from 'react';
 import { BrowserRouter, Navigate, Route, Routes, useLocation, useParams } from 'react-router-dom';
 import { Loader2 } from 'lucide-react';
 import { useAuth } from './auth/AuthContext';
@@ -6,6 +6,7 @@ import Layout from './components/Layout';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import { MODULES, usaCrudGenerico, visibleModules } from './modules';
+import { finalizarMedicaoTela, iniciarMedicaoTela } from './lib/perf';
 
 // Code-splitting: só a tela de login e o dashboard (a primeira coisa que qualquer
 // pessoa vê) entram no bundle inicial. O resto — inclusive as páginas públicas
@@ -143,9 +144,29 @@ function CotacoesCompraDetalhe() {
   return <CotacoesCompraPage initialId={id ? Number(id) : null} />;
 }
 
+/**
+ * PERF-09 — TELEMETRIA DE TELA.
+ *
+ * Mede, por rota, o tempo até o primeiro paint e agrega as chamadas de API
+ * daquela tela (quantidade, bytes e deduplicações). O envio é periódico e
+ * best-effort: telemetria nunca bloqueia nem atrasa a navegação.
+ *
+ * O rótulo da rota é normalizado (`/produtos/123` → `/produtos/:id`), então a
+ * série temporal não cresce com o número de registros nem carrega IDs.
+ */
+function TelemetriaDeTela() {
+  const { pathname } = useLocation();
+  useEffect(() => {
+    iniciarMedicaoTela(pathname);
+    return () => finalizarMedicaoTela();
+  }, [pathname]);
+  return null;
+}
+
 export default function App() {
   return (
     <BrowserRouter>
+      <TelemetriaDeTela />
       <Suspense fallback={<Loading />}>
         <Routes>
           <Route path="/login" element={<Login />} />
