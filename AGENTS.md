@@ -71,6 +71,12 @@ cliente precisa ser da MESMA versão maior do servidor (16): um `pg_dump` 17 gra
 `update-alternatives`. No CI o cliente vem da própria imagem `postgres:16.14`, então só
 afeta o sandbox.
 
+Num sandbox RECÉM-CRIADO o daemon Docker pode estar parado e o container `brobond-pg`
+ausente. Suba o daemon (`sudo dockerd > /tmp/dockerd.log 2>&1 &`) e recrie o container:
+`sudo docker run -d --name brobond-pg -e POSTGRES_USER=brobond -e POSTGRES_PASSWORD=brobond -p 5433:5432 postgres:16.14`.
+O `postgresql-client-16` do PGDG depende de `sensible-utils` (só resolvido com o
+`apt-get update` completo, que traz o repositório Debian principal).
+
 ## Carga da política comercial (migration 0117)
 
 - O importador (`server/src/cargaPoliticaComercial.ts`) lê TODAS as abas de **cadastro**,
