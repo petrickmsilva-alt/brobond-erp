@@ -1,13 +1,27 @@
 // ============================================================================
 // AUTENTICAÇÃO PARA OS SCRIPTS DE PERFORMANCE — inclusive MFA/TOTP.
 //
-// O ERP exige MFA para administradores. Sem isto, os scripts de medição só
-// funcionariam com uma conta privilegiada sem segundo fator — o que seria uma
-// péssima razão para enfraquecer a segurança. Aqui o TOTP (RFC 6238, HMAC-SHA1,
-// 30 s, 6 dígitos) é calculado localmente a partir do segredo do usuário de
-// TESTE, informado por variável de ambiente.
+// O ERP exige MFA para administradores. Este módulo calcula o TOTP (RFC 6238,
+// HMAC-SHA1, janela de 30 s, 6 dígitos) localmente a partir de `PERF_TOTP_SECRET`
+// sem desabilitar MFA nem criar bypass de autenticação.
 //
-// O segredo MFA nunca é impresso nem incluído no relatório.
+// EFEITOS COLATERAIS OPERACIONAIS DA AUTENTICAÇÃO (transparência obrigatória):
+//   • `POST /api/auth/login` avalia credenciais, atualiza contadores de rate
+//     limit e registra evento na trilha de auditoria de acesso;
+//   • quando a conta exige segundo fator e `totpSegredo` é informado,
+//     `POST /api/auth/login/mfa` valida o código TOTP, cria sessão autenticada
+//     na tabela de sessões e grava auditoria de login MFA;
+//   • em ambiente de teste onde o administrador ainda não concluiu o cadastro
+//     inicial de MFA (`mfa_setup_required` e `totpSegredo` ausente), a chamada
+//     a `POST /api/auth/mfa/desafio` seguida de `/api/auth/login/mfa` conclui
+//     a ativação do MFA daquela conta técnica (em contas com MFA já ativo, o
+//     servidor recusa `/mfa/desafio` e exige `PERF_TOTP_SECRET`).
+//
+// REGRAS DE SEGURANÇA E PRIVACIDADE:
+//   • Utilize exclusivamente conta técnica autorizada para diagnóstico (nunca
+//     conta pessoal de usuário real sem autorização explícita).
+//   • Senha, token JWT, segredo TOTP, e-mail e cookies NUNCA são impressos em
+//     mensagens de erro nem persistidos nos relatórios.
 // ============================================================================
 import { createHmac } from 'node:crypto';
 
@@ -49,23 +63,21 @@ export function gerarTotp(segredo, quando = Date.now()) {
 }
 
 /**
- * Faz login e devolve o token de sessão. Trata o fluxo real do ERP:
- *   • administrador sem MFA cadastrado → devolve `mfa_setup_required` +
- *     ticket; o script busca o segredo em `/auth/mfa/desafio` (quando
- *     `TOTP_SEGREDO` não foi informado) e conclui o cadastro;
- *   · MFA já ativo → usa `TOTP_SEGREDO` para responder ao desafio.
+ * Faz login e devolve o token de sessão em memória (nunca impresso).
  *
- * `null` = credenciais ausentes (segue só com rotas públicas).
- * Lança erro com mensagem clara quando não é possível autenticar.
+ * `null` = credenciais ausentes (segue só com rotas públicas, sem sessão).
  */
 export async function autenticar(base, { email, senha, totpSegredo } = {}) {
-  if (!email || !senha) return { token: null, publico: true };
+  if (!email || !senha) {
+    return { token: null, publico: true, mfa: false, efeitosOperacionais: [] };
+  }
 
   const post = async (caminho, corpo) => {
     const res = await fetch(`${base}${caminho}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(corpo),
+      credentials: 'omit',
     });
     const dados = await res.json().catch(() => ({}));
     return { res, dados };
@@ -73,23 +85,32 @@ export async function autenticar(base, { email, senha, totpSegredo } = {}) {
 
   const primeiro = await post('/api/auth/login', { email, password: senha });
   if (!primeiro.res.ok) {
-    throw new Error(`login falhou (HTTP ${primeiro.res.status}). Use uma conta de teste.`);
+    throw new Error(`login falhou (HTTP ${primeiro.res.status}). Utilize uma conta técnica autorizada.`);
   }
-  if (primeiro.dados.token) return { token: primeiro.dados.token, mfa: false };
+  if (primeiro.dados.token) {
+    return {
+      token: primeiro.dados.token,
+      publico: false,
+      mfa: false,
+      efeitosOperacionais: ['sessao_criada', 'auditoria_login'],
+    };
+  }
 
   const ticket = primeiro.dados.mfa_ticket;
   if (!ticket) throw new Error('login não devolveu token nem ticket de MFA.');
 
+  const efeitos = ['desafio_mfa'];
   let segredo = totpSegredo || '';
   if (!segredo) {
-    // Cadastro guiado: o próprio servidor devolve o segredo pendente.
+    // Cadastro guiado (apenas contas técnicas recém-criadas sem MFA ativo).
     const desafio = await post('/api/auth/mfa/desafio', { mfa_ticket: ticket });
     if (!desafio.res.ok) {
       throw new Error(
-        'MFA já está ativo e PERF_TOTP_SECRET não foi informado — impossível automatizar o segundo fator.'
+        'MFA já está ativo e PERF_TOTP_SECRET não foi informado — impossível autenticar sem o segundo fator.'
       );
     }
     segredo = desafio.dados.segredo;
+    efeitos.push('cadastro_mfa_guiado');
   }
 
   const codigo = gerarTotp(segredo);
@@ -97,5 +118,11 @@ export async function autenticar(base, { email, senha, totpSegredo } = {}) {
   if (!segundo.res.ok || !segundo.dados.token) {
     throw new Error(`segundo fator recusado (HTTP ${segundo.res.status}). Confira PERF_TOTP_SECRET.`);
   }
-  return { token: segundo.dados.token, mfa: true };
+  efeitos.push('sessao_criada', 'auditoria_login_mfa');
+  return {
+    token: segundo.dados.token,
+    publico: false,
+    mfa: true,
+    efeitosOperacionais: efeitos,
+  };
 }
