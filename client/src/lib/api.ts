@@ -1,3 +1,5 @@
+import { registrarChamadaApi } from './perf';
+
 const TOKEN_KEY = 'brobond_token';
 
 export function getToken(): string | null {
@@ -36,7 +38,16 @@ export class ApiError extends Error {
 const DEFAULT_TIMEOUT_MS = 30_000;
 
 // Helper de fetch que injeta o token JWT, trata 401 (desloga), timeout e retry.
-export async function apiFetch<T = any>(path: string, opts: RequestInit = {}): Promise<T> {
+/**
+ * Núcleo da chamada: executa a requisição (com retry seguro) e devolve os
+ * dados JÁ parseados junto do tamanho da resposta (para o RUM).
+ *
+ * `bytes` é usado só para telemetria agregada — nunca é enviado conteúdo.
+ */
+async function apiFetchInterno<T = any>(
+  path: string,
+  opts: RequestInit = {}
+): Promise<{ dados: T; bytes: number }> {
   const token = getToken();
   const controller = new AbortController();
   let timedOut = false;
@@ -76,6 +87,11 @@ export async function apiFetch<T = any>(path: string, opts: RequestInit = {}): P
     }
     if (!res) throw new ApiError(0, 'Sem conexão com o servidor.');
     const data = await res.json().catch(() => ({}));
+    // Tamanho transferido, para a métrica de payload do RUM. Em resposta
+    // comprimida é o tamanho do CORPO NA REDE (é o que o usuário espera), e
+    // quando o servidor usa chunked (sem Content-Length) fica 0 — a medição de
+    // bytes do lado do servidor cobre esse caso.
+    const bytes = Number(res.headers?.get('content-length')) || 0;
     if (controller.signal.aborted) throw aborted();
     if (res.status === 401) {
       const isLoginRequest = path.includes('/auth/login');
@@ -88,11 +104,78 @@ export async function apiFetch<T = any>(path: string, opts: RequestInit = {}): P
       throw new ApiError(401, data?.error || (isLoginRequest ? 'E-mail ou senha incorretos' : 'Sessão expirada'), data?.fields, data?.code, data?.details);
     }
     if (!res.ok) throw new ApiError(res.status, data?.error || 'Erro na requisição', data?.fields, data?.code, data?.details);
-    return data as T;
+    return { dados: data as T, bytes };
   } finally {
     clearTimeout(timeoutId);
     external?.removeEventListener('abort', onAbort);
   }
+}
+
+// ---------------------------------------------------------------------------
+// PERF-08 — COALESCING DE LEITURAS IDÊNTICAS CONCORRENTES.
+//
+// Duas telas/efeitos que montam juntos pedem o MESMO recurso no mesmo instante
+// (clássico: layout + página buscando o mesmo cadastro). Cada chamada custava
+// um round-trip completo. Aqui a segunda chamada idêntica — mesmo método, mesmo
+// caminho, enquanto a primeira está em voo — reaproveita a resposta.
+//
+// Regras (conservadoras de propósito):
+//   • Só GET/HEAD (leitura). Escrita NUNCA é compartilhada.
+//   • Só sem `body` e sem `signal` do chamador: quem passa AbortSignal controla
+//     o próprio ciclo de vida e não pode ser compartilhado com outra tela.
+//   • Cada chamador recebe uma CÓPIA do resultado: um componente que mutar o
+//     objeto não afeta o outro (sem aliasing acidental).
+//   • Erros não são cacheados: a promessa sai do mapa assim que termina.
+// ---------------------------------------------------------------------------
+const leiturasEmVoo = new Map<string, Promise<{ dados: any; bytes: number }>>();
+
+function copiar<T>(valor: T): T {
+  if (valor === null || typeof valor !== 'object') return valor;
+  try {
+    return typeof structuredClone === 'function' ? structuredClone(valor) : valor;
+  } catch {
+    return valor;
+  }
+}
+
+export async function apiFetch<T = any>(path: string, opts: RequestInit = {}): Promise<T> {
+  const metodo = String(opts.method || 'GET').toUpperCase();
+  const podeCoalescer = (metodo === 'GET' || metodo === 'HEAD') && !opts.signal && !opts.body;
+  const chave = `${metodo} ${path}`;
+  const inicio = typeof performance !== 'undefined' ? performance.now() : Date.now();
+  const medir = (bytes: number, deduplicada: boolean) => {
+    const fim = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    registrarChamadaApi(path, fim - inicio, bytes, deduplicada);
+  };
+
+  if (podeCoalescer) {
+    const emVoo = leiturasEmVoo.get(chave);
+    if (emVoo) {
+      const resultado = await emVoo;
+      medir(0, true);
+      return copiar(resultado.dados) as T;
+    }
+  }
+
+  const promessa = apiFetchInterno<T>(path, opts).then((resultado) => {
+    medir(resultado.bytes, false);
+    return resultado;
+  });
+
+  if (podeCoalescer) {
+    leiturasEmVoo.set(chave, promessa as Promise<{ dados: any; bytes: number }>);
+    // Limpeza garantida: sucesso ou erro, a leitura sai do mapa ao terminar.
+    promessa
+      .catch(() => undefined)
+      .finally(() => {
+        if (leiturasEmVoo.get(chave) === (promessa as unknown as Promise<{ dados: any; bytes: number }>)) {
+          leiturasEmVoo.delete(chave);
+        }
+      });
+  }
+
+  const { dados } = await promessa;
+  return dados;
 }
 
 export const api = {

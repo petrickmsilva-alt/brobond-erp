@@ -2,6 +2,38 @@
 # Serviço único: a API (Express) também serve o front buildado.
 # As tabelas (db/schema.sql) são criadas/migradas pela própria API ao iniciar.
 #
+# ============================================================================
+# ATENÇÃO — PLANO `free` E LATÊNCIA (leia antes de mudar o `plan` abaixo)
+#
+# O plano gratuito da Render NÃO mantém o processo vivo: a instância é
+# suspensa após ~15 minutos sem tráfego e o próximo acesso paga o boot
+# completo (Node + transpilação TS via `tsx` + conexão ao Postgres + cadeia de
+# bootstrap/migração). Também oferece uma fração de vCPU, o que encarece
+# qualquer operação ligada a CPU (hash Argon2id no login, geração de PDF/XLSX,
+# relatórios). Nada disso é "banco lento" — é a instância acordando/escalando.
+#
+# O que JÁ está corrigido no código (não depende de plano):
+#   • requisições durante o boot ESPERAM a prontidão (BOOT_HOLD_MS) em vez de
+#     receber 503 e cair no backoff de 1s+2s do cliente;
+#   • boot com as tarefas independentes em paralelo;
+#   • conexões com TCP keep-alive (evita re-TLS a cada consulta ociosa);
+#   • compressão HTTP (o payload de /api/meta e das listagens cai ~90%);
+#   • listagens com uma única ida ao banco para contagem + página;
+#   • busca por SKU/nome com índice GIN trigram (migração 0121);
+#   • métricas de P50/P95/P99 por rota em /api/admin/metrics.
+#
+# O que SÓ se resolve com plano pago (decisão de custo, não de código):
+#   plan: starter   # ~US$7/mês — sempre ligado, sem suspensão por inatividade
+#   plan: standard  # ~US$25/mês — mais vCPU/RAM, indicado acima de ~20 usuários
+#                     simultâneos ou quando CPU (Argon2/PDF/XLSX) domina
+# Enquanto o plano for `free`, use um monitor externo chamando
+# GET /api/health/db a cada 5–10 minutos NO HORÁRIO COMERCIAL: mantém a
+# instância acordada E o compute do Neon ativo (evita a suspensão por ociosidade).
+# Fora do horário comercial, deixe suspender — é economia real.
+#
+# NÃO trocamos o plano automaticamente: mudança de custo exige autorização.
+# ============================================================================
+#
 # BANCO DE DADOS: o Postgres gratuito da Render expira após 30 dias e apaga os
 # dados. Por isso DATABASE_URL é configurada manualmente no painel (sync: false)
 # apontando para um banco gratuito PERMANENTE — recomendação: Neon (neon.tech).
@@ -78,6 +110,24 @@ services:
       # X-Forwarded-For arbitrário do cliente e o bypass voltaria.
       - key: TRUST_PROXY
         value: "1"
+      # ── PERFORMANCE (todas têm padrão seguro no código; ajuste só com motivo) ──
+      # Espera máxima de uma requisição pela prontidão do boot, em ms. 0 volta ao
+      # 503 imediato. 20000 cobre com folga um boot frio sem punir o usuário.
+      - key: BOOT_HOLD_MS
+        value: "20000"
+      # Tamanho do pool. Regra: (instâncias × PG_POOL_MAX) precisa caber no
+      # limite do PgBouncer/Neon. Em plano único na Render, 10 é seguro; com
+      # múltiplas instâncias, reduza (ex.: 2 instâncias × 5 = 10).
+      - key: PG_POOL_MAX
+        sync: false
+      # Identifica o processo em pg_stat_activity (diagnóstico de locks).
+      - key: PG_APP_NAME
+        value: "brobond-api"
+      # Limiares que geram registro de gargalo (não afetam a resposta).
+      - key: PERF_SQL_LENTO_MS
+        sync: false
+      - key: PERF_HTTP_LENTO_MS
+        sync: false
       # Chave dedicada para CIFRAR os segredos MFA (TOTP) em repouso.
       # Se ausente, deriva do JWT_SECRET — defina uma própria e não a troque.
       - key: MFA_ENCRYPTION_KEY

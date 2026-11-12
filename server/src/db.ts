@@ -2,6 +2,7 @@ import { Pool, TypeOverrides, type PoolClient, type QueryResult } from 'pg';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { instrumentarPool } from './metrics';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -78,6 +79,14 @@ export const pool: Pool | null = databaseUrl
       max: Number(process.env.PG_POOL_MAX) || 10,
       connectionTimeoutMillis: parseEnvInt('PG_CONNECT_TIMEOUT', 10_000, 50, 120_000),
       idleTimeoutMillis: Number(process.env.PG_IDLE_TIMEOUT) || 30000,
+      // TCP keep-alive: Neon e PgBouncer derrubam conexões ociosas. Sem isso, a
+      // primeira consulta depois de um período parado paga reconexão + TLS
+      // (dezenas/centenas de ms) no meio da requisição do usuário.
+      keepAlive: true,
+      keepAliveInitialDelayMillis: 10_000,
+      // Identifica o processo em pg_stat_activity (diagnóstico de locks e
+      // consultas lentas). Não é dado sensível.
+      application_name: process.env.PG_APP_NAME || 'brobond-api',
     })
   : null;
 
@@ -86,6 +95,10 @@ if (pool) {
   pool.on('error', (err) => {
     console.error('⚠️  Erro inesperado no pool do Postgres (conexão idle):', sanitizarMensagemErro(err));
   });
+  // PERF-01 — instrumentação de ponta: TODA consulta do processo (CRUD,
+  // transações, cron, commerce) passa a ser cronometrada aqui, com espera de
+  // pool. Um único gancho evita instrumentar arquivo por arquivo.
+  instrumentarPool(pool);
 }
 
 // ---------------------------------------------------------------------------

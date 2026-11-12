@@ -37,7 +37,12 @@
     "test:payments": "node --import tsx --test server/test/payment-engine.test.ts server/test/commerce-exposure.test.ts",
     "recovery:check": "node --import tsx scripts/recovery-check.mjs",
     "commerce:enterprise-audit": "node --import tsx scripts/commerce-enterprise-audit.ts",
-    "commerce:reconciliar-fila": "node --import tsx scripts/reconciliar-fila-commerce.ts"
+    "commerce:reconciliar-fila": "node --import tsx scripts/reconciliar-fila-commerce.ts",
+    "perf:diagnostico": "node scripts/perf/diagnostico.mjs",
+    "perf:carga": "node scripts/perf/carga.mjs",
+    "perf:explain": "node scripts/perf/explain-analyze.mjs",
+    "perf:indices": "node scripts/perf/indices-concurrently.mjs",
+    "perf:benchmark": "node scripts/perf/benchmark-render-vs-vps.mjs"
   },
   "prisma": {
     "schema": "prisma/schema.prisma"

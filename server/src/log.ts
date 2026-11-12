@@ -9,6 +9,12 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const isProd = process.env.NODE_ENV === 'production';
+// Em produção o log é JSON de uma linha (com todos os campos). Em
+// desenvolvimento, por padrão só a mensagem é impressa para não poluir o
+// terminal — mas durante um diagnóstico de performance as fases (db_ms,
+// pool_wait_ms, external_ms) são exatamente o que se quer ver. `LOG_DETALHADO=1`
+// liga os campos extras fora de produção sem mudar o padrão de ninguém.
+const logDetalhado = isProd || process.env.LOG_DETALHADO === '1';
 
 type Nivel = 'info' | 'warn' | 'error';
 
@@ -22,6 +28,10 @@ function emitir(nivel: Nivel, msg: string, extra?: Record<string, unknown>) {
     return;
   }
   const prefixo = nivel === 'error' ? '❌' : nivel === 'warn' ? '⚠️' : 'ℹ️';
+  if (logDetalhado) {
+    console.log(`${prefixo} ${msg} ${JSON.stringify(extra ?? {})}`);
+    return;
+  }
   console.log(`${prefixo} ${msg}`);
 }
 
