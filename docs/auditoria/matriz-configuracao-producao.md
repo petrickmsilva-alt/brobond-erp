@@ -461,3 +461,26 @@ Nenhuma variável de produção foi criada, alterada ou lida. Os valores abaixo 
 
 **Não configurado:** `CRON_SECRET`, `PAGBANK_WEBHOOK_SECRET`, `PIX_SANDBOX_*`, `MERCADOLIVRE_TOKEN_ESTATICO_CONTRATO` e
 qualquer agendador. Todos dependem de autorização do Diretor.
+
+## 16. Diagnóstico de conexão à produção (Neon, somente leitura)
+
+Workflow `.github/workflows/brobond-migracao-producao.yml` (gatilho exclusivo `workflow_dispatch`,
+environment `migration-diagnostic`). Executa apenas consultas de leitura contra o banco publicado e confirma
+o destino pelas GUCs do Neon (`neon.project_id`, `neon.branch_id`, `neon.branch_name`,
+`neon.endpoint_id`, `neon.timeline_id`). Nenhuma escrita, migração, saneamento, carga cadastral,
+alteração de estoque ou sincronização externa é executada.
+
+| Nome | Onde vive | Obrigatória? | Observação |
+|---|---|---|---|
+| `DATABASE_URL` | secret do environment `migration-diagnostic` | Sim, para o diagnóstico | Credencial do banco publicado (Neon). Injetada SOMENTE no step de conexão; nunca impressa |
+| `NEON_PROJECT_ID` | variable do environment `migration-diagnostic` | Sim | Id do projeto BROBOND-ERP. Ausente: o workflow interrompe (destino não confirmável) |
+| `NEON_BRANCH_NAME` | variable do environment `migration-diagnostic` | Não | Padrão `production` (branch do NEON, não o Environment do GitHub) |
+| `NEON_BRANCH_ID` | variable do environment `migration-diagnostic` | Não | Alternativa ao nome quando `neon.branch_name` não é exposto |
+| `PGSSL` | executor local | Não | `false` só para PostgreSQL local sem TLS (ver §1) |
+
+**Verificação local:** `server/test/workflow-diagnostico.test.ts` (17) trava o conteúdo do workflow
+(gatilho, permissões, environment isolado `migration-diagnostic`, branch, concorrência, timeout,
+Node, `npm ci`, segredo só na conexão, ausência de comando destrutivo, ausência de exposição de
+segredo, actions fixadas). `server/test/diagnostico-conexao.test.ts` (9)
+trava a decisão de destino (fail-closed). `server/test/pg/diagnostico-conexao-pg.test.ts` (3) prova
+em PostgreSQL real que a sessão é `READ ONLY` e que uma escrita é recusada pelo motor.
