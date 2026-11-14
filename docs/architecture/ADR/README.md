@@ -25,6 +25,7 @@
 | [ADR-0013](ADR-0013-integracao-externa.md) | Estratégia de integração externa | Aceita |
 | [ADR-0014](ADR-0014-prisma-sql.md) | Evolução do Prisma e SQL | Aceita |
 | [ADR-0015](ADR-0015-identidade-migrations.md) | Identidade de migrations = nome completo; colisão histórica 0121 | Aceita (2026-11-14) |
+| [ADR-0016](ADR-0016-plataforma-ia-alvo.md) | Plataforma de IA: base existente é a autoridade; alvo generativo incremental | Aceita (base validada; extensões não implementadas) |
 
 ## ADRs históricos (migrados / referenciados)
 
