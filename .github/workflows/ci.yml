@@ -82,7 +82,7 @@ jobs:
   # As regras de saldo e o runner de migração só podem ser provados contra um
   # Postgres de verdade (o modo demonstração não tem isolamento por transação).
   testes-postgres:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     services:
       postgres:
         # Versão oficial das evidências ERP-02.1; manter alinhada ao PostgreSQL local 16.14.
