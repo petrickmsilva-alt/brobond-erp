@@ -148,6 +148,7 @@ import {
 } from './commerce/promocoes';
 import { capacidadesCreators, listCreatorsEntity, detailCreatorsEntity, createCreatorsEntity, updateCreatorsEntity, listCreatorAttributions } from './creators';
 import { gerarTrendHunter } from './trendHunter';
+import { gerarCreatorIntelligence } from './creatorIntelligence';
 import { analyticsCommerce, trendsCommerce } from './commerce/analytics';
 import { processarComercioAgendado, reprocessarOutbox, reconciliarFilaEndpoint } from './commerce/outbox';
 import { baixarLancamento, conciliarExtrato, cronRecorrencias, criarLancamentoManual, gerarRecorrencias, recebiveisCartao, rentabilidade, resumoFinanceiro, resumoInvestidores } from './financeiro';
@@ -1387,6 +1388,8 @@ app.get('/api/pdv/vendas/:id/cupom/pdf', wrap(cupomPdvPdfHandler));
 
 // Creators: capacidades reais, sem simular dados ou operações ausentes.
 app.get('/api/creators/capabilities', wrap(capacidadesCreators));
+// Etapa 07 — matching determinístico antes das rotas genéricas de :id.
+app.post('/api/creators/intelligence/gerar', wrap(gerarCreatorIntelligence));
 for (const [path, entity] of [['perfis', 'profile'], ['campanhas', 'campaign'], ['parcerias', 'partnership'], ['matches', 'match'], ['outreach', 'outreach']] as const) {
   app.get(`/api/creators/${path}`, wrap(listCreatorsEntity(entity)));
   app.post(`/api/creators/${path}`, wrap(createCreatorsEntity(entity)));

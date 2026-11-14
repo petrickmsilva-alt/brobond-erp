@@ -76,7 +76,7 @@ CREATE TABLE IF NOT EXISTS creator_commands (
   empresa_id INTEGER NOT NULL REFERENCES empresas(id),
   idempotency_key TEXT NOT NULL CHECK (length(idempotency_key) BETWEEN 8 AND 160),
   request_hash TEXT NOT NULL CHECK (length(request_hash) = 64),
-  entity TEXT NOT NULL CHECK (entity IN ('profile', 'campaign', 'partnership')),
+  entity TEXT NOT NULL CHECK (entity IN ('profile', 'campaign', 'partnership', 'match', 'outreach')),
   entity_id BIGINT NOT NULL,
   created_by INTEGER NOT NULL REFERENCES usuarios(id),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
