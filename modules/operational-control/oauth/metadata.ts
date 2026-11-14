@@ -28,7 +28,7 @@ export function metadadosAutorizacao(): Record<string, unknown> {
     authorization_endpoint: `${iss}/oauth/authorize`,
     token_endpoint: `${iss}/oauth/token`,
     registration_endpoint: `${iss}/oauth/register`,
-    authorization_response_iss_parameter_supported: true,
+    authorization_response_iss_parameter_supported: false,
     revocation_endpoint: `${iss}/oauth/revoke`,
     jwks_uri: `${iss}/.well-known/jwks.json`,
     response_types_supported: ['code'],
