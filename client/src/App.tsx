@@ -13,6 +13,7 @@ import { MODULES, usaCrudGenerico, visibleModules } from './modules';
 // pesadas (Usuários, Financeiro, dentro de ModulePage) — é baixado sob demanda,
 // quando a rota é realmente acessada.
 const ModulePage = lazy(() => import('./pages/ModulePage'));
+const OperacionalDetalhePage = lazy(() => import('./pages/OperacionalDetalhePage'));
 const FinanceiroPeriodosPage = lazy(() => import('./pages/FinanceiroPeriodosPage'));
 const FinanceiroExtratoPage = lazy(() => import('./pages/FinanceiroExtratoPage'));
 const FiscalObrigacaoDetalhePage = lazy(() => import('./pages/FiscalObrigacaoDetalhePage'));
@@ -634,6 +635,17 @@ export default function App() {
               }
             />
             <Route path="fichas/:id" element={<FichaDetail />} />
+            {/* OPERATIONAL CONTROL PLANE — detalhe/aprovação em PÁGINA própria
+                (padrão LISTA → PÁGINA). A aprovação exige sessão do ERP com
+                confirmação humana; o agente MCP não aprova. */}
+            <Route
+              path="operacional/:id"
+              element={
+                <AdminOnly>
+                  <OperacionalDetalhePage />
+                </AdminOnly>
+              }
+            />
             <Route path="dev/componentes" element={<AdminOnly><ComponentCatalog /></AdminOnly>} />
             {/* ZERO MODAL — LISTA → PÁGINA em todo o ERP.
                 Todo módulo que usa o CRUD genérico ganha rota própria de cadastro
