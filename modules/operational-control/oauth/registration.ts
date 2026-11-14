@@ -55,7 +55,7 @@ export async function registrarClienteDinamico(input: DynamicRegistrationRequest
     client_id_issued_at: Math.floor(Date.now() / 1000),
     client_name: name,
     redirect_uris: redirectUris,
-    grant_types: ['authorization_code', 'refresh_token'],
+    grant_types: input.grant_types === undefined ? ['authorization_code', 'refresh_token'] : [...input.grant_types as string[]],
     response_types: ['code'],
     token_endpoint_auth_method: 'none',
     scope: requested.join(' '),

@@ -52,6 +52,8 @@ test('DCR: padrão é somente leitura e escopos desconhecidos são recusados', a
   const response = await registrarClienteDinamico({ redirect_uris: [callback] });
   assert.ok(response.scope.includes('brobond:system:read'));
   assert.ok(!response.scope.includes('brobond:workflow:request'));
+  const authorizationOnly = await registrarClienteDinamico({ redirect_uris: [callback], grant_types: ['authorization_code'] });
+  assert.deepEqual(authorizationOnly.grant_types, ['authorization_code']);
   await assert.rejects(() => registrarClienteDinamico({ redirect_uris: [callback], scope: 'brobond:system:read scope-inexistente' }), /escopo/i);
   await assert.rejects(() => registrarClienteDinamico({ redirect_uris: [callback], scope: 'brobond:workflow:request' }), /somente escopos de leitura/i);
 });
