@@ -58,8 +58,8 @@ test('DCR: padrão é somente leitura e escopos desconhecidos são recusados', a
   await assert.rejects(() => registrarClienteDinamico({ redirect_uris: [callback], scope: 'brobond:workflow:request' }), /somente escopos de leitura/i);
 });
 
-test('descoberta OAuth: publica DCR e suporte ao parâmetro iss de resposta', () => {
+test('descoberta OAuth: publica DCR sem declarar suporte global ao parâmetro iss', () => {
   const metadata = metadadosAutorizacao();
   assert.equal(metadata.registration_endpoint, `${metadata.issuer}/oauth/register`);
-  assert.equal(metadata.authorization_response_iss_parameter_supported, true);
+  assert.equal(metadata.authorization_response_iss_parameter_supported, false);
 });
