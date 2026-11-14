@@ -48,6 +48,7 @@ export const TABELAS_SEM_EMPRESA_ID: Record<string, ClassificacaoTenancy> = {
   // --- Compartilhada (escopo por outra chave) --------------------------
   configuracoes: { categoria: 'compartilhada', motivo: 'Chave-valor; o escopo por empresa é feito por namespace de chave (ex.: logistica:empresa:<id>).' },
   arquivos: { categoria: 'compartilhada', motivo: 'Armazenamento polimórfico por (recurso, registro_id); o isolamento é herdado do recurso referenciado.' },
+  oauth_clients: { categoria: 'global', motivo: 'Cliente OAuth 2.1 (aplicação, ex.: ChatGPT), não o tenant. Códigos, tokens e consentimentos derivados carregam empresa_id (o acesso é recortado pela empresa do usuário no consentimento).' },
 
   // --- Catálogos de referência globais ---------------------------------
   tamanhos: { categoria: 'referencia', motivo: 'Catálogo de tamanhos (PP..GG) compartilhado por todas as empresas.' },

@@ -452,6 +452,12 @@ import { listarCanaisComerciais } from './commerce/canaisComerciais';
 import { painelOmnichannelHandler, reconciliarOmnichannelHandler } from './commerce/omnichannel';
 import { logisticsRouter } from '../../modules/logistics/api/routes';
 import { publicLogisticsWebhookRouter } from '../../modules/logistics/api/webhookRouter';
+// ---- Operational Control Plane + OAuth 2.1 (modules/operational-control) ----
+// O Control Plane é montado sob a sessão do ERP (`/api/operational-control`) e o
+// Authorization Server/descoberta OAuth na RAIZ (caminhos bem conhecidos do MCP).
+import { operationalControlRouter } from '../../modules/operational-control/http/operational-control.routes';
+import { oauthRouter } from '../../modules/operational-control/oauth/routes';
+import { mcpRouter } from '../../modules/operational-control/mcp/server';
 import {
   initNegociosEngine,
   negociosABC,
@@ -663,6 +669,20 @@ function bloqueioDeProntidao(req: Request, res: Response, next: NextFunction) {
   next();
 }
 app.use(bloqueioDeProntidao);
+
+// ----------------------------------------------------------------------------
+// OAUTH 2.1 — Authorization Server + descoberta (modules/operational-control)
+//
+// Montado na RAIZ e ANTES do `requireAuth` de `/api`: o ChatGPT descobre os
+// metadados em caminhos bem conhecidos e o `/oauth/authorize` autentica o
+// Diretor pela SESSÃO do ERP (não é um segundo login). `/oauth/token` e
+// `/oauth/revoke` são servidor-a-servidor. Nenhum token é registrado em log.
+// ----------------------------------------------------------------------------
+app.use(oauthRouter);
+// Remote MCP Server (Resource Server) — mesma descoberta OAuth, na RAIZ e antes
+// do requireAuth: o cliente MCP fala JSON-RPC com Bearer OAuth (RS256), que não
+// é sessão do ERP. O próprio router valida o token e aplica a política.
+app.use(mcpRouter);
 app.post('/api/auth/login', loginRateLimit, wrap(login));
 // Segundo fator do login (TOTP): ticket de 10 min emitido no 1º passo.
 app.post('/api/auth/login/mfa', wrap(loginMFA));
@@ -721,6 +741,12 @@ app.post('/api/admin/webhooks/reconciliacao', wrap(reconciliarWebhooksLegados));
 app.post('/api/admin/scheduled/cron', wrap(cronScheduled));
 app.post('/api/admin/scheduled/cron/:processo', wrap(cronProcesso));
 
+// ---- OPERATIONAL CONTROL PLANE (modules/operational-control) ---------------
+// Montado ANTES do guard global de sessão porque a superfície aceita DUAS
+// identidades: o Bearer OAuth 2.1 do MCP (RS256 — não é sessão do ERP) e a
+// sessão do ERP. O próprio router resolve o ator (`identidadeOperacional`), que
+// aplica o `requireAuth` apenas quando NÃO há token OAuth.
+app.use('/api/operational-control', operationalControlRouter);
 app.use('/api', wrap(requireAuth));
 // Conta com senha provisória (convite, reset ou admin padrão) só lê e só escreve
 // no próprio fluxo de troca de senha — ver bloquearSenhaProvisoria.

@@ -101,6 +101,7 @@ const DevolucoesPage = lazy(() => import('./DevolucoesPage'));
 const LogisticaPage = lazy(() => import('./LogisticaPage'));
 const UsuariosPage = lazy(() => import('./UsuariosPage'));
 const WebhooksPage = lazy(() => import('./WebhooksPage'));
+const OperacionalPage = lazy(() => import('./OperacionalPage'));
 const ConectorPage = lazy(() => import('./ConectorPage'));
 const CreatorsRecordsPage = lazy(() => import('./creators/CreatorsRecordsPage'));
 const CreatorMatchesPage = lazy(() => import('./creators/CreatorMatchesPage'));
@@ -171,6 +172,7 @@ export default function ModulePage({ module }: { module: Module }) {
   }
   if (module.id === 'usuarios') return <Suspense fallback={<SubPageLoading />}><UsuariosPage /></Suspense>;
   if (module.id === 'webhooks') return <Suspense fallback={<SubPageLoading />}><WebhooksPage /></Suspense>;
+  if (module.id === 'operacional') return <Suspense fallback={<SubPageLoading />}><OperacionalPage /></Suspense>;
   if (module.id === 'estoque') return <Suspense fallback={<SubPageLoading />}><EstoqueGradePage /></Suspense>;
   if (module.id === 'medidas') return <Suspense fallback={<SubPageLoading />}><MedidasPage /></Suspense>;
   if (module.id === 'inventario') return <Suspense fallback={<SubPageLoading />}><InventarioModulePage /></Suspense>;
