@@ -24,16 +24,40 @@ import { metadadosRecurso, metadadosAutorizacao } from './metadata';
 import { jwks } from './keys';
 import { resolverCliente, redirectUriValida, scopesPermitidosAoCliente, autenticarCliente } from './clients';
 import { criarCodigo, consumirCodigo } from './codes';
-import { emitirAccessToken, emitirRefreshToken, trocarRefreshToken, revogarToken } from './tokens';
+import { emitirAccessToken, emitirRefreshToken, trocarRefreshToken, revogarToken, audience, issuer } from './tokens';
 import { getStore } from '../../../server/src/services';
 import { R_OAUTH_CONSENTS } from '../infrastructure/resources';
 import { auditarOperacao } from '../infrastructure/audit';
+import { registrarClienteDinamico } from './registration';
 
 const wrap = (fn: (req: Request, res: Response) => Promise<unknown>) => (req: Request, res: Response, next: NextFunction) => {
   Promise.resolve(fn(req, res)).catch(next);
 };
 
 export const oauthRouter: Router = Router();
+
+// Limite local e conservador para impedir abuso do endpoint público RFC 7591.
+const dcrTentativas = new Map<string, { inicio: number; quantidade: number }>();
+function limitarRegistroDinamico(req: Request): void {
+  const agora = Date.now();
+  const chave = String(req.ip ?? req.socket.remoteAddress ?? 'unknown');
+  const atual = dcrTentativas.get(chave);
+  if (!atual || agora - atual.inicio >= 60_000) {
+    dcrTentativas.set(chave, { inicio: agora, quantidade: 1 });
+    if (dcrTentativas.size > 10_000) {
+      for (const [ip, janela] of dcrTentativas) if (agora - janela.inicio >= 60_000) dcrTentativas.delete(ip);
+    }
+    return;
+  }
+  if (atual.quantidade >= 20) throw new HttpError(429, 'Limite de registros OAuth excedido. Tente novamente em um minuto.');
+  atual.quantidade += 1;
+}
+
+function validarResource(resource: unknown): void {
+  if (resource !== undefined && String(resource) !== audience()) {
+    throw new HttpError(400, 'resource não corresponde ao Resource Server Brobond.');
+  }
+}
 
 oauthRouter.get('/.well-known/oauth-protected-resource', (_req, res) => {
   res.json(metadadosRecurso());
@@ -47,6 +71,13 @@ oauthRouter.get('/.well-known/jwks.json', wrap(async (_req, res) => {
   res.json(await jwks());
 }));
 
+/** Registro dinâmico RFC 7591 restrito aos callbacks oficiais do ChatGPT. */
+oauthRouter.post('/oauth/register', wrap(async (req, res) => {
+  limitarRegistroDinamico(req);
+  const cliente = await registrarClienteDinamico(req.body ?? {});
+  res.status(201).json(cliente);
+}));
+
 /**
  * Autorização. Sem `confirm=1` devolve o CONTEÚDO DA TELA DE CONSENTIMENTO
  * (aplicação, escopos, ações, validade) para o ERP renderizar. Com `confirm=1`
@@ -54,6 +85,7 @@ oauthRouter.get('/.well-known/jwks.json', wrap(async (_req, res) => {
  * redireciona para a redirect_uri registrada.
  */
 oauthRouter.get('/oauth/authorize', requireAuth, wrap(async (req, res) => {
+  validarResource(req.query.resource);
   const cliente = await resolverCliente(String(req.query.client_id ?? ''));
   if (!cliente || !cliente.ativo) throw new HttpError(400, 'Cliente OAuth desconhecido.');
   const redirectUri = String(req.query.redirect_uri ?? '');
@@ -104,6 +136,7 @@ oauthRouter.get('/oauth/authorize', requireAuth, wrap(async (req, res) => {
 
   const destino = new URL(redirectUri);
   destino.searchParams.set('code', codigo);
+  destino.searchParams.set('iss', issuer());
   if (state) destino.searchParams.set('state', state);
   res.redirect(destino.toString());
 }));
@@ -119,6 +152,7 @@ const ACAO_POR_ESCOPO: Record<string, string> = {
 
 /** Troca de código (PKCE) e refresh. Sem log de token. */
 oauthRouter.post('/oauth/token', wrap(async (req, res) => {
+  validarResource(req.body?.resource);
   const grantType = String(req.body?.grant_type ?? '');
   const clientId = String(req.body?.client_id ?? '');
 
