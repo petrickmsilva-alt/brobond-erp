@@ -33,6 +33,7 @@ import { fileURLToPath } from 'node:url';
 import { auditarUx } from './ux-guard.mjs';
 import { auditarCapacidades, carregarRegistro } from './capacidades-audit';
 import { executarTestesObrigatorios } from './gate-testes.mjs';
+import { auditarSequenciaMigrations } from './migrations-identidade';
 
 const raiz = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -158,15 +159,18 @@ for (const calc of CALCULOS) {
 
 // ---------------------------------------------------------------------------
 // 5) MIGRATIONS — sequência, schema SQL e migrations sem tenant quando precisa
+//
+// ETAPA 01 (Migration Forensics): o critério agora é o MESMO modelo de
+// identidade do runner (nome completo em schema_migrations, ordem lexical).
+// O critério antigo (prefixo == posição+1) divergia do runner e reprovava a
+// colisão histórica 0121 já enviada, empurrando para um rename que REAPLICA a
+// migration em banco que já a registrou (comprovado em PG real — ver
+// scripts/migrations-identidade.ts). Duplicidade NOVA continua P0.
 // ---------------------------------------------------------------------------
 const migrations = readdirSync(path.join(raiz, 'db', 'migrations')).filter((f) => f.endsWith('.sql')).sort();
-migrations.forEach((arquivo, indice) => {
-  const numero = Number(arquivo.slice(0, 4));
-  if (!Number.isInteger(numero)) registrar('MIGRATION_NOME', 'P0', `Migration sem prefixo numérico: ${arquivo}`);
-  else if (numero !== indice + 1) {
-    registrar('MIGRATION_SEQUENCIA', 'P0', `Migration fora de sequência: ${arquivo} (esperado ${String(indice + 1).padStart(4, '0')})`);
-  }
-});
+for (const achado of auditarSequenciaMigrations(migrations)) {
+  registrar(achado.id, achado.severidade, achado.mensagem, 'db/migrations');
+}
 if (!existe('db/schema.sql')) registrar('SCHEMA_AUSENTE', 'P0', '`db/schema.sql` (fonte de verdade SQL) não existe.');
 else {
   // Comentários SQL contêm a palavra "CREATE TABLE"/"ALTER TABLE" em prosa —
@@ -200,7 +204,16 @@ else {
   //       `usuario_empresas` (0017) e pelo RBAC — não por coluna;
   //     · webhooks/webhook_entregas: admin-only, eventos do ciclo de vida das
   //       contas (ver server/src/webhooks.ts, `exigirAdminLocal`);
-  //     · configuracoes/impostos_ncm: cadastro de referência da instalação.
+  //     · configuracoes/impostos_ncm: cadastro de referência da instalação;
+  //     · fiscal_layouts: referência oficial versionada de leiautes SPED/EFD
+  //       (0115) — ato normativo + fonte_url + vigência; não é dado de empresa
+  //       e o recurso é READ_ONLY semeado por migração;
+  //     · oauth_clients: a aplicação cliente (ChatGPT), não o tenant — GLOBAL
+  //       documentado na 0121 ("oauth_clients é GLOBAL… códigos e tokens
+  //       carregam empresa_id"). O dado por empresa (codes/tokens/consents)
+  //       TEM empresa_id e é auditado acima.
+  //     A classificação é TRAVADA por teste (server/test/final-gate-globais.test.ts):
+  //     se a evidência de desenho global deixar de existir, o teste falha.
   const GLOBAIS = new Set([
     'empresas',
     'usuarios',
@@ -210,6 +223,8 @@ else {
     'webhook_entregas',
     'configuracoes',
     'impostos_ncm',
+    'fiscal_layouts',
+    'oauth_clients',
   ]);
   // (b) Catálogos técnicos compartilhados (tamanhos/grades/medidas/categorias/
   //     cores): são domínio de modelagem, não dado comercial — o produto que os
