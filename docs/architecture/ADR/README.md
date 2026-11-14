@@ -24,6 +24,7 @@
 | [ADR-0012](ADR-0012-seguranca-rbac.md) | Segurança e RBAC | Aceita |
 | [ADR-0013](ADR-0013-integracao-externa.md) | Estratégia de integração externa | Aceita |
 | [ADR-0014](ADR-0014-prisma-sql.md) | Evolução do Prisma e SQL | Aceita |
+| [ADR-0015](ADR-0015-identidade-migrations.md) | Identidade de migrations = nome completo; colisão histórica 0121 | Aceita (2026-11-14) |
 
 ## ADRs históricos (migrados / referenciados)
 

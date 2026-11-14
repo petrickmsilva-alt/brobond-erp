@@ -122,7 +122,10 @@ const P0: Frente[] = [
     titulo: 'Catálogo (produtos, preços, grade, migração canônica)',
     exigencias: [
       { desc: 'migração canônica do Commerce com tenancy', arquivo: 'db/migrations/0068_commerce_os.sql', padrao: 'empresa_id' },
-      { desc: 'vitrine/listagem canônica', arquivo: 'server/src/commerce/vitrine.ts', padrao: 'produtos' },
+      // ADR-0007 (Diretor): a vitrine pública nativa foi RETIRADA; o catálogo
+      // canônico é a projeção administrada (catalogo.ts) consumida pelos canais
+      // (RETAIL/WHOLESALE WooCommerce) e pelo checkout interno B2B.
+      { desc: 'catálogo/listagem canônica (projeção por empresa)', arquivo: 'server/src/commerce/catalogo.ts', padrao: 'produtos' },
       { desc: 'telas de produto (lista/novo/detalhe)', arquivo: 'client/src/pages/commerce/ProdutosPage.tsx', teste: 'client/src/pages/commerce/ProdutosPage.test.tsx' },
       { desc: 'grade/tamanhos', arquivo: 'server/src/commerce/grade.ts' },
     ],
@@ -141,11 +144,19 @@ const P0: Frente[] = [
     id: 'P0_CHECKOUT',
     titulo: 'Checkout (transação serializable: pedido + reserva + venda)',
     exigencias: [
-      { desc: 'fluxo de checkout transacional (serializable)', arquivo: 'server/src/commerce/vitrine.ts', padrao: "isolation: 'serializable'" },
-      { desc: 'carrinho da loja', arquivo: 'client/src/pages/commerce/loja/LojaCarrinhoPage.tsx', teste: 'client/src/pages/commerce/LojaFluxoPages.test.tsx' },
-      { desc: 'checkout da loja', arquivo: 'client/src/pages/commerce/loja/LojaCheckoutPage.tsx' },
-      { desc: 'rota /loja/checkout registrada', arquivo: 'client/src/App.tsx', padrao: '/loja/checkout' },
-      { desc: 'E2E real (catálogo → fila → vitrine → checkout → webhook → conversão)', arquivo: 'server/test/pg/commerce-e2e.test.ts' },
+      // ADR-0007 (Diretor): a loja pública nativa (/loja) foi DESCONTINUADA —
+      // `vitrine.ts`, `LojaCarrinhoPage`, `LojaCheckoutPage` e a rota
+      // `/loja/checkout` foram REMOVIDOS e o teste `fase2-loja-coerencia`
+      // trava essa remoção. Exigi-los aqui tornava este gate mutuamente
+      // exclusivo com a arquitetura aceita. O checkout transacional REAL
+      // sobrevivente é o interno/B2B (`checkout.ts`, serializable) e o E2E
+      // em PG prova catálogo → checkout interno → webhook → conversão.
+      { desc: 'fluxo de checkout transacional (serializable)', arquivo: 'server/src/commerce/checkout.ts', padrao: "isolation: 'serializable'" },
+      { desc: 'cotação de carrinho do checkout interno', arquivo: 'server/src/commerce/checkout.ts', padrao: 'cotarCarrinho' },
+      { desc: 'criação do checkout com reserva + pedido', arquivo: 'server/src/commerce/checkout.ts', padrao: 'criarCheckoutCommerce' },
+      { desc: 'URLs antigas da loja nativa com tratamento explícito (301/410)', arquivo: 'server/src/commerce/loja-nativa-retirada.ts', padrao: '410' },
+      { desc: 'coerência da retirada da loja nativa (ADR-0007) travada por teste', arquivo: 'server/test/fase2-loja-coerencia.test.ts', padrao: 'ADR-0007' },
+      { desc: 'E2E real (catálogo → fila → checkout interno → webhook → conversão)', arquivo: 'server/test/pg/commerce-e2e.test.ts' },
     ],
   },
   {

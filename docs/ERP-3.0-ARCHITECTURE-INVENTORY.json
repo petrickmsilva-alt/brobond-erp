@@ -1,5 +1,5 @@
 {
-  "gerado_em": "2026-11-14T18:34:25.133Z",
+  "gerado_em": "2026-11-14T18:44:17.007Z",
   "fonte_de_verdade_do_schema": "db/schema.sql + db/migrations/*.sql (PostgreSQL); Prisma = bounded context do commerce",
   "migrations": {
     "sql": 122,

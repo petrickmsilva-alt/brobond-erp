@@ -1,5 +1,13 @@
 # DOMAIN-MAP — mapa de domínios (Fase 0)
 
+> **ATUALIZAÇÃO 2026-11-14 (Etapa 03):** fotografia histórica preservada.
+> Mudanças desde então: módulos `planned` foram ativados (inventário atual:
+> **152 módulos, 0 planejados**); Creators opera em modo **ATIVO_MANUAL**
+> (capabilities honestas — geração/envio dependem de provedor homologado);
+> a loja nativa `/loja` foi **retirada** (ADR-0007, execução travada por
+> `fase2-loja-coerencia.test.ts`). Matriz atual com fontes:
+> [`RECONCILIATION-2026-11-14.md`](RECONCILIATION-2026-11-14.md).
+
 **Data:** 2026-11-07 · **Branch:** `architecture/fase-0-blueprint`
 **Base:** `docs/ERP-DOMAIN-MAP.md` (histórico) + `docs/ERP-3.0-ARCHITECTURE-BASELINE.md`
 + inspeção de `server/src/resources.ts`, `db/schema.sql`, `db/migrations/*.sql`,
