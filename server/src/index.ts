@@ -149,6 +149,7 @@ import {
 import { capacidadesCreators, listCreatorsEntity, detailCreatorsEntity, createCreatorsEntity, updateCreatorsEntity, listCreatorAttributions } from './creators';
 import { gerarTrendHunter } from './trendHunter';
 import { gerarCreatorIntelligence } from './creatorIntelligence';
+import { capacidadesAIStudio, gerarBriefingCEO } from './aiStudio';
 import { analyticsCommerce, trendsCommerce } from './commerce/analytics';
 import { processarComercioAgendado, reprocessarOutbox, reconciliarFilaEndpoint } from './commerce/outbox';
 import { baixarLancamento, conciliarExtrato, cronRecorrencias, criarLancamentoManual, gerarRecorrencias, recebiveisCartao, rentabilidade, resumoFinanceiro, resumoInvestidores } from './financeiro';
@@ -1335,8 +1336,10 @@ app.get('/api/bi/painel', wrap(painelBi));
 // ---- ONDAS 4–5 / D4 — AI PLATFORM ----
 app.post('/api/ai/recomendacoes/gerar', wrap(gerarRecomendacoes));
 app.post('/api/ai/recomendacoes/:id/decidir', wrap(decidirRecomendacao));
-// Etapa 06 — Trend Hunter determinístico sobre a MESMA plataforma (ADR-0016/0017).
+// Etapas 06/08 — domínios determinísticos sobre a MESMA plataforma (ADR-0016/0017).
 app.post('/api/ai/trend-hunter/gerar', wrap(gerarTrendHunter));
+app.get('/api/ai/studio/capabilities', wrap(capacidadesAIStudio));
+app.post('/api/ai/ceo/briefing/gerar', wrap(gerarBriefingCEO));
 
 // ---- FASE 8 — ALERTAS (AI CONTROL TOWER) ----
 app.post('/api/alerts/avaliar', wrap(avaliarAlertasHandler));

@@ -153,9 +153,8 @@ async function acuraciaPrevisao(s: S, empresaId: number, agora: Date): Promise<C
   return { periodos_avaliados: n, mae: round2(mae / n), mape_pct: round2((mape / n) * 100) };
 }
 
-export async function painelControlTower(empresaId: number): Promise<ControlTower> {
+export async function painelControlTower(empresaId: number, agora = new Date()): Promise<ControlTower> {
   const s = getStore();
-  const agora = new Date();
   const { atual, anterior } = periodos(agora);
   const limitacoes: string[] = [];
 

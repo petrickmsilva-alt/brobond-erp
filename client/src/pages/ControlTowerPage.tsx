@@ -9,7 +9,8 @@
 // ============================================================================
 import { useCallback, useEffect, useState } from 'react';
 import { AlertTriangle, Activity, Bell, Gauge, Lightbulb, RefreshCw, TrendingUp } from 'lucide-react';
-import { api, ApiError } from '../lib/api';
+import { api, apiFetch, ApiError } from '../lib/api';
+import { useIdempotencyKey } from '../lib/idempotency';
 import { Alert, Badge, EmptyState, PageHeader, Spinner } from '../components/ui';
 import { DataTable, PageShell, StatCard, type DataTableColumn } from '../components/ui-kit-negocios';
 
@@ -98,6 +99,20 @@ export default function ControlTowerPage() {
   const [dados, setDados] = useState<Tower | null>(null);
   const [erro, setErro] = useState('');
   const [carregando, setCarregando] = useState(true);
+  const [briefing, setBriefing] = useState<{ recomendacao: string; score: number } | null>(null);
+  const [briefingBusy, setBriefingBusy] = useState(false);
+  const keyFor = useIdempotencyKey();
+
+  async function gerarBriefing() {
+    setBriefingBusy(true); setErro('');
+    const body = JSON.stringify({});
+    try {
+      const out = await apiFetch<{ total: number; recomendacoes: Array<{ recomendacao: string; score: number }> }>('/ai/ceo/briefing/gerar', { method: 'POST', headers: { 'Idempotency-Key': keyFor(body) }, body });
+      setBriefing(out.recomendacoes[0] ?? null);
+      if (!out.total) setErro('Nenhum briefing gerado.');
+    } catch (e) { setErro(e instanceof ApiError ? e.message : 'Não foi possível gerar o AI CEO Briefing.'); }
+    finally { setBriefingBusy(false); }
+  }
 
   const carregar = useCallback(() => {
     setCarregando(true);
@@ -161,12 +176,19 @@ export default function ControlTowerPage() {
         title="Control Tower"
         description="Leitura executiva consolidada: indicadores com definição e fórmula, saúde operacional, alertas, previsões, recomendações rastreáveis e pendências críticas. O ERP continua sendo a autoridade — a Tower lê e recomenda, não executa."
         actions={
-          <button type="button" className="btn-ghost" onClick={() => void carregar()}>
-            <RefreshCw className="h-4 w-4" aria-hidden="true" /> Atualizar
-          </button>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" className="btn-secondary" disabled={briefingBusy || carregando} onClick={() => void gerarBriefing()}>
+              {briefingBusy ? 'Gerando…' : 'AI CEO Briefing'}
+            </button>
+            <button type="button" className="btn-ghost" onClick={() => void carregar()}>
+              <RefreshCw className="h-4 w-4" aria-hidden="true" /> Atualizar
+            </button>
+          </div>
         }
       />
 
+      <Alert tone="blue">AI Studio determinístico: briefing derivado desta Tower, sem LLM externo e sem aplicação automática. A decisão continua humana em /ai/recomendacoes.</Alert>
+      {briefing && <Alert tone="green"><strong>Briefing #{briefing.score.toFixed(2)}:</strong> {briefing.recomendacao}</Alert>}
       {erro && <Alert tone="red">{erro}</Alert>}
 
       {carregando ? (
