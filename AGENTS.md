@@ -181,3 +181,72 @@ O `postgresql-client-16` do PGDG depende de `sensible-utils` (só resolvido com 
   memdb (e o PG) não serializam o objeto.
 - Auditoria de recurso: todo recurso novo exige linha em `docs/architecture/RBAC-MATRIX.md`
   (o teste `rbac-matrix` trava a contagem e o cabeçalho "(N recursos)").
+
+## Operational Control Plane + Remote MCP (migration 0121)
+
+Núcleo de governança para o Diretor operar o ERP por MCP (ChatGPT) sem entregar
+credencial ao agente e sem execução arbitrária. Módulo: `modules/operational-control/`
+(domínio `server/src/` continua sendo a autoridade de RBAC).
+
+- **Três identidades separadas, nunca confundidas:** usuário do ERP, cliente OAuth e
+  GitHub App installation. O MCP NUNCA aceita `user_id`/`perfil`/`empresa_id`/`role` do
+  corpo como prova — a identidade sai do token validado (`identidadeOperacional`).
+- **Duas portas de identidade, roteadas pelo ALGORITMO do JWT:** o access token OAuth é
+  RS256; a sessão do ERP é HS256. `ehTokenOAuth` lê só o cabeçalho para ROTEAR; a
+  validação real é a assinatura em `validarAccessToken`. O router do Control Plane é
+  montado ANTES do `requireAuth` global de `/api` justamente porque um Bearer OAuth não
+  é sessão do ERP — não mova essa montagem para depois do guard.
+- **OAuth 2.1 × JWT do ERP são mecanismos SEPARADOS** (issuer, audience e chave
+  próprios). O `oauthRouter` é montado na RAIZ (`.well-known/*`, `/oauth/*`): o ChatGPT
+  descobre os caminhos bem conhecidos. PKCE S256 é obrigatório; `redirect_uri` só passa
+  por IGUALDADE EXATA (fecha open redirect); o código é de uso único (CAS em
+  `consumed_at`); o refresh rotaciona (usar invalida o anterior).
+- **Permissão efetiva = escopo OAuth ∩ perfil ∩ política ∩ empresa ∩ allowlist.** Ser
+  `admin` NÃO dispensa o escopo: `exigirAutorizacao` exige os dois. Nenhum escopo de
+  escrita genérica existe (`brobond:*:read|request|approve|audit`).
+- **Repositório/arquivo/branch vêm do REGISTRO INTERNO** (`WORKFLOW_REGISTRY`), nunca do
+  cliente. `neon-production-diagnostic` nasce `enabled: false` — só liga após homologação.
+  Branch validada no servidor (`resolverRef`); `main` fica fora da allowlist.
+- **Aprovação humana é de USO ÚNICO e vinculada ao hash dos parâmetros.** O agente MCP
+  nunca aprova (`exigirAprovadorHumano` + `exigirConfirmacaoHumana`, que exige
+  reautenticação recente da sessão). O dispatch consome a aprovação e trava a operação em
+  `dispatching` sob CAS — duas instâncias nunca despacham a mesma operação.
+- **Resultado desconhecido NUNCA é reenviado automaticamente.** Timeout após o envio deixa
+  a operação em `dispatching` e a RECONCILIAÇÃO (`reconciliarEmpresa`) confirma pelo
+  GitHub. Sem webhook, a reconciliação por consulta é o que impede operação parada.
+- **`revogarToken` decodifica o JWT** para achar o `jti`: revogar o access token — o caso
+  normal do RFC 7009 — só funciona assim. Aceita também o `jti` cru e o refresh (por hash).
+- **Auditoria encadeada por operação** (`operational_audit_events`): SHA-256(hash_anterior
+  | payload canônico). O PG devolve `occurred_at` como `Date`; `verificarCadeiaOperacao`
+  normaliza para ISO antes de recomputar — sem isso `jsonCanonico` serializa `Date` como
+  `{}` e a cadeia aparece quebrada no PG (na memória não, por isso o teste PG existe).
+- **Tabelas novas em AMBOS:** migração `0121_operational_control_plane.sql` **e** espelho em
+  `db/schema.sql`; `db/bootstrap.sql` é REGERADO (`scripts/gerar-bootstrap.mjs`). Recursos
+  são INTERNOS (`internal: true`, `ops: READ_ONLY`): o CRUD genérico não os expõe — o
+  acesso passa pelos handlers do módulo. `oauth_clients` é GLOBAL (sem `empresa_id`); as
+  demais carregam `empresa_id`. Toda linha nova exige entrada em
+  `docs/architecture/RBAC-MATRIX.md` (o teste `rbac-matrix` trava a contagem).
+- **Segredos só em ambiente ou em `configuracoes` CIFRADOS** (AES-256-GCM). A chave privada
+  da GitHub App e o webhook secret nunca entram no repositório, no frontend, no banco em
+  texto aberto nem em log. GitHub App usa installation token temporário (≤1 h), nunca PAT.
+- **Ferramentas MCP são uma lista FECHADA e específica** (`mcp/tools.ts`): status do
+  sistema/banco, branches/commits/PRs, execuções (`brobond_workflow_runs`,
+  `brobond_execution_status`), operações (`brobond_operations_list`,
+  `brobond_operation_status`), `brobond_audit_history` e `brobond_request_diagnostic`.
+  NÃO existe ferramenta genérica de shell/SQL/HTTP/filesystem/deploy/merge/push — o teste
+  de lista fechada reprova qualquer uma. Repositório, arquivo e branch vêm do registro
+  interno, nunca do cliente; `tools/list` é filtrado pela permissão efetiva.
+- **Testes:** `server/test/operational-control.test.ts` (ciclo/autorização/dispatch com
+  stub do GitHub), `server/test/operational-endurecimento.test.ts` (replay/concorrência/
+  IDOR entre empresas), `server/test/operational-oauth.test.ts` (PKCE/uso único/refresh/
+  revogação/CIMD), `server/test/operational-ssrf.test.ts` (SSRF no registro de cliente),
+  `server/test/operational-schema-paridade.test.ts` (índices/CHECKs espelhados em
+  `schema.sql`) e `server/test/pg-operational-control.test.ts` (migração aplica, tenant,
+  unicidade de idempotência e cadeia no PG real).
+- **Interface é PÁGINA (ZERO MODAL):** `/operacional` (lista, `OperacionalPage.tsx`) e
+  `/operacional/:id` (detalhe/aprovação, `OperacionalDetalhePage.tsx`). O módulo está em
+  `MODULES` (Administração → Automações) e em `PAGES_ESPECIAIS`/`MODULOS_PAGINA_PROPRIA`;
+  a rota de detalhe é declarada à mão em `App.tsx` sob `AdminOnly`. Aprovar exige
+  confirmação textual e reautenticação (`ReauthModal`) — o agente MCP não aprova. Não
+  criar painel/modal para esse fluxo: o gate `audit:ux` reprova (`TETO_PAINEIS_INLINE` é
+  imutável).

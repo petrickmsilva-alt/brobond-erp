@@ -29,7 +29,7 @@ Regras aplicadas por `checkAccess(r, actor, op)`:
 > **O perfil vem sempre da identidade autenticada** — nunca de `role` ou
 > `empresa_id` enviados pelo cliente.
 
-## 2. Matriz por recurso (191 recursos)
+## 2. Matriz por recurso (199 recursos)
 
 Colunas: **Recurso** · **Perfil mínimo** (regra de acesso) · **Ops** (C=incluir,
 U=alterar, D=excluir no CRUD genérico; `-` = somente leitura) · **Tabela** ·
@@ -177,6 +177,14 @@ U=alterar, D=excluir no CRUD genérico; `-` = somente leitura) · **Tabela** ·
 | `movimentacoes` | operador+ (leitura) | C | movimentacoes | sim |
 | `movimentacoes_insumos` | operador+ (leitura) | C | movimentacoes_insumos | sim |
 | `ordens` | operador+ (leitura) | CUD | ordens_fabricacao | sim |
+| `oauth_authorization_codes` | admin | - | oauth_authorization_codes | sim |
+| `oauth_clients` | admin | - | oauth_clients | não |
+| `oauth_consents` | admin | - | oauth_consents | sim |
+| `oauth_tokens` | admin | - | oauth_tokens | sim |
+| `operational_approvals` | admin | - | operational_approvals | sim |
+| `operational_audit_events` | admin | - | operational_audit_events | sim |
+| `operational_executions` | admin | - | operational_executions | sim |
+| `operational_operations` | admin | - | operational_operations | sim |
 | `ordens_apontamentos` | operador+ (leitura) | - | ordens_apontamentos | sim |
 | `ordens_eventos` | operador+ (leitura) | - | ordens_eventos | sim |
 | `pdv_caixa_movimentos` | operador+ (leitura) | - | pdv_caixa_movimentos | sim |

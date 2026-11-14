@@ -1,5 +1,5 @@
 {
-  "gerado_em": "2026-11-12T16:52:34.416Z",
+  "gerado_em": "2026-11-14T10:32:06.615Z",
   "fonte_de_verdade_do_schema": "db/schema.sql + db/migrations/*.sql (PostgreSQL); Prisma = bounded context do commerce",
   "migrations": {
     "sql": 121,
@@ -7,20 +7,20 @@
     "prisma": 7
   },
   "tabelas": {
-    "total": 229,
-    "com_empresa_id": 208,
-    "sem_empresa_id": 21,
-    "fora_do_prisma": 218
+    "total": 237,
+    "com_empresa_id": 215,
+    "sem_empresa_id": 22,
+    "fora_do_prisma": 226
   },
-  "indices": 645,
-  "constraints": 452,
+  "indices": 658,
+  "constraints": 463,
   "recursos": {
-    "total": 191,
-    "com_tabela": 191,
-    "multiempresa": 172,
-    "somente_leitura": 92,
+    "total": 199,
+    "com_tabela": 199,
+    "multiempresa": 179,
+    "somente_leitura": 100,
     "rbac_restrito": 94,
-    "cobertura_tenant_pct": 90.1
+    "cobertura_tenant_pct": 89.9
   },
   "crm": [
     {
@@ -85,24 +85,28 @@
     }
   ],
   "modulos": {
-    "total": 151,
-    "navegaveis": 151,
+    "total": 152,
+    "navegaveis": 152,
     "planejados": 0,
     "areas": 11,
     "grupos": 34,
     "com_recurso": 112
   },
   "rotas": {
-    "total": 509,
+    "total": 505,
     "por_metodo": {
-      "GET": 226,
-      "POST": 244,
+      "GET": 223,
+      "POST": 243,
       "PUT": 22,
       "DELETE": 14,
       "PATCH": 3
     },
-    "publicas_por_desenho": 45,
+    "publicas_por_desenho": 44,
     "routers_montados": [
+      {
+        "base": "/api/operational-control",
+        "router": "operationalControlRouter"
+      },
       {
         "base": "/api",
         "router": "bloquearSenhaProvisoria"
@@ -207,17 +211,17 @@
   },
   "testes": {
     "server": {
-      "arquivos": 326,
-      "casos": 2704
+      "arquivos": 327,
+      "casos": 2756
     },
     "client": {
       "arquivos": 131,
-      "casos": 1109
+      "casos": 1105
     },
-    "total": 3813
+    "total": 3861
   },
   "integracoes": {
-    "arquivos_modules": 81,
+    "arquivos_modules": 127,
     "arquivos_server_modules": 1
   },
   "achados": [
@@ -460,6 +464,26 @@
       "nivel": "AVISO",
       "regra": "TENANT_SEM_TESTE",
       "mensagem": "O recurso \"woocommerce_reconciliacao_divergencias\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TENANT_SEM_TESTE",
+      "mensagem": "O recurso \"operational_audit_events\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TENANT_SEM_TESTE",
+      "mensagem": "O recurso \"oauth_consents\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TENANT_SEM_TESTE",
+      "mensagem": "O recurso \"oauth_authorization_codes\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TENANT_SEM_TESTE",
+      "mensagem": "O recurso \"oauth_tokens\" é multiempresa, mas não há teste de isolamento A × B que o cite nominalmente."
     }
   ],
   "tabelas_sem_empresa_id": [
@@ -480,6 +504,7 @@
     "login_tentativas",
     "medida_valores",
     "medidas",
+    "oauth_clients",
     "portal_acessos",
     "sale_items",
     "sessoes",
@@ -635,6 +660,14 @@
     "metas",
     "movimentacoes",
     "movimentacoes_insumos",
+    "oauth_authorization_codes",
+    "oauth_clients",
+    "oauth_consents",
+    "oauth_tokens",
+    "operational_approvals",
+    "operational_audit_events",
+    "operational_executions",
+    "operational_operations",
     "ordens_apontamentos",
     "ordens_eventos",
     "ordens_fabricacao",
