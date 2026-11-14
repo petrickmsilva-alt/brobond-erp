@@ -26,6 +26,7 @@
 | [ADR-0014](ADR-0014-prisma-sql.md) | Evolução do Prisma e SQL | Aceita |
 | [ADR-0015](ADR-0015-identidade-migrations.md) | Identidade de migrations = nome completo; colisão histórica 0121 | Aceita (2026-11-14) |
 | [ADR-0016](ADR-0016-plataforma-ia-alvo.md) | Plataforma de IA: base existente é a autoridade; alvo generativo incremental | Aceita (base validada; extensões não implementadas) |
+| [ADR-0017](ADR-0017-agentes-ia-deterministicos.md) | Agentes de IA determinísticos (06–08) sobre a base ai_*; CHECK creator_commands alargado | Aceita (implementada; memória + PG real) |
 
 ## ADRs históricos (migrados / referenciados)
 
