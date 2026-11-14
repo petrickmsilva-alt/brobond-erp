@@ -9533,3 +9533,188 @@ ALTER TABLE produtos DROP CONSTRAINT IF EXISTS produtos_atributos_adicionais_obj
 ALTER TABLE produtos
   ADD CONSTRAINT produtos_atributos_adicionais_obj_ck
   CHECK (jsonb_typeof(atributos_adicionais) = 'object');
+
+
+-- ============================================================================
+-- ESPELHO da migração 0121 — OPERATIONAL CONTROL PLANE + OAUTH 2.1
+-- (a autoridade é db/migrations/0121_operational_control_plane.sql; este
+-- espelho existe para o parser de schema e o contrato de colunas dos recursos).
+-- Tabelas OPERACIONAIS com `empresa_id` (escopo por endpoint próprio, mesmo
+-- padrão de logistics_*/payment_*). `oauth_clients` é GLOBAL (a aplicação não
+-- tem tenant); códigos/tokens/consentimentos carregam a empresa do consentimento.
+-- A chave primária é `id SERIAL` (convenção do ERP); o id OPACO da API
+-- (`op_...`, `exec_...`) vive em `public_id` (UNIQUE).
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS operational_operations (
+  id SERIAL PRIMARY KEY,
+  public_id TEXT NOT NULL,
+  empresa_id INTEGER NOT NULL REFERENCES empresas(id),
+  operation_type TEXT NOT NULL,
+  CONSTRAINT operational_operations_type_ck CHECK (operation_type IN ('workflow.dispatch', 'diagnostic.read_only')),
+  workflow_key TEXT NOT NULL,
+  requested_by INTEGER NOT NULL REFERENCES usuarios(id),
+  parameters JSONB NOT NULL DEFAULT '{}'::jsonb,
+  CONSTRAINT operational_operations_parameters_obj_ck CHECK (jsonb_typeof(parameters) = 'object'),
+  parameters_hash TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'requested',
+  CONSTRAINT operational_operations_status_ck CHECK (status IN (
+    'requested', 'pending_approval', 'rejected', 'expired', 'cancelled',
+    'approved', 'dispatching', 'dispatch_failed', 'dispatched',
+    'running', 'completed', 'failed', 'unknown'
+  )),
+  requires_approval BOOLEAN NOT NULL DEFAULT TRUE,
+  requested_scopes TEXT NOT NULL DEFAULT '',
+  idempotency_key TEXT NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  atualizado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT operational_operations_idempotency_nao_vazia CHECK (btrim(idempotency_key) <> ''),
+  CONSTRAINT operational_operations_reason_nao_vazia CHECK (btrim(reason) <> '')
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_operational_operations_public_id
+  ON operational_operations (public_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_operational_operations_idempotencia
+  ON operational_operations (empresa_id, idempotency_key);
+CREATE INDEX IF NOT EXISTS ix_operational_operations_empresa_status
+  ON operational_operations (empresa_id, status, criado_em DESC);
+CREATE INDEX IF NOT EXISTS ix_operational_operations_workflow
+  ON operational_operations (empresa_id, workflow_key, criado_em DESC);
+
+CREATE TABLE IF NOT EXISTS operational_approvals (
+  id SERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL REFERENCES empresas(id),
+  operation_id INTEGER NOT NULL REFERENCES operational_operations(id),
+  approved_by INTEGER NOT NULL REFERENCES usuarios(id),
+  decision TEXT NOT NULL,
+  CONSTRAINT operational_approvals_decision_ck CHECK (decision IN ('approve', 'reject')),
+  parameters_hash TEXT NOT NULL,
+  confirmation TEXT,
+  reason TEXT,
+  consumed_at TIMESTAMPTZ,
+  decided_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_operational_approvals_aprovacao
+  ON operational_approvals (operation_id) WHERE decision = 'approve';
+CREATE INDEX IF NOT EXISTS ix_operational_approvals_operacao
+  ON operational_approvals (operation_id, decided_at DESC);
+
+CREATE TABLE IF NOT EXISTS operational_executions (
+  id SERIAL PRIMARY KEY,
+  public_id TEXT NOT NULL,
+  empresa_id INTEGER NOT NULL REFERENCES empresas(id),
+  operation_id INTEGER NOT NULL REFERENCES operational_operations(id),
+  workflow_key TEXT NOT NULL,
+  branch TEXT NOT NULL,
+  github_run_id BIGINT,
+  status TEXT NOT NULL DEFAULT 'not_dispatched',
+  CONSTRAINT operational_executions_status_ck CHECK (status IN (
+    'not_dispatched', 'queued', 'in_progress', 'completed', 'failed', 'cancelled', 'unknown'
+  )),
+  conclusion TEXT,
+  html_url TEXT,
+  started_at TIMESTAMPTZ,
+  completed_at TIMESTAMPTZ,
+  last_checked_at TIMESTAMPTZ,
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  atualizado_em TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_operational_executions_public_id
+  ON operational_executions (public_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_operational_executions_operacao
+  ON operational_executions (operation_id);
+CREATE INDEX IF NOT EXISTS ix_operational_executions_empresa_status
+  ON operational_executions (empresa_id, status, criado_em DESC);
+
+CREATE TABLE IF NOT EXISTS operational_audit_events (
+  id BIGSERIAL PRIMARY KEY,
+  empresa_id INTEGER NOT NULL REFERENCES empresas(id),
+  operation_id INTEGER,
+  actor_id INTEGER,
+  event_type TEXT NOT NULL,
+  payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+  CONSTRAINT operational_audit_payload_obj_ck CHECK (jsonb_typeof(payload) = 'object'),
+  occurred_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  previous_hash TEXT,
+  event_hash TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS ix_operational_audit_operacao
+  ON operational_audit_events (operation_id, id);
+CREATE INDEX IF NOT EXISTS ix_operational_audit_empresa
+  ON operational_audit_events (empresa_id, id DESC);
+
+CREATE TABLE IF NOT EXISTS oauth_clients (
+  id SERIAL PRIMARY KEY,
+  client_id TEXT NOT NULL,
+  nome TEXT NOT NULL,
+  redirect_uris TEXT NOT NULL DEFAULT '',
+  scopes TEXT NOT NULL DEFAULT '',
+  confidential BOOLEAN NOT NULL DEFAULT FALSE,
+  secret_hash TEXT,
+  ativo BOOLEAN NOT NULL DEFAULT TRUE,
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  atualizado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT oauth_clients_client_id_nao_vazio CHECK (btrim(client_id) <> '')
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_oauth_clients_client_id ON oauth_clients (client_id);
+
+CREATE TABLE IF NOT EXISTS oauth_authorization_codes (
+  id SERIAL PRIMARY KEY,
+  code_hash TEXT NOT NULL,
+  client_id TEXT NOT NULL,
+  usuario_id INTEGER NOT NULL REFERENCES usuarios(id),
+  empresa_id INTEGER NOT NULL REFERENCES empresas(id),
+  perfil TEXT NOT NULL,
+  redirect_uri TEXT NOT NULL,
+  scope TEXT NOT NULL DEFAULT '',
+  code_challenge TEXT NOT NULL,
+  code_challenge_method TEXT NOT NULL DEFAULT 'S256',
+  CONSTRAINT oauth_codes_pkce_ck CHECK (code_challenge_method = 'S256'),
+  expires_at TIMESTAMPTZ NOT NULL,
+  consumed_at TIMESTAMPTZ,
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_oauth_codes_hash ON oauth_authorization_codes (code_hash);
+CREATE INDEX IF NOT EXISTS ix_oauth_codes_expira ON oauth_authorization_codes (expires_at);
+
+CREATE TABLE IF NOT EXISTS oauth_tokens (
+  id SERIAL PRIMARY KEY,
+  jti TEXT NOT NULL,
+  client_id TEXT NOT NULL,
+  usuario_id INTEGER NOT NULL REFERENCES usuarios(id),
+  empresa_id INTEGER NOT NULL REFERENCES empresas(id),
+  scope TEXT NOT NULL DEFAULT '',
+  tipo TEXT NOT NULL DEFAULT 'access',
+  CONSTRAINT oauth_tokens_tipo_ck CHECK (tipo IN ('access', 'refresh')),
+  parent_jti TEXT,
+  refresh_hash TEXT,
+  expires_at TIMESTAMPTZ NOT NULL,
+  revoked_at TIMESTAMPTZ,
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_oauth_tokens_jti ON oauth_tokens (jti);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_oauth_tokens_refresh ON oauth_tokens (refresh_hash)
+  WHERE refresh_hash IS NOT NULL;
+CREATE INDEX IF NOT EXISTS ix_oauth_tokens_usuario ON oauth_tokens (usuario_id, criado_em DESC);
+
+CREATE TABLE IF NOT EXISTS oauth_consents (
+  id SERIAL PRIMARY KEY,
+  usuario_id INTEGER NOT NULL REFERENCES usuarios(id),
+  client_id TEXT NOT NULL,
+  empresa_id INTEGER NOT NULL REFERENCES empresas(id),
+  scope TEXT NOT NULL DEFAULT '',
+  criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at TIMESTAMPTZ,
+  revoked_at TIMESTAMPTZ
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_oauth_consents_ativo
+  ON oauth_consents (usuario_id, client_id, empresa_id) WHERE revoked_at IS NULL;

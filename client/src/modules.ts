@@ -1968,6 +1968,19 @@ export const MODULES: Module[] = [
     adminOnly: true,
   },
 {
+    id: 'operacional',
+    label: 'Controle Operacional',
+    icon: ShieldCheck,
+    space: 'erp',
+    area: 'Administração',
+    group: 'Automações',
+    subgroup: 'Controle operacional e MCP',
+    keywords: 'operacional control plane mcp aprovacao workflow github actions dispatch diagnostico auditoria chatgpt',
+    path: '/operacional',
+    description: 'Solicitações, aprovações e execuções de workflows autorizados. Aprovar não é executar: a execução depende de aprovação humana e da política. Nenhuma execução arbitrária.',
+    adminOnly: true,
+  },
+{
     id: 'commerce-produtos',
     label: 'Produtos',
     icon: Package,
@@ -2420,6 +2433,8 @@ export const PAGES_ESPECIAIS = [
   'envios',
   'usuarios',
   'webhooks',
+  // OPERATIONAL CONTROL PLANE + REMOTE MCP (página própria de aprovação/execuções).
+  'operacional',
   'ncm',
   'inutilizacoes',
   'comissoes',
@@ -2515,6 +2530,8 @@ export const FORM_DIRETO = new Set([
 export const MODULOS_PAGINA_PROPRIA = new Set<string>([
   'usuarios',
   'webhooks',
+  // OPERATIONAL CONTROL PLANE + REMOTE MCP (página própria de aprovação/execuções).
+  'operacional',
   'estoque',
   'medidas',
   'inventario',

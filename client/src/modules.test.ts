@@ -132,11 +132,13 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
     //   (leitura derivada + configuração do motor de alertas).
     // + 1 da FASE 9.2 — Caixa de entrada do CRM (avisos internos por usuário).
     // + 1 da FASE 9.5 — Leiautes SPED/EFD (registro versionado, leitura).
-    expect(MODULES).toHaveLength(151);
+    // + 1 do OPERATIONAL CONTROL PLANE + REMOTE MCP — Controle Operacional
+    //   (/operacional), página própria de solicitações/aprovações/execuções.
+    expect(MODULES).toHaveLength(152);
     const ids = MODULES.map((m) => m.id);
     const paths = MODULES.map((m) => m.path);
-    expect(new Set(ids).size).toBe(151);
-    expect(new Set(paths).size).toBe(151);
+    expect(new Set(ids).size).toBe(152);
+    expect(new Set(paths).size).toBe(152);
 
     for (const [id, pathEsperado] of Object.entries(ROTAS_CANONICAS_ESPERADAS)) {
       const mod = MODULES.find((m) => m.id === id);
@@ -165,8 +167,8 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
     }
   });
 
-  it('separa ERP CORE (128), Commerce (17), Creators (4) e Utilidades Globais (2)', () => {
-    expect(MODULES.filter((m) => m.space === 'erp')).toHaveLength(128);
+  it('separa ERP CORE (129), Commerce (17), Creators (4) e Utilidades Globais (2)', () => {
+    expect(MODULES.filter((m) => m.space === 'erp')).toHaveLength(129);
     // 4 conectores de canal + 10 módulos do BROBOND COMMERCE OS
     expect(MODULES.filter((m) => m.space === 'commerce')).toHaveLength(17);
     expect(MODULES.filter((m) => m.space === 'creators')).toHaveLength(4);
@@ -342,7 +344,7 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
       // FASE 9.5 — registro versionado de leiautes SPED/EFD (leitura).
       'fiscal-layouts',
     ]);
-    expect(porArea('Administração')).toEqual(['empresas', 'usuarios', 'auditoria', 'webhooks']);
+    expect(porArea('Administração')).toEqual(['empresas', 'usuarios', 'auditoria', 'webhooks', 'operacional']);
     expect(porArea('Commerce')).toEqual([
       // COMMERCE ENTERPRISE — ordem do menu:
       // Catálogo → Comercial → Pedidos → Fulfillment → Pagamentos → Canais → Integrações → Inteligência
@@ -375,8 +377,9 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
     );
     expect(modulosNaArvore).toEqual(MODULES.map((m) => m.id));
     // 24 legadas + 12 páginas Commerce (inclui notificações) + 4 páginas Creators
-    // + 1 da FASE 9.2 (caixa de entrada do CRM). A Loja própria foi retirada (ADR-0007).
-    expect(PAGES_ESPECIAIS).toHaveLength(42);
+    // + 1 da FASE 9.2 (caixa de entrada do CRM) + 1 do Controle Operacional
+    // (Operational Control Plane + Remote MCP). A Loja própria foi retirada (ADR-0007).
+    expect(PAGES_ESPECIAIS).toHaveLength(43);
   });
 });
 

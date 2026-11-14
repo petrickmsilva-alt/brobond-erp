@@ -405,7 +405,38 @@ O agendador é **externo** ao repositório (`render.yaml` não declara cron). Ca
 - Documentação completa: `docs/operacao/cinco-jobs-cron.md` (URL, método, autenticação, frequência, timeout, retentativa, códigos de resposta).
 - Frequência e timeout não estão definidos: pendência **G1**.
 
-## 15. Atualização Ordem Final (pendências 2.1 a 2.8)
+## 15. Operational Control Plane + OAuth 2.1 (migration 0121)
+
+Nenhum valor é declarado aqui — apenas NOMES de configuração. As credenciais da
+GitHub App e as chaves do Authorization Server nunca entram no repositório, no
+frontend, no banco em texto aberto nem em log; quando persistidas, o são
+CIFRADAS (AES-256-GCM, `server/src/segredos.ts`) na tabela `configuracoes`.
+
+| Variável | Quem usa | Obrigatória? | Padrão e comportamento |
+|---|---|---|---|
+| `GITHUB_APP_ID` | `modules/operational-control/infrastructure/token-vault.ts` | Sim, para dispatch | Sem padrão; ausente: a GitHub App é considerada NÃO configurada (o dispatch falha fechado) |
+| `GITHUB_APP_INSTALLATION_ID` | `token-vault.ts` | Sim, para dispatch | Sem padrão; ausente: idem acima |
+| `GITHUB_APP_PRIVATE_KEY` | `token-vault.ts` (PEM; `\n` escapado é aceito) | Sim, para dispatch | Sem padrão; chave privada da App, exclusiva do servidor |
+| `GITHUB_WEBHOOK_SECRET` | `token-vault.ts` | Não (somente se webhooks forem habilitados) | Ausente: sem validação HMAC de webhook |
+| `GITHUB_API_BASE_URL` | `github-app.client.ts` | Não | `https://api.github.com`; permite apontar para um servidor de teste de homologação |
+| `GITHUB_API_TIMEOUT_MS` | `github-app.client.ts` | Não | `15000` ms |
+| `OAUTH_ISSUER` | `oauth/tokens.ts` | Sim, para OAuth | `https://auth.brobond.com.br` (referência; a URL efetiva é validada antes da configuração OAuth) |
+| `OAUTH_RESOURCE` | `oauth/tokens.ts` | Sim, para OAuth | `https://mcp.brobond.com.br/mcp` (audience do Resource Server) |
+| `OAUTH_ACCESS_TTL_SECONDS` | `oauth/tokens.ts` | Não | `900` (15 min) |
+| `OAUTH_REFRESH_TTL_SECONDS` | `oauth/tokens.ts` | Não | `2592000` (30 dias) |
+| `OAUTH_CODE_TTL_SECONDS` | `oauth/codes.ts` | Não | `120` s |
+| `OAUTH_JWT_PRIVATE_KEY` | `oauth/keys.ts` (PEM RS256) | Não | Sem padrão; quando ausente o par é gerado e guardado CIFRADO em `configuracoes` |
+| `OAUTH_JWT_PUBLIC_KEY` | `oauth/keys.ts` (PEM) | Não | Sem padrão; par público da chave acima |
+| `OPERATIONAL_SESSION_SCOPES` | `http/operational-control.middleware.ts` | Não | Escopos da sessão do ERP (não-OAuth); padrão concede os escopos iniciais |
+| `OPERATIONAL_OPERATION_TTL_MINUTES` | `application/request-operation.ts` | Não | `60` min |
+| `OPERATIONAL_APPROVAL_TTL_MINUTES` | `application/approve-operation.ts` | Não | `30` min |
+| `OPERATIONAL_RATE_WINDOW_MS` | `infrastructure/rate-limit.ts` | Não | `60000` ms |
+| `OPERATIONAL_RATE_MAX` | `infrastructure/rate-limit.ts` | Não | `60` chamadas por janela |
+| `OAUTH_CIMD_ENABLED` | `oauth/outbound-guard.ts` | Não | Desligado; `true` habilita o Client ID Metadata Document (a busca passa pela guarda anti-SSRF) |
+| `OAUTH_CIMD_TIMEOUT_MS` | `oauth/outbound-guard.ts` | Não | `4000` ms (timeout total da busca do CIMD) |
+| `OAUTH_CIMD_MAX_BYTES` | `oauth/outbound-guard.ts` | Não | `65536` bytes (teto do documento CIMD) |
+
+## 15.1 Atualização Ordem Final (pendências 2.1 a 2.8)
 
 Nenhuma variável de produção foi criada, alterada ou lida. Os valores abaixo são **nomes declarados**, sem valor.
 
