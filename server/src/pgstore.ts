@@ -410,15 +410,26 @@ export class PgStore implements Store {
     const selectList = [...cols, ...selects].join(', ');
     const from = `FROM ${r.table} t ${joins.join(' ')} ${where}`;
 
-    const totalRes = await q(`SELECT COUNT(*)::int AS total ${from}`, params, tx);
-    const total = totalRes.rows[0]?.total ?? 0;
-
     const offset = (p.page - 1) * p.pageSize;
-    const rowsRes = await q(
-      `SELECT ${selectList} ${from} ${orderClause(r, p)} LIMIT ${p.pageSize} OFFSET ${offset}`,
-      params,
-      tx
-    );
+    // PERF-05 — UMA ida ao banco, não duas.
+    //
+    // A contagem e a página foram separadas por histórico (uma falha de COUNT
+    // não deveria custar a página). Elas são independentes e somente-leitura:
+    // disparando juntas, a tela paga o MAIOR tempo (não a soma). Com banco
+    // gerenciado fora da região da API, cada round-trip custa dezenas de ms e
+    // isso aparecia em TODA listagem.
+    //
+    // Em transação, o cliente `pg` enfileira as duas consultas no mesmo
+    // backend — a semântica é a mesma da execução em série (mesmo snapshot).
+    const [totalRes, rowsRes] = await Promise.all([
+      q(`SELECT COUNT(*)::int AS total ${from}`, params, tx),
+      q(
+        `SELECT ${selectList} ${from} ${orderClause(r, p)} LIMIT ${p.pageSize} OFFSET ${offset}`,
+        params,
+        tx
+      ),
+    ]);
+    const total = totalRes.rows[0]?.total ?? 0;
     return { rows: rowsRes.rows, total, page: p.page, pageSize: p.pageSize };
   }
 

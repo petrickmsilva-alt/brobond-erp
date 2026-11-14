@@ -1,0 +1,47 @@
+# ============================================================================
+# BROBOND ERP — VPS (HostGator / qualquer VPS com Docker)
+#
+# Uso:
+#   cp .env.example .env    # preencha DATABASE_URL (o MESMO Neon da Render)
+#   docker compose up -d --build
+#   docker compose logs -f app
+#
+# O que este arquivo NÃO faz (de propósito):
+#   • não sobe Postgres local — o banco continua sendo o Neon (regra do benchmark
+#     e da arquitetura: Neon segue como banco principal);
+#   • não troca a produção sozinho. É um ambiente PARALELO para medição.
+# ============================================================================
+services:
+  app:
+    build:
+      context: ../..
+      dockerfile: deploy/vps/Dockerfile
+    image: brobond-erp:perf
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      PORT: "3001"
+      NODE_ENV: "production"
+      # Mesma configuração de conexões da Render: N instâncias × PG_POOL_MAX
+      # precisa caber no limite do pooler do Neon.
+      PG_POOL_MAX: "${PG_POOL_MAX:-10}"
+      PG_APP_NAME: "brobond-api-vps"
+      BOOT_HOLD_MS: "20000"
+      TRUST_PROXY: "1"
+    ports:
+      - "${PORTA_PUBLICA:-8080}:3001"
+    # A VPS inteira pertence à aplicação: ela pode usar todo o host.
+    # (Na Render o `free` limita a 0,1 vCPU — é uma das hipóteses medidas.)
+    cpus: "${VPS_CPUS:-2}"
+    mem_limit: "${VPS_MEM:-2g}"
+    ulimits:
+      nofile: { soft: 65535, hard: 65535 }
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "5" }
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/api/health/db').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 90s
