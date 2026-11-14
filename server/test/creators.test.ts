@@ -40,7 +40,10 @@ describe('Creators — capacidades, identidade e escopo', () => {
         assert.ok(!('rows' in capability));
         assert.ok(!('total' in capability));
       }
-      assert.equal(body.modulos['creator-matches'].recomendacao, false);
+      assert.equal(body.modulos['creator-matches'].recomendacao, true);
+      assert.equal(body.modulos['creator-matches'].recomendacao_tipo, 'deterministica');
+      assert.equal(body.modulos['creator-matches'].recomendacao_fonte, 'ai_recommendations');
+      assert.equal(body.modulos['creator-matches'].aplicacao_automatica, false);
       // Outreach: registro MANUAL do contato (creator_outreach) — a persistência
       // existe, mas a GERAÇÃO e o ENVIO continuam desligados até haver provedor
       // homologado. Honestidade: nada é simulado.

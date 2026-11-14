@@ -1,12 +1,13 @@
 // ============================================================================
 // MATCHES — afinidade REGISTRADA entre creator, campanha e categoria
-// (creator_matches), com score e evidência factuais.
+// (creator_matches), com score e evidência factuais, + Creator Intelligence
+// determinístico (Etapa 07) que sugere pares para revisão humana.
 //
 // ZERO MODAL: LISTA → /matches/novo → /matches/:id → /matches/:id/editar.
 //
 // O QUE ESTA PÁGINA NÃO FAZ
-//   • não gera recomendação: nenhum algoritmo sugere o par. Uma PESSOA registra
-//     a afinidade e informa o score e a evidência (fatos), que ficam gravados.
+//   • não cria parceria nem envia mensagem; a sugestão determinística vira
+//     recomendação pendente em /ai/recomendacoes e exige decisão humana.
 //   • as parcerias manuais (vínculo comercial) vivem em /matches/parcerias.
 // ============================================================================
 import { useEffect, useState, type FormEvent } from 'react';
@@ -41,7 +42,18 @@ export default function CreatorMatchesPage() {
   const [error, setError] = useState(''); const [loading, setLoading] = useState(!creating); const [busy, setBusy] = useState(false);
   const [creatorId, setCreatorId] = useState(''); const [campaignId, setCampaignId] = useState(''); const [categoriaId, setCategoriaId] = useState('');
   const [score, setScore] = useState('0'); const [evidencia, setEvidencia] = useState(''); const [status, setStatus] = useState('sugerido');
+  const [intelMsg, setIntelMsg] = useState(''); const [intelBusy, setIntelBusy] = useState(false);
   const keyFor = useIdempotencyKey();
+
+  async function gerarIntelligence() {
+    setIntelBusy(true); setIntelMsg(''); setError('');
+    const body = JSON.stringify({});
+    try {
+      const out = await apiFetch<{ total: number }>('/creators/intelligence/gerar', { method: 'POST', headers: { 'Idempotency-Key': keyFor(`intelligence:${body}`) }, body });
+      setIntelMsg(out.total ? `${out.total} sugestão(ões) determinística(s) gerada(s) para revisão humana.` : 'Nenhum par elegível com os dados atuais; nenhuma audiência externa foi inventada.');
+    } catch (e) { setError(e instanceof Error ? e.message : 'Não foi possível gerar o Creator Intelligence.'); }
+    finally { setIntelBusy(false); }
+  }
 
   useEffect(() => {
     const controller = new AbortController();
@@ -92,9 +104,10 @@ export default function CreatorMatchesPage() {
 
   return <div className="min-w-0 space-y-4">
     <PageHeader title={creating ? 'Nova afinidade' : editing ? 'Editar afinidade' : id ? `Afinidade #${id}` : 'Matches'}
-      description="Afinidades registradas por pessoas. O sistema não sugere pares nem fabrica scores." />
+      description="Afinidades registradas por pessoas e sugestões determinísticas do Creator Intelligence para revisão humana." />
     <CreatorsNavigation />
-    <Alert tone="blue">Esta tela registra a afinidade e sua evidência. As <Link className="underline" to="/matches/parcerias">parcerias manuais</Link> (vínculo comercial com cupom) ficam separadas.</Alert>
+    <Alert tone="blue">Esta tela registra a afinidade e sua evidência. As <Link className="underline" to="/matches/parcerias">parcerias manuais</Link> (vínculo comercial com cupom) ficam separadas. O Creator Intelligence não cria parceria, não gera mensagem e não envia contato.</Alert>
+    {intelMsg && <Alert tone="green">{intelMsg} <Link className="underline" to="/ai/recomendacoes">Revisar recomendações</Link>.</Alert>}
     {(id || creating) && <Link className="text-sm text-blue-700 hover:underline" to={editing ? `${base}/${id}` : base}>← Voltar</Link>}
     {error && <Alert tone="red">{error}</Alert>}{loading && <Spinner label="Carregando afinidades…" />}
 
@@ -114,6 +127,7 @@ export default function CreatorMatchesPage() {
 
     {!creating && !editing && !id && !loading && rows && <section className="space-y-3">
       <div className="flex flex-wrap items-end gap-2">{manage && <Link className="btn-primary" to={`${base}/novo`}>Nova afinidade</Link>}
+        {manage && <button type="button" className="btn-secondary" disabled={intelBusy} onClick={() => void gerarIntelligence()}>{intelBusy ? 'Gerando…' : 'Creator Intelligence'}</button>}
         <Link className="btn-secondary" to="/matches/parcerias">Parcerias manuais</Link>
         <form className="flex flex-wrap gap-2" onSubmit={(e) => { e.preventDefault(); setPage(1); setSubmittedSearch(search.trim()); }}>
           <label>Buscar<input className="input ml-2" maxLength={100} value={search} onChange={(e) => setSearch(e.target.value)} /></label>

@@ -1,5 +1,14 @@
 # CURRENT-STATE — auditoria do estado atual (Fase 0)
 
+> **ATUALIZAÇÃO 2026-11-14 (Etapa 03).** Este documento é a fotografia da
+> **Fase 0** (2026-11-07) e foi preservado como histórico. O estado atual
+> verificável está em
+> [`RECONCILIATION-2026-11-14.md`](RECONCILIATION-2026-11-14.md) +
+> [`../ERP-3.0-ARCHITECTURE-INVENTORY.json`](../ERP-3.0-ARCHITECTURE-INVENTORY.json)
+> (regenerado: 122 migrations, 199 recursos, 152 módulos, 509 rotas).
+> Correção factual: o cliente é **Vite 6 + React 18.3.1** — a linha
+> "React 19" abaixo era imprecisa (`client/package.json`: `react ^18.3.1`).
+
 **Data:** 2026-11-07 · **Branch:** `architecture/fase-0-blueprint` · **Base:** `main`
 **Método:** leitura direta do código + execução dos gates do repositório.
 **Fonte dos números:** `npm run architecture:audit`, `npm run audit:menu`,

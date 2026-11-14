@@ -6,9 +6,11 @@
 // mostra empty state honesto — nunca série fabricada, nunca “—” como número.
 // ============================================================================
 import { useCallback, useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { Minus, TrendingDown, TrendingUp, Wallet } from 'lucide-react';
 import { apiFetch, ApiError } from '../../lib/api';
 import { Alert, EmptyState, PageHeader, Spinner } from '../../components/ui';
+import { useIdempotencyKey } from '../../lib/idempotency';
 import { Metrica, grana, dataHora } from './shared';
 
 type Trends = {
@@ -29,6 +31,22 @@ export default function CommerceTrendsPage() {
   const [dados, setDados] = useState<Trends | null>(null);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState('');
+  const [hunterMsg, setHunterMsg] = useState('');
+  const [hunterBusy, setHunterBusy] = useState(false);
+  const keyFor = useIdempotencyKey();
+
+  async function gerarTrendHunter() {
+    setHunterBusy(true); setHunterMsg(''); setErro('');
+    const body = JSON.stringify({ janela_dias: dias });
+    try {
+      const out = await apiFetch<{ total: number; idempotente: boolean }>('/ai/trend-hunter/gerar', {
+        method: 'POST', headers: { 'Idempotency-Key': keyFor(body) }, body,
+      });
+      setHunterMsg(out.total ? `${out.total} recomendação(ões) interna(s) gerada(s) para revisão humana.` : 'Nenhuma tendência interna elegível nesta janela; nada foi fabricado.');
+    } catch (e) {
+      setErro(e instanceof ApiError ? e.message : 'Não foi possível gerar o Trend Hunter.');
+    } finally { setHunterBusy(false); }
+  }
 
   const carregar = useCallback(async () => {
     setCarregando(true);
@@ -54,18 +72,25 @@ export default function CommerceTrendsPage() {
         title="Trends"
         description="Curvas de demanda calculadas sobre os pedidos reais dos canais — receita diária, tendência e aceleração de SKUs."
         actions={
-          <label className="text-sm">
-            <span className="sr-only">Período</span>
-            <select className="input w-40" value={dias} onChange={(e) => setDias(Number(e.target.value))}>
-              {DIAS.map((d) => (
-                <option key={d} value={d}>
-                  Últimos {d} dias
-                </option>
-              ))}
-            </select>
-          </label>
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="text-sm">
+              <span className="sr-only">Período</span>
+              <select className="input w-40" value={dias} onChange={(e) => setDias(Number(e.target.value))}>
+                {DIAS.map((d) => (
+                  <option key={d} value={d}>
+                    Últimos {d} dias
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button type="button" className="btn-secondary" disabled={hunterBusy || carregando} onClick={() => void gerarTrendHunter()}>
+              {hunterBusy ? 'Gerando…' : 'Trend Hunter interno'}
+            </button>
+          </div>
         }
       />
+      <Alert tone="blue">Trend Hunter determinístico: compara janelas de vendas reais do ERP e grava recomendações pendentes. Não consulta fontes externas nem altera preço/estoque.</Alert>
+      {hunterMsg && <Alert tone="green">{hunterMsg} <Link className="underline" to="/ai/recomendacoes">Revisar recomendações</Link>.</Alert>}
       {erro && <Alert tone="red">{erro}</Alert>}
       {carregando ? (
         <Spinner label="Calculando tendências…" />

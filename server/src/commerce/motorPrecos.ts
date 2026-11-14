@@ -417,11 +417,22 @@ export type MemoriaPrecificacao = {
 };
 
 /** Grava uma linha de memória de precificação. Nunca falha a operação chamadora
- * por causa de trilha: o chamador decide se usa `tx`. */
+ * por causa de trilha: o chamador decide se usa `tx`.
+ *
+ * TENANT (Etapa 02 — Tenant Coverage): a memória pertence à empresa do PRODUTO,
+ * derivada no servidor — nunca ao DEFAULT 1 do memdb. Sem esta derivação, a
+ * linha de uma venda da empresa B era gravada na empresa A (memdb) ou recusada
+ * por NOT NULL (PostgreSQL, onde a coluna não tem default nem trigger). */
 export async function registrarMemoriaPrecificacao(entrada: MemoriaPrecificacao, tx?: Tx): Promise<number | null> {
-  const linha = await getStore().insert(
+  const s = getStore();
+  const produto = await s.get(getResource('produtos')!, Number(entrada.produto_id), tx);
+  if (!produto) return null; // produto inexistente: sem trilha, nunca órfã
+  const empresaId = Number(produto.empresa_id);
+  if (!Number.isSafeInteger(empresaId) || empresaId <= 0) return null;
+  const linha = await s.insert(
     R_MEMORIA(),
     {
+      empresa_id: empresaId,
       canal: entrada.canal,
       cliente_id: entrada.cliente_id ?? null,
       venda_id: entrada.venda_id ?? null,

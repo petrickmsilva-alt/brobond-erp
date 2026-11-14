@@ -1,5 +1,11 @@
 # BROBOND ERP — COMMERCE ENGINE · AUDITORIA ARQUITETURAL (FASE 1)
 
+> **NOTA 2026-11-14 (Etapa 03):** a afirmação "Next.js 15 / React 19" abaixo
+> está incorreta para este repositório: o cliente real é **Vite 6 + React
+> 18.3.1** (`client/package.json`; não há dependência `next`). O texto original
+> foi preservado como histórico. Estado atual:
+> [`RECONCILIATION-2026-11-14.md`](RECONCILIATION-2026-11-14.md).
+
 > Documento de auditoria da missão **Brobond ERP Commerce Engine**.
 > Base: inspeção do repositório `petrickmsilva-alt/brobond-erp`, branch
 > `feat/brobond-commerce-engine`, merge de `origin/main` (`c9297a8`).

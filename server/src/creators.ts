@@ -30,7 +30,7 @@ export function capacidadesCreators(req: Request, res: Response) {
   res.setHeader('Cache-Control', 'private, no-store');
   res.json({ empresa_id: empresaId, modulos: {
     creators: { estado: 'ATIVO', fonte: 'creator_profiles', consulta: true, criacao: manage },
-    'creator-matches': { estado: 'ATIVO_MANUAL', fonte: 'creator_matches', consulta: true, criacao: manage, recomendacao: false },
+    'creator-matches': { estado: 'ATIVO_ASSISTIDO', fonte: 'creator_matches', consulta: true, criacao: manage, recomendacao: true, recomendacao_tipo: 'deterministica', recomendacao_fonte: 'ai_recommendations', aplicacao_automatica: false },
     'outreach-ai': { estado: 'ATIVO_MANUAL', fonte: 'creator_outreach', consulta: true, criacao: manage, geracao: false, envio: false, motivo: 'ENVIO_DEPENDE_DE_PROVEDOR_HOMOLOGADO' },
     campanhas: { estado: 'ATIVO', fonte: 'creator_campaigns', consulta: true, criacao: manage },
   } });

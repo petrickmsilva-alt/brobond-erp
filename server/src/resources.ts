@@ -7776,6 +7776,7 @@ export const RESOURCES: Record<string, Resource> = {
         { value: 'fallback', label: 'Fallback', tone: 'amber' },
       ] },
       { name: 'erro', label: 'Erro', type: 'text', maxLength: 500, list: false },
+      { name: 'chave_idempotencia', label: 'Chave de idempotência', type: 'text', maxLength: 160, readonly: true, form: false, list: false },
       ...auditAppendOnly,
     ],
     orderBy: { field: 'id', dir: 'desc' },

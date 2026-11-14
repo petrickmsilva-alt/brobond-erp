@@ -7445,12 +7445,18 @@ CREATE TABLE IF NOT EXISTS creator_commands (
   empresa_id INTEGER NOT NULL REFERENCES empresas(id),
   idempotency_key TEXT NOT NULL CHECK (length(idempotency_key) BETWEEN 8 AND 160),
   request_hash TEXT NOT NULL CHECK (length(request_hash) = 64),
-  entity TEXT NOT NULL CHECK (entity IN ('profile', 'campaign', 'partnership')),
+  entity TEXT NOT NULL CHECK (entity IN ('profile', 'campaign', 'partnership', 'match', 'outreach')),
   entity_id BIGINT NOT NULL,
   created_by INTEGER NOT NULL REFERENCES usuarios(id),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (empresa_id, idempotency_key)
 );
+
+-- Mirror of migration 0122_creator_commands_entidades_match_outreach.sql
+-- creator_commands.entity accepts the five real creator entities; additive CHECK.
+ALTER TABLE IF EXISTS creator_commands DROP CONSTRAINT IF EXISTS creator_commands_entity_check;
+ALTER TABLE IF EXISTS creator_commands ADD CONSTRAINT creator_commands_entity_check
+  CHECK (entity IN ('profile', 'campaign', 'partnership', 'match', 'outreach'));
 
 -- Mirror of migration 0076_payment_late_reviews.sql
 -- A late review is an operational exception, not a second payment ledger.
