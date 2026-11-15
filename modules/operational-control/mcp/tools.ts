@@ -156,9 +156,31 @@ export const FERRAMENTAS: readonly FerramentaMcp[] = [
     },
   },
   {
+    name: 'brobond_github_workflows',
+    title: 'Workflows GitHub Actions',
+    description: 'Lista workflows reais do GitHub Actions no repositório fixo. Somente leitura, sem logs ou segredos.',
+    acao: 'workflow.read',
+    inputSchema: { type: 'object', additionalProperties: false, properties: { limit: { type: 'integer', minimum: 1, maximum: LIMITE_MAX } } },
+    handler: async ({ args, actions = githubActions }) => {
+      const workflows = await actions.listarWorkflows(repositorioDoRegistro(), limite(args));
+      return { repository: repositorioDoRegistro(), workflows: workflows.map((w) => ({ id: w.id, name: w.name, path: w.path, state: w.state, html_url: w.html_url })) };
+    },
+  },
+  {
+    name: 'brobond_github_actions_runs',
+    title: 'Execuções GitHub Actions',
+    description: 'Lista execuções reais no GitHub Actions. Diferente de brobond_workflow_runs, que consulta o banco local.',
+    acao: 'workflow.read',
+    inputSchema: { type: 'object', additionalProperties: false, properties: { limit: { type: 'integer', minimum: 1, maximum: LIMITE_MAX } } },
+    handler: async ({ args, actions = githubActions }) => {
+      const runs = await actions.listarRuns(repositorioDoRegistro(), { limit: limite(args) });
+      return { repository: repositorioDoRegistro(), runs: runs.map((r) => ({ id: r.id, name: r.name, status: r.status, conclusion: r.conclusion, html_url: r.html_url, head_branch: r.head_branch, created_at: r.created_at, updated_at: r.updated_at })) };
+    },
+  },
+  {
     name: 'brobond_workflow_runs',
     title: 'Execuções de workflow',
-    description: 'Lista as execuções registradas dos workflows autorizados (metadados do GitHub Actions: run id, status, conclusão e URL). Nunca devolve logs brutos nem variáveis de ambiente.',
+    description: 'Lista no banco local as execuções registradas dos workflows autorizados (metadados do GitHub Actions: run id, status, conclusão e URL). Nunca devolve logs brutos nem variáveis de ambiente.',
     acao: 'workflow.read',
     inputSchema: {
       type: 'object',

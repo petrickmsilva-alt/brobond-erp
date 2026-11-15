@@ -59,6 +59,13 @@ services:
         value: 10000
       - key: DATABASE_URL
         sync: false
+      # GitHub App já existente; valores somente no painel/secret manager.
+      - key: GITHUB_APP_ID
+        sync: false
+      - key: GITHUB_APP_INSTALLATION_ID
+        sync: false
+      - key: GITHUB_APP_PRIVATE_KEY
+        sync: false
       # Endereço público do ERP: base dos links enviados por e-mail (convite de
       # acesso, redefinição de senha), do portal do cliente e das etiquetas QR.
       # Defina no painel com o domínio que os usuários realmente usam, ex.

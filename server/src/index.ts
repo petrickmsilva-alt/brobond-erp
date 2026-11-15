@@ -463,6 +463,7 @@ import { publicLogisticsWebhookRouter } from '../../modules/logistics/api/webhoo
 import { operationalControlRouter } from '../../modules/operational-control/http/operational-control.routes';
 import { oauthRouter } from '../../modules/operational-control/oauth/routes';
 import { mcpRouter } from '../../modules/operational-control/mcp/server';
+import { resolverConfigGithubApp } from '../../modules/operational-control/infrastructure/token-vault';
 import {
   initNegociosEngine,
   negociosABC,
@@ -1957,6 +1958,13 @@ async function start() {
     carregarOrigemDoBanco(true),
     limpezaPeriodica(),
   ]);
+
+  // Diagnóstico seguro após inicializar o banco; nunca imprime valores ou exceções.
+  try {
+    const { config, diagnostico } = await resolverConfigGithubApp();
+    if (!config) log.warn('github_app_config_boot', { ...diagnostico });
+    else log.info('github_app_config_boot', { fonte: diagnostico.fonte });
+  } catch { log.warn('github_app_config_boot', { motivo: 'diagnostico_indisponivel' }); }
 
   // Só declara prontidão para tráfego após banco conectado/migrado e bootstrap
   // inicial concluído. Workers/filas/motores em segundo plano iniciam depois.

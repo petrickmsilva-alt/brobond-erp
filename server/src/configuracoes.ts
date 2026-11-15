@@ -50,6 +50,14 @@ export async function lerConfig(chave: string): Promise<string> {
   }
 }
 
+/** Leitura estrita para integrações que precisam distinguir ausência de falha de banco.
+ * Não retorna detalhes da exceção ao cliente. Não altera o contrato de lerConfig. */
+export async function lerConfigEstrita(chave: string): Promise<string | null> {
+  const { getStore } = await import('./services');
+  const row = await getStore().findOneWhere(R_CONFIGURACOES, { chave });
+  return row?.valor == null ? null : String(row.valor);
+}
+
 /** Grava (ou substitui) uma configuração, registrando quem alterou. */
 export async function gravarConfig(chave: string, valor: string, atualizadoPor: string): Promise<void> {
   const { getStore } = await import('./services');
