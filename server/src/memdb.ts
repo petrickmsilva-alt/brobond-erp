@@ -481,6 +481,17 @@ export class MemStore implements Store {
     }
   }
 
+  async saveOAuthConsent(usuarioId: number, clientId: string, empresaId: number, scope: string): Promise<Row> {
+    // Sem await entre consulta e escrita: seção síncrona no modo memória.
+    for (const row of this.table('oauth_consents').rows.values()) {
+      if (row.usuario_id === usuarioId && row.client_id === clientId && row.empresa_id === empresaId && row.revoked_at == null) {
+        row.scope = scope;
+        return { ...row };
+      }
+    }
+    return this.insert(RESOURCES.oauth_consents, { usuario_id: usuarioId, client_id: clientId, empresa_id: empresaId, scope });
+  }
+
   async insert(r: Resource, data: Payload): Promise<Row> {
     this.checkConstraints(r, data);
     const t = this.table(r.table);

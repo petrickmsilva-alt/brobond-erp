@@ -206,6 +206,9 @@ export interface Store {
     tx?: Tx
   ): Promise<Map<number, Row>>;
 
+  /** Cria ou atualiza atomicamente o consentimento ativo; preserva os revogados. */
+  saveOAuthConsent(usuarioId: number, clientId: string, empresaId: number, scope: string): Promise<Row>;
+
   insert(r: Resource, data: Payload, tx?: Tx): Promise<Row>;
   update(r: Resource, id: number, data: Payload, tx?: Tx): Promise<Row | null>;
   remove(r: Resource, id: number, tx?: Tx): Promise<boolean>;

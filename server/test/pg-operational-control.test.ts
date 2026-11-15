@@ -99,3 +99,30 @@ test('0121: as tabelas operacionais existem e a cadeia de auditoria fecha no PG'
 });
 
 type Ator = import('../../modules/operational-control/domain/operation').OperationalActor;
+
+test('OAuth consent: upsert concorrente respeita índice parcial, isolamento e revogação', { skip }, async () => {
+  const { migrate } = await import('../src/db');
+  await migrate();
+  const { PgStore } = await import('../src/pgstore');
+  const { RESOURCES } = await import('../src/resources');
+  // Duas instâncias representam processos distintos: não depende de mutex JS.
+  const a = new PgStore();
+  const b = new PgStore();
+  const emp = await a.insert(RESOURCES.empresas, { nome: `Consent PG ${sufixo}` });
+  const empB = await a.insert(RESOURCES.empresas, { nome: `Consent PG B ${sufixo}` });
+  const user = await a.insert(RESOURCES.usuarios, { nome: 'Consent PG', email: `consent-${sufixo}-${Math.random()}@brobond.test`, perfil: 'admin', ativo: true });
+  const client = `consent-pg-${sufixo}`;
+  const save = (store: typeof a, empresaId = Number(emp.id), scope = 'brobond:system:read') => store.saveOAuthConsent(Number(user.id), client, empresaId, scope);
+  const results = await Promise.all(Array.from({ length: 20 }, (_, i) => save(i % 2 ? a : b)));
+  assert.equal(new Set(results.map((r) => r.id)).size, 1);
+  const updated = await save(b, Number(emp.id), 'brobond:audit:read');
+  assert.equal(updated.id, results[0].id);
+  assert.equal(updated.scope, 'brobond:audit:read');
+  const independent = await save(a, Number(empB.id));
+  assert.notEqual(independent.id, updated.id);
+  await a.update(RESOURCES.oauth_consents, Number(updated.id), { revoked_at: new Date().toISOString() });
+  const fresh = await save(b);
+  assert.notEqual(fresh.id, updated.id);
+  assert.ok((await a.get(RESOURCES.oauth_consents, Number(updated.id)))?.revoked_at);
+  assert.equal(await a.countWhere(RESOURCES.oauth_consents, { usuario_id: user.id, client_id: client, empresa_id: emp.id, revoked_at: null }), 1);
+});
