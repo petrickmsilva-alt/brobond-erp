@@ -2,7 +2,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
-import Login from './Login';
+import Login, { resolverRetornoPosLogin } from './Login';
 import * as AuthContext from '../auth/AuthContext';
 
 // Mocka o AuthContext inteiro: o objetivo aqui é testar a TELA de login (validação,
@@ -107,5 +107,29 @@ describe('Login', () => {
 
     await user.click(screen.getByRole('tab', { name: 'Recuperação' }));
     expect(screen.getByLabelText('Código de recuperação')).toBeInTheDocument();
+  });
+
+  it('resolverRetornoPosLogin aceita apenas /oauth/authorize relativo e bloqueia open redirect', () => {
+    const queryValida =
+      '/oauth/authorize?response_type=code&client_id=chatgpt-f3f259d5-c4b5-451c-b2de-0d5b79c0260b&state=abc123';
+    expect(resolverRetornoPosLogin(`?next=${encodeURIComponent(queryValida)}`)).toEqual({
+      tipo: 'servidor',
+      url: queryValida,
+    });
+
+    for (const malicioso of [
+      'https://evil.example/oauth/authorize',
+      '//evil.example/oauth/authorize',
+      '/oauth/authorize\\@evil.example',
+      '/oauth/authorize-falso?x=1',
+      'javascript:alert(1)',
+      '/admin',
+      '',
+    ]) {
+      expect(resolverRetornoPosLogin(`?next=${encodeURIComponent(malicioso)}`)).toEqual({
+        tipo: 'spa',
+        path: '/',
+      });
+    }
   });
 });

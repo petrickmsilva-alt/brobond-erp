@@ -88,12 +88,22 @@ test('produção: `.well-known` não cai no fallback do frontend nem redireciona
 });
 
 test('produção: demais rotas do servidor na raiz não recebem o index.html', async () => {
-  // GET /mcp → 405 JSON-RPC; /oauth/authorize sem sessão → 401 JSON.
+  // GET /mcp → 405 JSON-RPC; /oauth/authorize (JSON) sem sessão → 401 JSON;
+  // /oauth/authorize (navegação HTML) → ponte OAuth (nunca o index.html do SPA).
   const mcp = await obter(servidor.base, '/mcp');
   assert.equal(mcp.status, 405);
   assert.match(mcp.contentType, /^application\/json\b/i);
-  const authorize = await obter(servidor.base, '/oauth/authorize?response_type=code&client_id=x&code_challenge=y&code_challenge_method=S256');
-  assert.equal(authorize.status, 401);
-  assert.equal(authorize.location, null);
-  assert.match(authorize.contentType, /^application\/json\b/i);
+  const authorizeJson = await obter(servidor.base, '/oauth/authorize?response_type=code&client_id=x&code_challenge=y&code_challenge_method=S256', {
+    headers: { Accept: 'application/json' },
+  });
+  assert.equal(authorizeJson.status, 401);
+  assert.equal(authorizeJson.location, null);
+  assert.match(authorizeJson.contentType, /^application\/json\b/i);
+
+  const authorizeBridge = await obter(servidor.base, '/oauth/authorize?response_type=code&client_id=x&code_challenge=y&code_challenge_method=S256');
+  assert.equal(authorizeBridge.status, 400);
+  assert.equal(authorizeBridge.location, null);
+  assert.match(authorizeBridge.contentType, /^text\/html\b/i);
+  assert.match(authorizeBridge.texto, /oauth-bridge-root/i);
+  assert.doesNotMatch(authorizeBridge.texto, /<div id="root"/i);
 });
