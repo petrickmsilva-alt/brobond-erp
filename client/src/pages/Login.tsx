@@ -1,13 +1,37 @@
-import { useEffect, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useCallback, useEffect, useState } from 'react';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { Eye, EyeOff, KeyRound, Loader2, Lock, Mail, ShieldCheck, Boxes, Cog, Receipt, Smartphone, Copy } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
 import { Logo } from '../components/Logo';
 import { Alert } from '../components/ui';
 
+/**
+ * Valida o parâmetro `next` pós-login: aceita ESTRITAMENTE a ponte de
+ * autorização OAuth na mesma origem (`/oauth/authorize` + query opcional),
+ * impedindo open redirect ou navegação para esquemas/hosts arbitrários.
+ */
+export function resolverRetornoPosLogin(search: string): { tipo: 'servidor'; url: string } | { tipo: 'spa'; path: string } {
+  try {
+    const raw = new URLSearchParams(search).get('next') ?? '';
+    if (
+      raw.startsWith('/oauth/authorize') &&
+      !raw.startsWith('//') &&
+      !raw.includes('\\') &&
+      !/[\r\n\0]/.test(raw) &&
+      (raw.length === '/oauth/authorize'.length || raw.charAt('/oauth/authorize'.length) === '?')
+    ) {
+      return { tipo: 'servidor', url: raw };
+    }
+  } catch {
+    // query malformada: cai no destino padrão do SPA
+  }
+  return { tipo: 'spa', path: '/' };
+}
+
 export default function Login() {
   const { login, mfaDesafio, concluirLoginMFA, user, loading } = useAuth();
   const nav = useNavigate();
+  const loc = useLocation();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [show, setShow] = useState(false);
@@ -25,9 +49,18 @@ export default function Login() {
   const [segredo, setSegredo] = useState('');
   const [copiado, setCopiado] = useState(false);
 
+  const concluirNavegacaoPosLogin = useCallback(() => {
+    const destino = resolverRetornoPosLogin(loc.search);
+    if (destino.tipo === 'servidor') {
+      window.location.replace(destino.url);
+      return;
+    }
+    nav(destino.path, { replace: true });
+  }, [loc.search, nav]);
+
   useEffect(() => {
-    if (!loading && user) nav('/', { replace: true });
-  }, [user, loading, nav]);
+    if (!loading && user) concluirNavegacaoPosLogin();
+  }, [user, loading, concluirNavegacaoPosLogin]);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -47,7 +80,7 @@ export default function Login() {
         setEtapa('setup');
         return;
       }
-      nav('/', { replace: true });
+      concluirNavegacaoPosLogin();
     } catch (e: any) {
       setErr(e.message || 'Falha no login');
     } finally {
@@ -89,7 +122,7 @@ export default function Login() {
         setEtapa('codigos');
         return;
       }
-      nav('/', { replace: true });
+      concluirNavegacaoPosLogin();
     } catch (e: any) {
       setErr(e.message || 'Código inválido.');
     } finally {
@@ -319,7 +352,7 @@ export default function Login() {
               >
                 <Copy className="h-4 w-4" /> {copiado ? 'Códigos copiados!' : 'Copiar os 10 códigos'}
               </button>
-              <button className="btn-primary w-full py-2.5" onClick={() => nav('/', { replace: true })}>
+              <button className="btn-primary w-full py-2.5" onClick={concluirNavegacaoPosLogin}>
                 Guardei — entrar no sistema
               </button>
             </div>

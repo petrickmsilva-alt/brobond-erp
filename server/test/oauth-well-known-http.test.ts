@@ -71,12 +71,32 @@ test('os controles do OAuth seguem ativos por HTTP: DCR restrito, authorize com 
   assert.ok(dcr.status >= 400 && dcr.status < 500, `DCR com redirect_uri não oficial deve ser 4xx, veio ${dcr.status}`);
   assert.match(dcr.contentType, /^application\/json\b/i);
 
-  // /oauth/authorize exige a sessão do ERP: sem ela é 401 JSON, nunca um
-  // redirecionamento para o dashboard.
-  const authorize = await obter(servidor.base, '/oauth/authorize?response_type=code&client_id=x&code_challenge=y&code_challenge_method=S256');
-  assert.equal(authorize.status, 401);
-  assert.equal(authorize.location, null);
-  assert.match(authorize.contentType, /^application\/json\b/i);
+  // /oauth/authorize:
+  //   • chamada JSON sem Bearer → 401 JSON;
+  //   • navegação HTML sem Bearer com cliente desconhecido → 400 HTML da ponte
+  //     (nunca o index.html do SPA e nunca emite código);
+  //   • endpoint de confirmação POST /oauth/authorize/consent sem Bearer → 401 JSON.
+  const authorizeJson = await obter(servidor.base, '/oauth/authorize?response_type=code&client_id=x&code_challenge=y&code_challenge_method=S256', {
+    headers: { Accept: 'application/json' },
+  });
+  assert.equal(authorizeJson.status, 401);
+  assert.equal(authorizeJson.location, null);
+  assert.match(authorizeJson.contentType, /^application\/json\b/i);
+
+  const authorizeHtml = await obter(servidor.base, '/oauth/authorize?response_type=code&client_id=x&code_challenge=y&code_challenge_method=S256');
+  assert.equal(authorizeHtml.status, 400);
+  assert.equal(authorizeHtml.location, null);
+  assert.match(authorizeHtml.contentType, /^text\/html\b/i);
+  assert.match(authorizeHtml.texto, /oauth-bridge-root/i);
+  assert.doesNotMatch(authorizeHtml.texto, /<div id="root"/i);
+
+  const consentSemAuth = await obter(servidor.base, '/oauth/authorize/consent', {
+    method: 'POST',
+    headers: json,
+    body: JSON.stringify({ client_id: 'x' }),
+  });
+  assert.equal(consentSemAuth.status, 401);
+  assert.match(consentSemAuth.contentType, /^application\/json\b/i);
 
   // /oauth/token sem cliente válido.
   const token = await obter(servidor.base, '/oauth/token', { method: 'POST', headers: json, body: JSON.stringify({ grant_type: 'authorization_code', client_id: 'inexistente' }) });
@@ -100,7 +120,20 @@ test('contrato servidor × PWA: toda rota do OAuth/MCP na raiz está fora do fal
     .flatMap((camada) => (camada.route ? [camada.route.path].flat() : []));
 
   // Controle: a enumeração enxerga as rotas (senão o laço abaixo passaria vazio).
-  for (const obrigatoria of [CAMINHO_AS, CAMINHO_RS, '/.well-known/jwks.json', '/oauth/authorize', '/oauth/token', '/oauth/register', '/oauth/revoke', '/mcp']) {
+  for (const obrigatoria of [
+    CAMINHO_AS,
+    CAMINHO_RS,
+    '/.well-known/jwks.json',
+    '/oauth/authorize',
+    '/oauth/authorize/bridge.js',
+    '/oauth/authorize/session',
+    '/oauth/authorize/consent',
+    '/oauth/authorize/deny',
+    '/oauth/token',
+    '/oauth/register',
+    '/oauth/revoke',
+    '/mcp',
+  ]) {
     assert.ok(caminhos.includes(obrigatoria), `rota esperada não encontrada no router: ${obrigatoria}`);
   }
   for (const caminho of caminhos) {
