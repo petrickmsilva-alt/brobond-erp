@@ -635,6 +635,19 @@ export class PgStore implements Store {
     return out;
   }
 
+  async saveOAuthConsent(usuarioId: number, clientId: string, empresaId: number, scope: string): Promise<Row> {
+    // O alvo reproduz uq_oauth_consents_ativo. A arbitragem do índice consulta
+    // e bloqueia o ativo mesmo entre processos; não há SELECT/INSERT racy.
+    const res = await q(`
+      INSERT INTO oauth_consents (usuario_id, client_id, empresa_id, scope)
+      VALUES ($1, $2, $3, $4)
+      ON CONFLICT (usuario_id, client_id, empresa_id) WHERE revoked_at IS NULL
+      DO UPDATE SET scope = EXCLUDED.scope
+      RETURNING *`, [usuarioId, clientId, empresaId, scope]);
+    if (!res.rows[0]) throw new Error('Consentimento OAuth sem retorno');
+    return res.rows[0];
+  }
+
   async insert(r: Resource, data: Payload, tx?: Tx): Promise<Row> {
     const allowed = new Set(columnsOf(r).map((f) => f.name).concat(COLUNAS_AUTENTICACAO));
     const keys = Object.keys(data).filter((k) => allowed.has(k));

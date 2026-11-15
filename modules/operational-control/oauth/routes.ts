@@ -26,7 +26,6 @@ import { resolverCliente, redirectUriValida, scopesPermitidosAoCliente, autentic
 import { criarCodigo, consumirCodigo } from './codes';
 import { emitirAccessToken, emitirRefreshToken, trocarRefreshToken, revogarToken, audience, issuer } from './tokens';
 import { getStore } from '../../../server/src/services';
-import { R_OAUTH_CONSENTS } from '../infrastructure/resources';
 import { auditarOperacao } from '../infrastructure/audit';
 import { registrarClienteDinamico } from './registration';
 
@@ -121,7 +120,7 @@ oauthRouter.get('/oauth/authorize', requireAuth, wrap(async (req, res) => {
   // Confirmação humana RECENTE obrigatória para conceder escopos sensíveis.
   if (escopos.includes(SCOPES.workflowRequest) || escopos.includes(SCOPES.workflowApprove)) exigirReautenticacao(req);
 
-  await getStore().insert(R_OAUTH_CONSENTS, { usuario_id: u.id, client_id: cliente.client_id, empresa_id: empresaId, scope: escopos.join(' ') });
+  await getStore().saveOAuthConsent(u.id, cliente.client_id, empresaId, escopos.join(' '));
   await auditarOperacao({ empresaId, actorId: u.id, eventType: 'oauth.consent', payload: { client_id: cliente.client_id, scopes: escopos } });
 
   const codigo = await criarCodigo({
