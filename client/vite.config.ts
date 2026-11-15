@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
+import { ROTAS_DO_SERVIDOR } from './src/pwaRotasServidor';
 
 // Em dev o Vite faz proxy de /api para a API (porta 3001).
 // Em produção o front e a API ficam no mesmo serviço (Render), então /api é relativo.
@@ -17,7 +18,12 @@ export default defineConfig({
       injectRegister: 'auto',
       manifest: false, // usamos o public/manifest.json já existente, com os textos e ícones da marca
       workbox: {
-        navigateFallbackDenylist: [/^\/api\//],
+        // O Service Worker responde toda navegação com o index.html do
+        // precache. Os caminhos do SERVIDOR (API, descoberta OAuth em
+        // /.well-known, /oauth e /mcp) ficam fora disso — senão o navegador
+        // recebe o dashboard no lugar do JSON, sem a requisição chegar ao
+        // Express. Lista única em src/pwaRotasServidor.ts.
+        navigateFallbackDenylist: ROTAS_DO_SERVIDOR,
         runtimeCaching: [
           {
             urlPattern: /^\/api\//,
