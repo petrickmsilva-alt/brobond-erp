@@ -30,6 +30,7 @@ export type EventoOperacional =
   | 'workflow.completed'
   | 'workflow.failed'
   | 'github.communication_failed'
+  | 'github.read'
   | 'access.denied'
   | 'replay.blocked';
 

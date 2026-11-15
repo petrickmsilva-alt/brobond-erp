@@ -118,13 +118,16 @@ mcpRouter.post('/mcp', wrapMw(autenticarMcp), wrap(async (req, res) => {
           exigirAutorizacao(actor, ferramenta.acao);
         }
         const resultado = await ferramenta.handler({ actor, args });
+        if (ferramenta.acao === 'github.read' || nome === 'brobond_github_actions_runs' || nome === 'brobond_github_workflows') {
+          await auditarOperacao({ empresaId: actor.empresa_id, actorId: actor.id, eventType: 'github.read', payload: { ferramenta: nome } });
+        }
         res.status(200).json(respostaOk(id, conteudoTexto(resultado)));
       } catch (e) {
         const mensagem = e instanceof OperationalError ? e.message : 'Falha ao executar a ferramenta.';
         await auditarOperacao({
           empresaId: actor.empresa_id,
           actorId: actor.id,
-          eventType: 'access.denied',
+          eventType: e instanceof OperationalError && e.codigo === 'GITHUB_INDISPONIVEL' ? 'github.communication_failed' : 'access.denied',
           payload: { ferramenta: nome, motivo: e instanceof OperationalError ? e.code : 'erro' },
         }).catch(() => {});
         // Negação/validação: resultado de ferramenta com isError (convenção MCP).

@@ -15,12 +15,14 @@
 // sem tocar a API pública — o mesmo código de produção é exercitado.
 // ============================================================================
 import jwt from 'jsonwebtoken';
+import { createHash } from 'node:crypto';
+import { log } from '../../../server/src/log';
 import { OperationalError } from '../domain/errors';
-import { obterConfigGithubApp, type GithubAppConfig } from './token-vault';
+import { resolverConfigGithubApp, type GithubAppConfig } from './token-vault';
 
 const API_BASE = () => String(process.env.GITHUB_API_BASE_URL ?? 'https://api.github.com').replace(/\/+$/, '');
 const USER_AGENT = 'brobond-operational-control';
-const TIMEOUT_MS = Number(process.env.GITHUB_API_TIMEOUT_MS) || 15000;
+const timeoutMs = () => { const n = Number(process.env.GITHUB_API_TIMEOUT_MS); return Number.isFinite(n) && n >= 100 && n <= 120000 ? n : 15000; };
 
 export type RespostaGithub<T> = { status: number; data: T; headers: Headers };
 
@@ -39,10 +41,9 @@ export function assinarAppJwt(cfg: Pick<GithubAppConfig, 'appId' | 'privateKey'>
   return jwt.sign({ iat, exp: iat + 9 * 60, iss: cfg.appId }, cfg.privateKey, { algorithm: 'RS256' });
 }
 
-let cacheToken: { valor: string; expiraEm: number } | null = null;
-
 export class GithubAppClient {
   private cfg: GithubAppConfig | null;
+  private cacheToken: { valor: string; expiraEm: number; fingerprint: string } | null = null;
   private fetchImpl: Transporte;
   private agora: () => number;
 
@@ -54,11 +55,14 @@ export class GithubAppClient {
 
   /** Resolve a config (parâmetro → ambiente → banco cifrado). */
   private async config(): Promise<GithubAppConfig> {
-    if (!this.cfg) this.cfg = await obterConfigGithubApp();
-    if (!this.cfg) {
-      throw new OperationalError('DEPENDENCIA_INDISPONIVEL', 'A GitHub App não está configurada neste servidor.');
+    if (this.cfg) return this.cfg;
+    const { config, diagnostico } = await resolverConfigGithubApp();
+    if (!config) {
+      this.cacheToken = null;
+      log.warn('github_app_config_indisponivel', { ...diagnostico });
+      throw new OperationalError('DEPENDENCIA_INDISPONIVEL', 'Configuração da GitHub App indisponível ou inválida; consulte o diagnóstico seguro do servidor.');
     }
-    return this.cfg;
+    return config;
   }
 
   /** Configurada? (para /capabilities, sem revelar valores) */
@@ -73,9 +77,14 @@ export class GithubAppClient {
 
   /** Installation token, com cache até ~5 min antes do vencimento. */
   async installationToken(): Promise<string> {
-    if (cacheToken && cacheToken.expiraEm - 5 * 60_000 > this.agora()) return cacheToken.valor;
     const cfg = await this.config();
-    const appJwt = assinarAppJwt(cfg, this.agora());
+    // Cache pertence à instância e é invalidado quando identidade ou chave mudam.
+    const fingerprint = createHash('sha256').update(JSON.stringify([cfg.appId, cfg.installationId, cfg.privateKey])).digest('hex');
+    if (this.cacheToken && this.cacheToken.fingerprint === fingerprint && this.cacheToken.expiraEm - 5 * 60_000 > this.agora()) return this.cacheToken.valor;
+    this.cacheToken = null;
+    let appJwt: string;
+    try { appJwt = assinarAppJwt(cfg, this.agora()); }
+    catch { throw new OperationalError('DEPENDENCIA_INDISPONIVEL', 'Não foi possível assinar o JWT da GitHub App com a chave configurada.'); }
     const res = await this.requisitar<{ token?: string; expires_at?: string }>(
       `/app/installations/${encodeURIComponent(cfg.installationId)}/access_tokens`,
       { method: 'POST' },
@@ -83,16 +92,19 @@ export class GithubAppClient {
     );
     const token = String(res.data?.token ?? '');
     if (res.status >= 300 || !token) {
-      throw new OperationalError('GITHUB_INDISPONIVEL', 'Não foi possível obter o token de instalação da GitHub App.');
+      const motivo = res.status === 401 ? 'autenticação da App recusada' : res.status === 403 ? 'acesso da App negado' : res.status === 404 ? 'instalação não encontrada ou inacessível' : res.status === 422 ? 'pedido de token inválido' : 'erro da API';
+      log.warn('github_app_token_falhou', { etapa: 'installation_token', status: res.status, motivo });
+      throw new OperationalError('GITHUB_INDISPONIVEL', `GitHub: ${motivo} (HTTP ${res.status}).`);
     }
     const expiraEm = res.data?.expires_at ? new Date(res.data.expires_at).getTime() : this.agora() + 50 * 60_000;
-    cacheToken = { valor: token, expiraEm };
+    if (!Number.isFinite(expiraEm) || expiraEm <= this.agora()) throw new OperationalError('GITHUB_INDISPONIVEL', 'GitHub retornou expiração inválida para o token de instalação.');
+    this.cacheToken = { valor: token, expiraEm, fingerprint };
     return token;
   }
 
   /** Limpa o cache (usado quando o GitHub recusa o token com 401). */
   limparCache(): void {
-    cacheToken = null;
+    this.cacheToken = null;
   }
 
   /** Requisição autenticada com installation token (renova e repete uma vez em 401). */
@@ -109,7 +121,7 @@ export class GithubAppClient {
 
   private async requisitar<T>(caminho: string, init: RequestInit, bearer: string): Promise<RespostaGithub<T>> {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+    const timer = setTimeout(() => controller.abort(), timeoutMs());
     let res: Response;
     try {
       res = await this.fetchImpl(`${API_BASE()}${caminho}`, {
@@ -124,8 +136,10 @@ export class GithubAppClient {
         },
         signal: controller.signal,
       });
-    } catch (e) {
-      throw new OperationalError('GITHUB_INDISPONIVEL', `Falha de comunicação com o GitHub: ${e instanceof Error ? e.message : String(e)}`);
+    } catch {
+      const motivo = controller.signal.aborted ? 'timeout' : 'indisponibilidade externa';
+      log.warn('github_api_indisponivel', { motivo });
+      throw new OperationalError('GITHUB_INDISPONIVEL', `Falha de comunicação com o GitHub: ${motivo}.`);
     } finally {
       clearTimeout(timer);
     }
@@ -142,5 +156,5 @@ export class GithubAppClient {
   }
 }
 
-/** Instância padrão do processo (cache de token compartilhado). */
+/** Instância padrão do processo (cache de token isolado por cliente). */
 export const githubApp = new GithubAppClient();

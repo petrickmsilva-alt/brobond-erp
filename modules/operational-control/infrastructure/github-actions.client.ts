@@ -24,6 +24,8 @@ export type GithubRun = {
   name: string | null;
 };
 
+export type GithubWorkflow = { id: number; name: string; path: string; state: string; html_url: string };
+
 export type GithubBranch = { name: string; commit: { sha: string } | null; protected?: boolean };
 export type GithubCommit = { sha: string; commit: { message: string; author: { name?: string; date?: string } | null } | null; html_url: string | null };
 export type GithubPullRequest = { number: number; title: string; state: string; html_url: string; user: { login: string } | null; head: { ref: string } | null; base: { ref: string } | null };
@@ -47,7 +49,8 @@ export class GithubActionsClient {
 
   private async exigirOk<T>(res: RespostaGithub<T>, contexto: string): Promise<T> {
     if (res.status >= 200 && res.status < 300) return res.data;
-    throw new OperationalError('GITHUB_INDISPONIVEL', `O GitHub recusou "${contexto}" (HTTP ${res.status}).`);
+    const motivo = res.status === 401 ? 'autenticação recusada' : res.status === 403 ? 'acesso negado ou limite de API' : res.status === 404 ? 'recurso inexistente ou sem permissão' : res.status === 422 ? 'pedido inválido' : 'erro de API';
+    throw new OperationalError('GITHUB_INDISPONIVEL', `O GitHub recusou "${contexto}": ${motivo} (HTTP ${res.status}).`);
   }
 
   /** Dispara um workflow. `ref` e `inputs` vêm do registro/operação — nunca do cliente. */
@@ -67,6 +70,14 @@ export class GithubActionsClient {
   async workflowExiste(repo: string, workflowFile: string): Promise<boolean> {
     const res = await this.app.comInstalacao<unknown>(`/repos/${repo}/actions/workflows/${encodeURIComponent(workflowFile)}`, { method: 'GET' });
     return res.status >= 200 && res.status < 300;
+  }
+
+  /** Workflows reais do repositório, sem logs nem segredos. */
+  async listarWorkflows(repo: string, limit = 10): Promise<GithubWorkflow[]> {
+    const n = Math.min(Math.max(Number(limit) || 10, 1), 50);
+    const res = await this.app.comInstalacao<{ workflows?: GithubWorkflow[] }>(`/repos/${repo}/actions/workflows?per_page=${n}`, { method: 'GET' });
+    const data = await this.exigirOk(res, 'listagem de workflows');
+    return Array.isArray(data?.workflows) ? data.workflows : [];
   }
 
   /** Uma execução por id. */

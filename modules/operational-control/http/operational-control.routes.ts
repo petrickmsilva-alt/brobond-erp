@@ -24,7 +24,7 @@ import { getStore } from '../../../server/src/services';
 import { R_OPERATIONS } from '../infrastructure/resources';
 import { exigirAutorizacao, capacidadesEfetivas } from '../policies/authorization-policy';
 import { resumoRegistro, obterWorkflow } from '../domain/workflow-registry';
-import { githubAppConfigurada } from '../infrastructure/token-vault';
+import { resolverConfigGithubApp } from '../infrastructure/token-vault';
 import { limitarOperacao } from '../infrastructure/rate-limit';
 import { identidadeOperacional, atorOperacional, exigirConfirmacaoHumana } from './operational-control.middleware';
 import { validarSolicitar, validarAprovar, validarRejeitar, validarCancelar, validarFiltroExecucoes, idempotencyKeyDe } from './operational-control.schemas';
@@ -59,12 +59,14 @@ operationalControlRouter.get('/capabilities', wrap(async (req, res) => {
   const actor = atorOperacional(req);
   await limitarOperacao(`capabilities|${actor.id}`);
   const caps = capacidadesEfetivas(actor);
+  const { config, diagnostico } = await resolverConfigGithubApp();
   res.json({
     ok: true,
     capabilities: {
       ...caps,
       // Diagnóstico honesto: informa se a GitHub App e cada workflow estão prontos.
-      github_app_configured: await githubAppConfigurada(),
+      github_app_configured: !!config,
+      ...(actor.perfil === 'admin' ? { github_app_diagnostico: diagnostico } : {}),
       workflows: resumoRegistro(),
     },
   });

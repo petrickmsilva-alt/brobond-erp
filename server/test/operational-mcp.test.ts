@@ -257,3 +257,43 @@ test('MCP: brobond_audit_history exige o escopo audit.read (admin sem escopo é 
   assert.equal(permitido.body.result.isError, undefined);
   assert.ok(Array.isArray(permitido.body.result.structuredContent.events));
 });
+
+test('MCP read-only: vault real + JWT + token e projeções GitHub com transporte simulado', async () => {
+  const { generateKeyPairSync } = await import('node:crypto');
+  const jwt = (await import('jsonwebtoken')).default;
+  const pair = generateKeyPairSync('rsa', { modulusLength: 2048 });
+  process.env.GITHUB_APP_ID = '123'; process.env.GITHUB_APP_INSTALLATION_ID = '456';
+  process.env.GITHUB_APP_PRIVATE_KEY = pair.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+  const original = globalThis.fetch;
+  let tokens = 0;
+  globalThis.fetch = async (input, init) => {
+    const url = String(input);
+    if (url.includes('/access_tokens')) {
+      const auth = (init?.headers as Record<string, string>).Authorization;
+      jwt.verify(auth.slice(7), pair.publicKey, { algorithms: ['RS256'] });
+      tokens++; return Response.json({ token: 'token-simulado-local', expires_at: new Date(Date.now() + 3600_000).toISOString() });
+    }
+    if (url.includes('/branches')) return Response.json([{ name: 'main', commit: { sha: 'abc' }, private_field: 'NAO_EXIBIR' }]);
+    if (url.includes('/commits')) return Response.json([{ sha: 'abc', commit: { message: 'teste', author: { name: 'dev' } }, private_field: 'NAO_EXIBIR' }]);
+    if (url.includes('/pulls')) return Response.json([{ number: 1, title: 'teste', state: 'open', user: null, head: null, base: null, private_field: 'NAO_EXIBIR' }]);
+    if (url.includes('/actions/workflows')) return Response.json({ workflows: [{ id: 1, name: 'CI', path: '.github/workflows/ci.yml', state: 'active', private_field: 'NAO_EXIBIR' }] });
+    if (url.includes('/actions/runs')) return Response.json({ workflow_runs: [{ id: 1, name: 'CI', status: 'completed', conclusion: 'success', private_field: 'NAO_EXIBIR' }] });
+    throw new Error('endpoint inesperado');
+  };
+  try {
+    const e = await empresa(); const u = await usuario('admin', e);
+    const tok = await token(u, e, [SCOPES.systemRead, SCOPES.githubRead, SCOPES.workflowRead, SCOPES.auditRead]);
+    for (const name of ['brobond_github_branches', 'brobond_github_commits', 'brobond_pull_requests', 'brobond_github_workflows', 'brobond_github_actions_runs']) {
+      const res = await rpc({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: {} } }, tok);
+      assert.equal(res.body.result.isError, undefined, name);
+      assert.ok(!JSON.stringify(res.body).includes('NAO_EXIBIR'));
+      assert.ok(!JSON.stringify(res.body).includes('token-simulado-local'));
+    }
+    assert.equal(tokens, 1);
+    const lista = await rpc({ jsonrpc: '2.0', id: 2, method: 'tools/list' }, tok);
+    assert.ok(!lista.body.result.tools.some((f: {name: string}) => f.name === 'brobond_request_diagnostic'));
+  } finally {
+    globalThis.fetch = original;
+    delete process.env.GITHUB_APP_ID; delete process.env.GITHUB_APP_INSTALLATION_ID; delete process.env.GITHUB_APP_PRIVATE_KEY;
+  }
+});
