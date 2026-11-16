@@ -18,7 +18,7 @@ type IdentidadeRepresentante = {
     regiao: string | null;
   };
   empresa_id: number;
-  usuario: { id: number; nome: string; email: string };
+  usuario: { nome: string; email: string };
 };
 
 export default function RepresentantePortalPage() {
@@ -100,7 +100,7 @@ export default function RepresentantePortalPage() {
                     <BadgeCheck size={14} /> Acesso ativo
                   </span>
                 </div>
-                <p className="mt-1 text-sm text-slate-500">Código {identidade.representante.codigo || 'não informado'} · Empresa #{identidade.empresa_id}</p>
+                <p className="mt-1 text-sm text-slate-500">Código {identidade.representante.codigo || 'não informado'} · Empresa vinculada</p>
               </div>
             </div>
             <div className="mt-6 grid gap-4 sm:grid-cols-2">
@@ -118,7 +118,7 @@ export default function RepresentantePortalPage() {
               </div>
               <div className="flex items-center gap-3 text-sm text-slate-700 dark:text-slate-300">
                 <ShieldCheck size={17} className="text-slate-400" />
-                <span>Identidade autenticada · usuário #{identidade.usuario.id}</span>
+                <span>Conta autenticada e vinculada</span>
               </div>
             </div>
           </section>
