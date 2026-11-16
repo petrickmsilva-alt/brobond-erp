@@ -39,10 +39,12 @@
 - RBAC: **gerente**/**admin** apenas (o `operador` recebe 403). Escopo por
   empresa via `escopoDoAtor`.
 
-> **A loja nativa `/loja` NÃO é um canal público oficial.** Ela segue **ativa**
-> como superfície, mas a retirada está **BLOQUEADA** por dívidas externas
-> (ADR-0007, impedimentos I-1..I-4). Ver
-> [`NATIVE-STORE-DECOMMISSION.md`](NATIVE-STORE-DECOMMISSION.md).
+> **A superfície pública nativa `/loja` foi RETIRADA no código** conforme
+> ADR-0007. As URLs antigas recebem 301 quando `STOREFRONT_REDIRECT_URL` está
+> configurada e 410 nos demais casos; caminhos transacionais recebem 410.
+> RETAIL WooCommerce permanece como única loja pública de varejo. DNS e
+> homologação de compra real não foram alterados. Ver
+> [`NATIVE-STORE-DECOMMISSION-REPORT.md`](NATIVE-STORE-DECOMMISSION-REPORT.md).
 
 ## 3. Identidade comercial canônica
 
@@ -90,4 +92,4 @@ sincronização e origem dos pedidos, usando o padrão `PageShell` +
 | RBAC + tenant scope | **IMPLEMENTADO E TESTADO** |
 | Isolamento RETAIL/WHOLESALE (registry multi-loja) | **IMPLEMENTADO E TESTADO** |
 | Conector REPRESENTATIVES | **NÃO IMPLEMENTADO** (homologação externa) |
-| Retirada da `/loja` nativa | **BLOQUEADO** (I-1..I-4) |
+| Retirada da `/loja` nativa | **EXECUTADA no código** (DNS/SEO externo não alterado) |

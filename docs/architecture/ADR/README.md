@@ -65,3 +65,20 @@ Nenhuma decisão arquitetural foi revista nesta fase. O que mudou foi a
 > A decisão ADR-0007 permanece **aceita**; o que está bloqueado é a **execução**,
 > por impedimento de ambiente (PG real + credenciais Woo) e por decisão de SEO
 > pendente (DEC-001). Isso está registrado, não silenciado.
+
+
+## Atualização de implementação — 2026-11-16
+
+A decisão ADR-0007 permanece **Aceita** e sua execução no código está
+**CONCLUÍDA**. A superfície pública nativa `/loja` e as rotas públicas
+`/api/loja/*` foram retiradas; as URLs antigas são tratadas pelo handler
+`loja-nativa-retirada.ts` (301 quando configurado, 410 como fallback e para
+caminhos transacionais). A RETAIL WooCommerce e os serviços compartilhados
+foram preservados. DNS, dados de produção e homologação de compra real não foram
+alterados. Evidências: `NATIVE-STORE-DECOMMISSION-REPORT.md` e
+teste `server/test/fase2-loja-coerencia.test.ts`.
+
+O quadro de implementação vigente e as pendências remanescentes estão em
+`STATE-OF-ERP-3.0-2026-11-16.md`. Os registros abaixo que descrevem a execução
+como bloqueada são fotografias históricas da rodada de 2026-11-07, não o estado
+atual do código.

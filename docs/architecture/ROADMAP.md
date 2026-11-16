@@ -16,9 +16,11 @@
 | **Fases 9.1–9.3** | Integridade de dados, automação do CRM e UX operacional | Recorte tenant no SQL, caixa interna do CRM, moldura única de página | `architecture/fases-9-1-9-2-9-3` |
 | **Fases 9.4–9.6** | Fechamento da arquitetura comercial, maturidade financeira/fiscal e validação empresarial | Visão unificada dos canais, plano de contas + leiautes SPED/EFD versionados, matriz de tenancy/RBAC e baseline de desempenho | `architecture/fases-9-4-9-5-9-6` |
 
-> **Nota (revisão):** na Fase 2 o núcleo de dados foi entregue; a **retirada da
-> `/loja` NÃO foi executada** (bloqueada por ambiente/decisão — BL-015). A
-> superfície nativa segue **ativa**. Ver `NATIVE-STORE-DECOMMISSION-REPORT.md`.
+> **Atualização de estado (2026-11-16):** a retirada da superfície pública
+> nativa `/loja` foi **EXECUTADA no código**, conforme ADR-0007 e
+> `NATIVE-STORE-DECOMMISSION-REPORT.md`. As URLs antigas recebem 301/410; RETAIL
+> WooCommerce foi preservada. DNS e homologação externa não foram alterados.
+> A linha histórica da Fase 2 abaixo foi reconciliada nesta atualização.
 
 Cada fase parte da base consolidada da anterior (encadeamento de PRs).
 
@@ -101,15 +103,15 @@ integridade validada; implementação testada; PR independente.
 | # | Entrega | Status |
 |---|---|---|
 | 1–8 | Documentos canônicos de dados (itens 1–8) | ✅ entregues |
-| 9 | `NATIVE-STORE-DECOMMISSION-REPORT.md` | ✅ entregue — **execução BLOQUEADA** (impedimentos I-1..I-4) |
+| 9 | `NATIVE-STORE-DECOMMISSION-REPORT.md` | ✅ entregue — retirada **EXECUTADA no código**; DNS/SEO externo e homologações permanecem fora do escopo |
 | 10 | FK composta cross-tenant de `crm_*` (GAP-P2-04) | ✅ migração `0104` + espelho + teste |
-| 11 | Descontinuação segura da loja nativa `/loja` | ⛔ **não executada** — sem PG real, sem credenciais Woo, sem decisão DNS |
+| 11 | Descontinuação segura da loja nativa `/loja` | ✅ **EXECUTADA no código** — rotas públicas removidas, handler 301/410, RETAIL preservada; DNS não alterado |
 | 12 | Testes do núcleo (preço, disponibilidade, identidade, integridade) | ✅ `fase2-nucleo-canonico` (8), `fase2-identidade-comercial` (4), `fase2-integridade-referencial` (4) |
 | 13 | Gates PostgreSQL reais | ⛔ bloqueado no sandbox (BL-009) — roda no CI |
 
-> A retirada da loja nativa foi **conscientemente** deixada para a Fase 3: o §6.8
-> do PROMPT MASTER manda entregar o plano e registrar o impedimento quando a
-> remoção não puder ser feita com segurança. Ver BL-015 / DEC-004.
+ > A retirada da loja nativa foi executada conforme ADR-0007. Permanecem fora
+> desta entrega a alteração de DNS e a homologação de compra real na RETAIL.
+> Ver `NATIVE-STORE-DECOMMISSION-REPORT.md` e o estado consolidado de 2026-11-16.
 
 ---
 
@@ -117,7 +119,7 @@ integridade validada; implementação testada; PR independente.
 
 | Fase | Entrega | Documentação | Status |
 |---|---|---|---|
-| **9.4** | Identidade comercial canônica, visão unificada dos canais, matriz de rotas `/loja` | `COMMERCIAL-ARCHITECTURE.md`, `WOOCOMMERCE-INTEGRATION.md`, `COMMERCIAL-IDENTITY.md`, `NATIVE-STORE-DECOMMISSION.md` §8 | **PASS** (retirada da `/loja` segue **BLOQUEADA** — I-1..I-4) |
+| **9.4** | Identidade comercial canônica, visão unificada dos canais, matriz de rotas `/loja` | `COMMERCIAL-ARCHITECTURE.md`, `WOOCOMMERCE-INTEGRATION.md`, `COMMERCIAL-IDENTITY.md`, `NATIVE-STORE-DECOMMISSION.md` §8 | **PASS** (retirada do código executada; homologação externa permanece pendente) |
 | **9.5** | Plano de contas hierárquico + importação segura, integração contábil, leiautes SPED/EFD versionados + validador estrutural, governança de unidades | `finance/CHART-OF-ACCOUNTS.md`, `finance/ACCOUNTING-INTEGRATION.md`, `fiscal/SPED-EFD-ARCHITECTURE.md`, `fiscal/FISCAL-VALIDATION.md`, `fiscal/REGULATORY-SOURCES.md`, `data/UNIT-OF-MEASURE-GOVERNANCE.md` | **PASS** (homologação fiscal externa pendente) |
 | **9.6** | Matriz de integração entre domínios, tenancy, RBAC, desempenho, gates de regressão | `testing/ENTERPRISE-VALIDATION.md`, `testing/DOMAIN-INTEGRATION-MATRIX.md`, `testing/TENANCY-TEST-MATRIX.md`, `testing/RBAC-TEST-MATRIX.md`, `testing/PERFORMANCE-BASELINE.md`, `testing/REGRESSION-GATES.md` | **PASS** |
 
@@ -134,8 +136,8 @@ Fase 0 (blueprint)
           └── Fase 2 (dados canônicos + retirada /loja)
 ```
 
-- A retirada do `/loja` (Fase 2) depende da **decisão de DNS/edge** (Diretor) —
-  não bloqueante, com fallback 410.
+- A retirada da superfície pública `/loja` foi executada no código. DNS/edge
+  não foi alterado; o handler aplica 301 quando configurado e 410 como fallback.
 - A FK composta de `crm_*` (Fase 2) depende de validação de dados legados antes
   de `VALIDATE CONSTRAINT`.
 - A unificação do caminho legado Woo (Fase 1/2) depende do runbook do Agente 07.

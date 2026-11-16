@@ -12,7 +12,7 @@ dependência · próxima fase responsável · critério de encerramento · statu
 
 | ID | Fase origem | Descrição | Evidência | Sev. | Impacto | Dependência | Próx. fase | Critério de encerramento | Status |
 |---|---|---|---|---|---|---|---|---|---|
-| BL-001 | 0 | Loja pública nativa `/loja` ainda ativa | `App.tsx:162-166`, `index.ts:602-613` | P2 | duplicidade de varejo | decisão DNS (Diretor) + PG/credenciais | Fase 3 | rotas públicas removidas + URLs 301/410 + RETAIL intacto | **aberto — impedimento registrado (DEC-001)** |
+| BL-001 | 0 | Loja pública nativa `/loja` — retirada da superfície pública | `server/test/fase2-loja-coerencia.test.ts`; `NATIVE-STORE-DECOMMISSION-REPORT.md` | P2 | duplicidade de varejo | — (DNS externo não bloqueia a retirada no código) | encerrado | rotas públicas removidas + handler 301/410 + RETAIL intacta, sem apagar dados | **encerrado — retirada comprovada no código (ADR-0007)** |
 | BL-002 | 0 | Dois caminhos de ingestão Woo (legado × multi-store) | `loja.ts` + `commerce/woocommerce/` | P2 | divergência de canal | runbook Agente 07 | Fase 3 | cutover concluído e legado desativado | **parcial na Fase 9.4** — ver §3 (visão unificada pronta; desativação do legado segue na Fase 3) |
 | BL-009 | 0 | `test:pg`/`prisma validate` bloqueados no sandbox | GAP-P2-17 | P2 | evidência só no CI | CI | contínuo | CI verde nos jobs PG | **bloqueado (ambiente)** |
 | BL-010 | 0 | Fiscal sem SPED/EFD | GAP-P2-11/12 | P2 | obrigação acessória | contador | pós-Fase 2 | layout oficial validado | **parcial na Fase 9.5** — ver §3 (estrutura versionada + validador estrutural; homologação externa pendente) |
