@@ -75,7 +75,7 @@ export default function RepresentantePortalPage() {
             <label className="grid gap-1 text-sm font-medium">Nova senha
               <input type="password" autoComplete="new-password" minLength={12} required value={senhaNova} onChange={(e) => setSenhaNova(e.target.value)} className="rounded-lg border border-slate-300 bg-white px-3 py-2 dark:border-slate-700 dark:bg-slate-900" />
             </label>
-            {senhaErro && <Alert tone="danger">{senhaErro}</Alert>}
+            {senhaErro && <Alert tone="red">{senhaErro}</Alert>}
             <button type="submit" disabled={salvandoSenha} className="inline-flex w-fit items-center justify-center rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50 dark:bg-white dark:text-slate-900">
               {salvandoSenha ? 'Salvando…' : 'Atualizar senha'}
             </button>
@@ -85,7 +85,7 @@ export default function RepresentantePortalPage() {
       {carregando ? (
         <div className="flex min-h-56 items-center justify-center"><Spinner /></div>
       ) : erro ? (
-        <Alert tone="danger">{erro}</Alert>
+        <Alert tone="red">{erro}</Alert>
       ) : identidade ? (
         <div className="mx-auto w-full max-w-4xl space-y-6">
           <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-950">
