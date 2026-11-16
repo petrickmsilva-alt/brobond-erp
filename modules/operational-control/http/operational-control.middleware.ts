@@ -67,6 +67,11 @@ async function atorDoToken(sub: string, scopes: string[], empresaToken: number):
   if (!permitidas.includes(Number(empresaToken))) {
     throw new OperationalError('SEM_PERMISSAO', 'O token não tem mais acesso à empresa do consentimento.');
   }
+  // Uma conta portal é exclusiva do ambiente comercial e não pode trocar
+  // de superfície via token OAuth já emitido antes da ativação da flag.
+  if (row.portal_representante === true) {
+    throw new OperationalError('SEM_PERMISSAO', 'Contas exclusivas do Portal do Representante não podem usar o Control Plane operacional.');
+  }
   return {
     id,
     name: String(row.nome ?? ''),
@@ -111,8 +116,11 @@ export async function identidadeOperacional(req: Request, res: Response, next: N
       });
       if (res.headersSent || !chamouNext) return; // a guarda já respondeu (401/503)
     }
-    const u = (req as Request & { user?: { id: number; name: string; perfil: string; empresa_id?: number; empresas?: number[]; empresa_sessao?: number | null } }).user;
+    const u = (req as Request & { user?: { id: number; name: string; perfil: string; portal_representante?: boolean; empresa_id?: number; empresas?: number[]; empresa_sessao?: number | null } }).user;
     if (!u || !(Number(u.id) > 0)) throw new OperationalError('NAO_AUTENTICADO', 'Autenticação obrigatória.');
+    if (u.portal_representante === true) {
+      throw new OperationalError('SEM_PERMISSAO', 'Contas exclusivas do Portal do Representante não podem usar o Control Plane operacional.');
+    }
     const empresa = Number(u.empresa_sessao ?? u.empresa_id ?? (u.empresas?.[0] ?? 1));
     (req as Request & { operationalActor?: OperationalActor }).operationalActor = {
       id: u.id,
