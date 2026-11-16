@@ -9,6 +9,8 @@ const { portalRepresentantePodeAcessar, restringirAcessoPortalRepresentante, obt
 const { getStore } = await import('../src/services');
 const { RESOURCES } = await import('../src/resources');
 const { carteiraDoUsuario, invalidarCacheCarteira } = await import('../src/empresasAcesso');
+const { signToken, requireAuth, invalidateUserCache } = await import('../src/auth');
+const { abrirSessao } = await import('../src/sessoes');
 
 test('allowlist do portal libera apenas autenticação, metadados e endpoints do portal', () => {
   assert.equal(portalRepresentantePodeAcessar('GET', '/api/meta'), true);
@@ -130,4 +132,52 @@ test('identidade do portal devolve apenas dados profissionais mínimos do repres
   assert.equal(body.empresa_id, 1);
   assert.equal('cpf' in body.representante, false);
   assert.equal('cnpj' in body.representante, false);
+});
+
+test('conta marcada como portal sem representante ativo é recusada na autenticação', async () => {
+  const store = getStore();
+  const usuario = await store.insert(RESOURCES.usuarios, {
+    nome: 'Portal sem vínculo',
+    email: 'portal.sem.vinculo@brobond.test',
+    perfil: 'operador',
+    empresa_id: 1,
+    portal_representante: true,
+    ativo: true,
+  });
+  const sid = await abrirSessao({
+    usuarioId: Number(usuario.id),
+    lembrar: false,
+    req: { headers: {}, socket: {} } as any,
+  });
+  const token = signToken({
+    id: Number(usuario.id),
+    name: String(usuario.nome),
+    email: String(usuario.email),
+    perfil: 'operador',
+    empresa_id: 1,
+    portal_representante: true,
+  }, { sid, emp: 1 });
+
+  let status = 200;
+  let body: any;
+  let nextChamado = false;
+  const res: any = {
+    status(n: number) { status = n; return res; },
+    json(v: unknown) { body = v; return res; },
+  };
+  invalidateUserCache(Number(usuario.id));
+  invalidarCacheCarteira(Number(usuario.id));
+  await requireAuth({
+    headers: { authorization: 'Bearer ' + token },
+    query: {},
+    method: 'GET',
+    path: '/api/meta',
+    originalUrl: '/api/meta',
+  } as any, res, () => { nextChamado = true; });
+
+  assert.equal(status, 403);
+  assert.equal(nextChamado, false);
+  assert.match(String(body?.error), /vínculo comercial inválido/i);
+  invalidateUserCache(Number(usuario.id));
+  invalidarCacheCarteira(Number(usuario.id));
 });
