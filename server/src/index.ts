@@ -31,6 +31,7 @@ import {
   verificarAuditoriaHandler,
 } from './auth';
 import { mfaStatus, mfaSetup, mfaAtivar, mfaDesativar, mfaCodigos } from './mfa';
+import { obterIdentidadeRepresentante, restringirAcessoPortalRepresentante } from './representantePortal';
 import { aceitarConvite, infoConvite, reenviarConvite, senhaTemporaria, resetarMfaUsuario, resumoUsuarios, atividadeUsuario, sessoesUsuario, desativarUsuario, ativarUsuario, desbloquearUsuario, bloquearUsuario, encerrarSessoesUsuario, revogarSessaoUsuario, forcarTrocaSenha, politicaSenhaPublica, obterPoliticaSenha, salvarPoliticaSenha, certificacaoUsuarios, exportarCertificacao, certificarUsuario } from './usuariosAdmin';
 import { listarWebhooks, criarWebhook, atualizarWebhook, excluirWebhook, testarWebhook, listarEntregas, reenviarEntrega } from './webhooks';
 import { limpezaPeriodica } from './sessoes';
@@ -872,9 +873,16 @@ app.post('/api/admin/scheduled/cron/:processo', wrap(cronProcesso));
 // aplica o `requireAuth` apenas quando NÃO há token OAuth.
 app.use('/api/operational-control', operationalControlRouter);
 app.use('/api', wrap(requireAuth));
+// BL-017: contas marcadas como portal exclusivo não podem usar os endpoints
+// gerais do ERP, mesmo por chamada HTTP direta fora da interface.
+app.use('/api', restringirAcessoPortalRepresentante);
 // Conta com senha provisória (convite, reset ou admin padrão) só lê e só escreve
 // no próprio fluxo de troca de senha — ver bloquearSenhaProvisoria.
 app.use('/api', bloquearSenhaProvisoria);
+
+// BL-017 — identidade autenticada do representante (demais rotas do portal
+// serão acrescentadas nas etapas seguintes, sempre sob a mesma guarda).
+app.get('/api/representante/portal/me', wrap(obterIdentidadeRepresentante));
 
 // ---- CHECKOUT INTERNO (ADR-0007) — motor compartilhado, AUTENTICADO ----
 // A superfície pública /api/loja/* foi RETIRADA. A loja pública de varejo é a
