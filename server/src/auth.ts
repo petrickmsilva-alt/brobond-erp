@@ -96,6 +96,8 @@ export type AuthUser = {
    * do ator é restrito à própria carteira. `null` = sem restrição.
    */
   carteira?: number | null;
+  /** Conta explicitamente configurada para usar somente o Portal do Representante. */
+  portal_representante?: boolean;
 };
 
 export function normalizeEmail(email: unknown): string {
@@ -131,6 +133,7 @@ function toAuthUser(row: Row): AuthUser {
   // linha do usuário no banco — revalidadas a cada requisição pelo requireAuth.
   user.empresa_id = Number(row.empresa_id) > 0 ? Number(row.empresa_id) : EMPRESA_PADRAO;
   user.pode_consolidar = row.pode_consolidar === true;
+  user.portal_representante = row.portal_representante === true;
   if (row.trocar_senha === true) user.trocar_senha = true;
   for (const k of ['perm_catalogos','perm_compartilhar','perm_metricas','perm_politicas','perm_aprovar','perm_preco_tabela'] as const) user[k] = String(row[k] || 'herdar');
   user.desconto_max_pct = row.desconto_max_pct == null ? null : Number(row.desconto_max_pct);
@@ -857,6 +860,26 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
   // A06-14: o vínculo cadastral representante ↔ usuário vira ESCOPO DE CARTEIRA.
   // Resolvido do banco (nunca do cliente) e só para perfis não-gestão.
   payload.carteira = await carteiraDoUsuario(payload);
+
+  // BL-017: o modo portal é fail-closed. A flag não concede acesso por si só:
+  // exige perfil operador e vínculo ativo do MESMO usuário, representante e
+  // empresa da sessão. A checagem roda em toda requisição autenticada.
+  if (payload.portal_representante === true) {
+    if (payload.perfil !== 'operador' || !Number.isInteger(Number(payload.carteira)) || Number(payload.carteira) <= 0) {
+      return res.status(403).json({ error: 'Acesso ao Portal do Representante indisponível: vínculo comercial inválido.' });
+    }
+    const { RESOURCES } = await import('./resources');
+    const empresaAtiva = Number(payload.empresa_sessao || payload.empresa_id || EMPRESA_PADRAO);
+    const representante = await getStore().findOneWhere(RESOURCES.representantes, {
+      id: Number(payload.carteira),
+      empresa_id: empresaAtiva,
+      usuario_id: Number(payload.id),
+      ativo: true,
+    });
+    if (!representante) {
+      return res.status(403).json({ error: 'Acesso ao Portal do Representante suspenso: representante inativo ou vínculo não encontrado na empresa ativa.' });
+    }
+  }
 
   (req as any).user = payload;
   (req as any).sid = payload.sid;

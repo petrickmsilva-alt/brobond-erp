@@ -66,39 +66,56 @@ export async function empresasDoUsuario(usuarioId: number, empresaPadrao: number
 // exceção sobe e a requisição falha em vez de abrir a empresa.
 // ============================================================================
 
-const carteiraCache = new Map<number, { at: number; representanteId: number | null }>();
+const carteiraCache = new Map<string, { at: number; representanteId: number | null }>();
 
-/** Esvazia o cache de carteira (ou só o de um usuário) ao editar o vínculo. */
+/** Esvazia o cache de carteira (ou todos os escopos de um usuário) ao editar o vínculo. */
 export function invalidarCacheCarteira(usuarioId?: number): void {
-  if (usuarioId === undefined) carteiraCache.clear();
-  else carteiraCache.delete(usuarioId);
+  if (usuarioId === undefined) {
+    carteiraCache.clear();
+    return;
+  }
+  const prefixo = String(usuarioId) + ':';
+  for (const chave of carteiraCache.keys()) if (chave.startsWith(prefixo)) carteiraCache.delete(chave);
 }
 
 /**
- * Id do representante vinculado ao usuário, DENTRO das empresas concedidas.
+ * Id do representante vinculado ao usuário NA EMPRESA ATIVA da sessão.
  * Devolve `null` para perfis de gestão ou quando não há vínculo — nunca inventa
- * uma carteira. O vínculo de outra empresa do usuário não é adotado.
+ * uma carteira. A empresa vem da sessão autenticada, não da query/body.
  */
 export async function carteiraDoUsuario(actor: {
   id: number;
   perfil?: string;
   empresas?: number[];
+  empresa_id?: number;
+  empresa_sessao?: number | null;
 }): Promise<number | null> {
   if (actor.perfil === 'admin' || actor.perfil === 'gerente') return null;
   const usuarioId = Number(actor.id);
   if (!Number.isInteger(usuarioId) || usuarioId <= 0) return null;
 
-  const hit = carteiraCache.get(usuarioId);
+  const permitidas = new Set((actor.empresas || []).map(Number));
+  const empresaId = Number(actor.empresa_sessao) > 0
+    ? Number(actor.empresa_sessao)
+    : Number(actor.empresa_id) > 0
+      ? Number(actor.empresa_id)
+      : EMPRESA_PADRAO;
+  if (!permitidas.has(empresaId)) return null;
+
+  const chave = String(usuarioId) + ':' + String(empresaId);
+  const hit = carteiraCache.get(chave);
   if (hit && Date.now() - hit.at < CACHE_MS) return hit.representanteId;
 
   const r = getResource('representantes');
   let representanteId: number | null = null;
   if (r) {
-    const permitidas = new Set((actor.empresas || []).map(Number));
-    const { rows } = await getStore().list(r, { page: 1, pageSize: 50, filter: { usuario_id: usuarioId } });
-    const dentro = rows.find((row) => permitidas.has(Number(row.empresa_id)));
-    representanteId = dentro ? Number(dentro.id) : null;
+    const { rows } = await getStore().list(r, {
+      page: 1,
+      pageSize: 2,
+      filter: { usuario_id: usuarioId, empresa_id: empresaId },
+    });
+    representanteId = rows.length === 1 ? Number(rows[0].id) : null;
   }
-  carteiraCache.set(usuarioId, { at: Date.now(), representanteId });
+  carteiraCache.set(chave, { at: Date.now(), representanteId });
   return representanteId;
 }

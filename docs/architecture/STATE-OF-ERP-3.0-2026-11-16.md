@@ -3,8 +3,10 @@
 **Data da verificação:** 2026-11-16  
 **Repositório:** `petrickmsilva-alt/brobond-erp`  
 **Branch-base:** `main`  
-**HEAD da base:** `4d5615d53062fa5612322ce0b3dd67c09b83be45`  
-**Branch desta reconciliação:** `docs/consolidate-erp-3.0-state-2026-11-16`
+**HEAD da main após PR #147:** `d10cc4818700773d4b685bbfa9e9f559cf6193bc`  
+**PR #147:** merged em 2026-11-16; CI concluído com sucesso.  
+**Deploy:** concluído conforme confirmação do Diretor.  
+**Branch de reconciliação:** `docs/consolidate-erp-3.0-state-2026-11-16` (mergeado).
 
 ## 1. Fonte de verdade e regra de leitura
 
@@ -48,7 +50,7 @@ retirada da superfície pública no código.
 | BL-002 | **Parcial** — visão unificada dos canais existe; caminho legado Woo ainda requer cutover | Preparar runbook e validar credenciais/janela de cutover |
 | BL-009 | **Bloqueado por ambiente** — gates PostgreSQL/prisma dependem de execução CI/ambiente apropriado | Confirmar os jobs CI e registrar evidência |
 | BL-015 | **Encerrado** — retirada da loja nativa executada | Manter encerrado |
-| BL-017 | **Aberto** — conector/portal REPRESENTATIVES não implementado | Especificar autenticação, identidade, carteira e contratos; reutilizar domínios existentes |
+| BL-017 | **Em execução interna — fase 1**: identidade de portal, vínculo ativo por tenant e bloqueio de APIs gerais | Prosseguir carteira, catálogo/preço, pedidos/cotações, comissões e portal; contrato em `BL-017-REPRESENTATIVES.md` |
 | BL-018 | **Aberto externo** — homologação fiscal no PVA oficial/contador | Agendar homologação externa |
 
 BL-001 e BL-015 tratavam da mesma retirada em níveis históricos diferentes.
@@ -80,22 +82,20 @@ comissões. Não tratar link público de catálogo como autenticação do repres
   `protected: false` / proteção desabilitada. Recomenda-se habilitar proteção
   com CI obrigatório e revisão antes de merge; nenhuma alteração foi feita
   nessa configuração nesta rodada.
-- A execução CI disparada pela criação da branch precisa ser observada até
-  conclusão; estado `in_progress` não equivale a aprovação.
-- Não foram executadas alterações em produção, migrations, dados ou DNS nesta
-  reconciliação.
+- O PR #147 foi mergeado; a execução CI da `main` no HEAD
+  `d10cc4818700773d4b685bbfa9e9f559cf6193bc` concluiu com `success`.
+- O deploy foi confirmado como concluído pelo Diretor. Esta reconciliação
+  documental não alterou runtime, migrations, dados de produção ou DNS.
 
 ## 6. Sequência aprovada para continuidade técnica
 
-1. Concluir e revisar esta reconciliação documental por PR.
-2. Registrar resultado final dos workflows CI e o estado do deploy Render,
-   sem inferir sucesso de deploy a partir de CI.
-3. Formalizar o contrato de BL-017 (identidade, tenancy, carteira, catálogo,
-   preço, pedido, comissão, auditoria).
-4. Implementar backend e frontend em PR separado, com testes de autorização
-   positiva e negativa, isolamento tenant/representante e regressão de vendas.
-5. Tratar BL-002 (cutover Woo legado) em trilha própria, sem misturar com
-   REPRESENTATIVES.
+1. Executar BL-017 conforme o contrato `BL-017-REPRESENTATIVES.md`, começando
+   pela identidade exclusiva e pela fronteira server-side de autorização.
+2. Implementar carteira e isolamento multiempresa com testes negativos A/B.
+3. Habilitar catálogo/preço autorizado e fluxos canônicos de cotação/pedido.
+4. Integrar consulta de comissões ao livro oficial, sem escrita direta.
+5. Entregar auditoria, testes de isolamento e portal responsivo em PRs pequenos.
+6. Tratar BL-002 (cutover Woo legado) em trilha própria.
 
 **Critério de encerramento desta reconciliação:** documentação coerente,
 backlog sem duplicidade, evidências de código/teste vinculadas e PR revisado.

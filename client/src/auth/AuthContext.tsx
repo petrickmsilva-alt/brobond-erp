@@ -9,6 +9,10 @@ export type User = {
   name: string;
   email: string;
   perfil: Perfil;
+  /** Conta de acesso exclusivo ao Portal do Representante. */
+  portal_representante?: boolean;
+  /** Identificador da carteira resolvido pelo servidor na empresa ativa. */
+  carteira?: number | null;
   /** senha padrão/legada: o sistema pede a troca no primeiro acesso */
   trocar_senha?: boolean;
   lembrar?: boolean;

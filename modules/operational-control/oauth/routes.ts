@@ -41,6 +41,13 @@ const wrap = (fn: (req: Request, res: Response) => Promise<unknown> | unknown) =
   Promise.resolve(fn(req, res)).catch(next);
 };
 
+/** O consentimento OAuth é uma superfície ERP, nunca disponível a conta portal exclusiva. */
+function exigirUsuarioNaoPortalRepresentante(u: AuthUser): void {
+  if (u.portal_representante === true) {
+    throw new HttpError(403, 'Contas exclusivas do Portal do Representante não podem autorizar integrações operacionais.');
+  }
+}
+
 export const oauthRouter: Router = Router();
 
 // Limite local e conservador para impedir abuso do endpoint público RFC 7591.
@@ -176,6 +183,7 @@ async function concederConsentimentoEEmitirCallback(
   u: AuthUser,
   validada: SolicitacaoAutorizacaoValidada
 ): Promise<string> {
+  exigirUsuarioNaoPortalRepresentante(u);
   if (u.trocar_senha === true) {
     throw new HttpError(403, 'Troque sua senha provisória no ERP antes de autorizar integrações externas.');
   }
@@ -261,6 +269,7 @@ oauthRouter.get('/oauth/authorize/session', requireAuth, wrap(async (req, res) =
   cabecalhosSemCache(res);
   const validada = await validarSolicitacaoAutorizacao(req.query as Record<string, unknown>);
   const u = currentUser(req);
+  exigirUsuarioNaoPortalRepresentante(u);
   const exigeReauth =
     validada.escopos.includes(SCOPES.workflowRequest) || validada.escopos.includes(SCOPES.workflowApprove);
 
@@ -410,6 +419,7 @@ async function processarAuthorizeAutenticado(req: Request, res: Response): Promi
   };
   const validada = await validarSolicitacaoAutorizacao(fonte);
   const u = currentUser(req);
+  exigirUsuarioNaoPortalRepresentante(u);
 
   if (String(query.confirm ?? '') !== '1') {
     res.status(200).json({
