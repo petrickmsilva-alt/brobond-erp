@@ -75,6 +75,20 @@ async function clienteDaEmpresa(empresa: number) {
   return clienteId;
 }
 
+/** A autorização de cliente é temporal; representante_id legado não substitui vínculo. */
+async function vincularCliente(empresa: number, cliente: number, representante: number, participacao = 100) {
+  return getStore().insert(RESOURCES.representante_cliente, {
+    empresa_id: empresa,
+    cliente_id: cliente,
+    representante_id: representante,
+    inicio: '2026-01-01',
+    fim: null,
+    status: 'ativo',
+    prioridade: 1,
+    participacao_pct: participacao,
+  });
+}
+
 async function novaVenda(empresa: number, representanteId: number, comissao = 100) {
   const cliente = await clienteDaEmpresa(empresa);
   seq++;
@@ -145,6 +159,9 @@ test('A06-14: cliente de outro representante não vaza na listagem do próprio',
   const repOutro = await novoRepresentante(1, null);
   const clienteProprio = await createRecord(RESOURCES.clientes, { nome: `Cliente próprio ${sufixo}`, pessoa: 'pf', representante_id: Number(repProprio.id) }, adminA);
   const clienteAlheio = await createRecord(RESOURCES.clientes, { nome: `Cliente alheio ${sufixo}`, pessoa: 'pf', representante_id: Number(repOutro.id) }, adminA);
+  // A fonte de autorização é representante_cliente, não o campo legado do cadastro.
+  await vincularCliente(1, Number(clienteProprio.id), Number(repProprio.id));
+  await vincularCliente(1, Number(clienteAlheio.id), Number(repOutro.id));
   const escopo = escopoDoAtor({ id: Number(usuario.id), perfil: 'operador', empresa_id: 1, empresas: [1], carteira: Number(repProprio.id) });
 
   const lista = await listRecords(RESOURCES.clientes, { page: 1, pageSize: 1000 }, escopo);
@@ -163,6 +180,7 @@ test('A06-14: escrita carimba a própria carteira e recusa a de outro (403)', as
   const repOutro = await novoRepresentante(1, null);
   const escopo = escopoDoAtor({ id: Number(usuario.id), perfil: 'operador', empresa_id: 1, empresas: [1], carteira: Number(repProprio.id) });
   const cliente = await clienteDaEmpresa(1);
+  await vincularCliente(1, cliente, Number(repProprio.id));
 
   // Lançar em nome do próprio representante funciona (o id do corpo é aceito).
   const propria = await createRecord(

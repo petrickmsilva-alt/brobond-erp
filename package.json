@@ -24,7 +24,7 @@
     "audit:ux": "node scripts/auditar-ux.mjs",
     "smoke": "node scripts/smoke-e2e.mjs",
     "smoke:pg": "node scripts/smoke-pg.mjs",
-    "lint": "eslint 'server/src/**/*.ts' 'modules/**/*.ts' 'packages/*/src/**/*.ts' 'client/src/**/*.{ts,tsx}' 'scripts/**/*.ts'",
+    "lint": "eslint \"server/src/**/*.ts\" \"modules/**/*.ts\" \"packages/*/src/**/*.ts\" \"client/src/**/*.{ts,tsx}\" \"scripts/**/*.ts\"",
     "db:validate": "prisma validate",
     "db:generate": "prisma generate",
     "db:deploy": "prisma migrate deploy",

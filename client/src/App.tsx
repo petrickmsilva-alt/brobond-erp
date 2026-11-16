@@ -38,6 +38,7 @@ const RepresentanteDetailPage = lazy(() => import('./pages/RepresentanteDetailPa
 // Fundação comercial (MASTER): formulário em PÁGINA PRÓPRIA (nunca modal).
 const CadastroComercialFormPage = lazy(() => import('./pages/CadastroComercialFormPage'));
 const MetaAcompanhamentoPage = lazy(() => import('./pages/MetaAcompanhamentoPage'));
+const PainelComercialPage = lazy(() => import('./pages/PainelComercialPage'));
 const OrderPage = lazy(() => import('./pages/OrderPage'));
 const OrdemDetail = lazy(() => import('./pages/OrdemDetail'));
 const CotacoesCompraPage = lazy(() => import('./pages/CotacoesCompraPage'));
@@ -83,6 +84,7 @@ const CommerceFulfillmentPage = lazy(() => import('./pages/commerce/FulfillmentP
 const CommerceEventosPage = lazy(() => import('./pages/commerce/EventosPage'));
 const CommerceErrosPage = lazy(() => import('./pages/commerce/ErrosPage'));
 const CommerceDevolucoesPage = lazy(() => import('./pages/commerce/DevolucoesPage'));
+const CommerceNotificacoesPage = lazy(() => import('./pages/commerce/NotificacoesPage'));
 // Usuários: cadastro/edição em PÁGINA própria (nunca em modal/drawer).
 const UsuarioRegistroPage = lazy(() =>
   import('./pages/UsuariosPage').then((m) => ({ default: m.UsuarioRegistroPage }))
@@ -638,6 +640,8 @@ export default function App() {
             <Route path="commerce/devolucoes" element={<ModuleAccess moduleId="commerce-pedidos"><CommerceDevolucoesPage /></ModuleAccess>} />
             <Route path="commerce/eventos" element={<ModuleAccess moduleId="commerce-fila"><CommerceEventosPage /></ModuleAccess>} />
             <Route path="commerce/erros" element={<ModuleAccess moduleId="commerce-fila"><CommerceErrosPage /></ModuleAccess>} />
+            <Route path="commerce/notificacoes" element={<ModuleAccess moduleId="commerce-notificacoes"><CommerceNotificacoesPage /></ModuleAccess>} />
+            <Route path="comercial/painel" element={<ModuleAccess moduleId="painel-comercial"><PainelComercialPage /></ModuleAccess>} />
             <Route path="financeiro/extrato" element={<ModuleAccess moduleId="financeiro"><FinanceiroExtratoPage modo="lista" /></ModuleAccess>} />
             <Route path="financeiro/extrato/:id" element={<ModuleAccess moduleId="financeiro"><FinanceiroExtratoPage modo="detalhe" /></ModuleAccess>} />
             <Route path="financeiro/extrato/:id/editar" element={<ModuleAccess moduleId="financeiro"><FinanceiroExtratoPage modo="editar" /></ModuleAccess>} />
@@ -710,7 +714,7 @@ export default function App() {
                 pública /loja). Gerar rota aqui criaria uma segunda tela e um
                 ModuleAccess indevido sobre a experiência pública — por isso o
                 filtro. Nenhuma rota nova/paralela de storefront é criada. */}
-            {MODULES.filter((m) => m.path !== '/' && m.id !== 'config' && !m.rotaPublica).map((m) => {
+            {MODULES.filter((m) => m.path !== '/' && m.id !== 'config' && m.id !== 'commerce-notificacoes' && !m.rotaPublica).map((m) => {
               const el = <ModulePage module={m} />;
               return (
                 <Route

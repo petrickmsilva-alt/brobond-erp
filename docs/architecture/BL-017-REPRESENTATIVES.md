@@ -48,6 +48,13 @@ Qualquer endpoint geral do ERP retorna 403, mesmo que seja chamado manualmente f
 | 6 | Auditoria e segurança | eventos, rate limits, testes negativos e tenant/representante cruzados |
 | 7 | Portal comercial | navegação responsiva, visão inicial, carteira, catálogo, pedidos, cotações e comissões |
 
+### Regras de autorização da Fase 2
+
+- Leitura, Customer 360 e exportação LGPD preservam clientes de vínculos não cancelados que já começaram, vigentes ou encerrados; vínculos cancelados e com início futuro não autorizam acesso.
+- Escrita em cadastro e operações comerciais exige vínculo ativo e vigente. Um vínculo histórico não concede permissão para editar o cadastro nem iniciar nova operação.
+- Compartilhamento só admite vínculos ativos sem data final, com participação individual inferior a 100% e soma agregada de no máximo 100%.
+- Sobreposições temporais incompatíveis são recusadas pela aplicação e pelo trigger transacional, que serializa por empresa/cliente e também protege gravações SQL diretas.
+
 ## 5. Restrições
 
 - Não criar cadastro paralelo de representante, cliente, produto, estoque, venda, preço ou comissão.

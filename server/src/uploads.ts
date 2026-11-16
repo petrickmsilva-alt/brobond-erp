@@ -26,6 +26,9 @@ import {
   aplicarFiltroEmpresa,
   assertRegistroDaEmpresa,
   assertRegistroDaEmpresaParaEscrita,
+  clienteNaCarteira,
+  clienteNaCarteiraVigente,
+  idCarteiraDoEscopo,
   empresaDoRegistroAudit,
   type EscopoEmpresa,
 } from './empresa';
@@ -287,8 +290,14 @@ function resourceWithImages(req: Request): Resource {
 // recorte a aplicar — o comportamento anterior é preservado.
 // ----------------------------------------------------------------------------
 async function registroDoAtor(r: Resource, id: number, escopo: EscopoEmpresa, tx?: Tx): Promise<Row> {
-  const filtro = aplicarFiltroEmpresa(r, { id }, escopo) || { id };
+  const filtro = r.key === 'clientes'
+    ? { id, empresa_id: escopo.empresaId }
+    : aplicarFiltroEmpresa(r, { id }, escopo) || { id };
   const row = await getStore().findOneWhere(r, filtro, tx);
+  if (r.key === 'clientes' && idCarteiraDoEscopo(escopo) !== null) {
+    if (!row || !(await clienteNaCarteira(getStore(), id, escopo, tx))) throw new HttpError(404, 'Cliente não encontrado(a).');
+    return row;
+  }
   return assertRegistroDaEmpresa(r, row, escopo);
 }
 
@@ -296,6 +305,10 @@ async function registroDoAtor(r: Resource, id: number, escopo: EscopoEmpresa, tx
 async function registroDoAtorParaEscrita(r: Resource, id: number, escopo: EscopoEmpresa, tx?: Tx): Promise<Row> {
   const filtro = { id, ...(r.empresa === true ? { empresa_id: escopo.empresaId } : {}) };
   const row = await getStore().findOneWhere(r, filtro, tx);
+  if (r.key === 'clientes' && idCarteiraDoEscopo(escopo) !== null) {
+    if (!row || !(await clienteNaCarteiraVigente(getStore(), id, escopo, tx))) throw new HttpError(404, 'Cliente não encontrado(a).');
+    return row;
+  }
   return assertRegistroDaEmpresaParaEscrita(r, row, escopo);
 }
 

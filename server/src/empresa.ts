@@ -27,7 +27,7 @@
 // ============================================================================
 import { HttpError } from './errors';
 import { getResource, type Resource } from './resources';
-import type { Payload, Row, Tx } from './store';
+import type { ListParams, ListResult, Payload, Row, Store, Tx } from './store';
 
 /** Empresa padrão do grupo (BROBOND) — criada pela migration 0016. */
 export const EMPRESA_PADRAO = 1;
@@ -243,10 +243,155 @@ export function registroNoEscopo(r: Resource, row: Row | null | undefined, escop
 /** A carteira do ator restringe esta linha? `false` = sem restrição de carteira. */
 export function foraDaCarteira(r: Resource, row: Row | null | undefined, escopo: EscopoEmpresa | null | undefined): boolean {
   if (!r.escopo || !escopo || escopo.consolidado) return false;
+  // Clientes usam representante_cliente (vigência temporal); o helper síncrono não autoriza pelo campo legado.
+  if (r.key === 'clientes' && idCarteiraValido(escopo.carteira) !== null) return true;
   const carteira = Number(escopo.carteira);
   if (!Number.isInteger(carteira) || carteira <= 0) return false;
   if (!row) return true;
   return Number(row[r.escopo]) !== carteira;
+}
+
+function dataCarteiraISO(value: unknown): string | null {
+  if (value instanceof Date && Number.isFinite(value.getTime())) return value.toISOString().slice(0, 10);
+  if (typeof value !== 'string') return null;
+  const valueISO = value.trim().slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(valueISO)) return null;
+  const parsed = new Date(valueISO + 'T00:00:00.000Z');
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === valueISO ? valueISO : null;
+}
+
+function vinculoCarteiraVigente(row: Row, hoje: string): boolean {
+  if (String(row.status ?? 'ativo') !== 'ativo') return false;
+  const inicio = dataCarteiraISO(row.inicio);
+  if (!inicio || inicio > hoje) return false;
+  if (row.fim === null || row.fim === undefined || row.fim === '') return true;
+  const fim = dataCarteiraISO(row.fim);
+  return fim !== null && fim >= hoje;
+}
+
+/**
+ * Acesso de leitura à carteira temporal: vínculo vigente OU histórico encerrado.
+ * Cancelamentos e vínculos com início futuro nunca concedem acesso. A vigência
+ * histórica preserva Customer 360, LGPD e relatórios de clientes já transferidos.
+ */
+function vinculoCarteiraAcessivel(row: Row, hoje: string): boolean {
+  const status = String(row.status ?? 'ativo');
+  if (status !== 'ativo' && status !== 'encerrado') return false;
+  const inicio = dataCarteiraISO(row.inicio);
+  if (!inicio || inicio > hoje) return false;
+  const fimInformado = row.fim !== null && row.fim !== undefined && row.fim !== '';
+  if (!fimInformado) return status === 'ativo';
+  const fim = dataCarteiraISO(row.fim);
+  return fim !== null && fim >= inicio;
+}
+
+/** IDs de clientes atuais e históricos autorizados pela carteira TEMPORAL; o campo legado não participa. */
+export async function idsClientesDaCarteira(store: Store, escopo: EscopoEmpresa, tx?: Tx): Promise<Set<number> | null> {
+  const carteira = idCarteiraValido(escopo.carteira);
+  if (escopo.consolidado || carteira === null) return null;
+  const recurso = getResource('representante_cliente');
+  if (!recurso) return new Set<number>();
+  const hoje = new Date().toISOString().slice(0, 10);
+  const pageSize = 5_000;
+  const ids = new Set<number>();
+  let page = 1;
+  let total = 0;
+  do {
+    const result = await store.list(recurso, {
+      page,
+      pageSize,
+      filter: { empresa_id: escopo.empresaId, representante_id: carteira },
+    }, tx);
+    total = result.total;
+    for (const link of result.rows) {
+      if (!vinculoCarteiraAcessivel(link, hoje)) continue;
+      const clienteId = Number(link.cliente_id);
+      if (Number.isSafeInteger(clienteId) && clienteId > 0) ids.add(clienteId);
+    }
+    page += 1;
+  } while ((page - 1) * pageSize < total);
+  return ids;
+}
+
+/** Confere acesso de leitura a cliente atual ou histórico da própria carteira. */
+export async function clienteNaCarteira(store: Store, clienteId: number, escopo: EscopoEmpresa, tx?: Tx): Promise<boolean> {
+  const carteira = idCarteiraValido(escopo.carteira);
+  if (escopo.consolidado || carteira === null) return true;
+  if (!Number.isSafeInteger(clienteId) || clienteId <= 0) return false;
+  const recurso = getResource('representante_cliente');
+  if (!recurso) return false;
+  const hoje = new Date().toISOString().slice(0, 10);
+  const pageSize = 500;
+  let page = 1;
+  let total = 0;
+  do {
+    const result = await store.list(recurso, {
+      page,
+      pageSize,
+      filter: { empresa_id: escopo.empresaId, representante_id: carteira, cliente_id: clienteId },
+    }, tx);
+    total = result.total;
+    if (result.rows.some((link) => vinculoCarteiraAcessivel(link, hoje))) return true;
+    page += 1;
+  } while ((page - 1) * pageSize < total);
+  return false;
+}
+
+/** Confere autorização de escrita: somente vínculo atualmente vigente. */
+export async function clienteNaCarteiraVigente(store: Store, clienteId: number, escopo: EscopoEmpresa, tx?: Tx): Promise<boolean> {
+  const carteira = idCarteiraValido(escopo.carteira);
+  if (escopo.consolidado || carteira === null) return true;
+  if (!Number.isSafeInteger(clienteId) || clienteId <= 0) return false;
+  const recurso = getResource('representante_cliente');
+  if (!recurso) return false;
+  const hoje = new Date().toISOString().slice(0, 10);
+  const pageSize = 500;
+  let page = 1;
+  let total = 0;
+  do {
+    const result = await store.list(recurso, {
+      page,
+      pageSize,
+      filter: { empresa_id: escopo.empresaId, representante_id: carteira, cliente_id: clienteId, status: 'ativo' },
+    }, tx);
+    total = result.total;
+    if (result.rows.some((link) => vinculoCarteiraVigente(link, hoje))) return true;
+    page += 1;
+  } while ((page - 1) * pageSize < total);
+  return false;
+}
+
+/** Lista clientes com paginação correta e recorte temporal do servidor. */
+export async function listarClientesDaCarteira(
+  store: Store,
+  recurso: Resource,
+  params: ListParams,
+  escopo: EscopoEmpresa,
+  tx?: Tx
+): Promise<ListResult> {
+  const carteiraIds = await idsClientesDaCarteira(store, escopo, tx);
+  const filter = aplicarFiltroEmpresa(recurso, params.filter, escopo);
+  if (carteiraIds !== null && carteiraIds.size === 0) {
+    return { rows: [], total: 0, page: params.page, pageSize: params.pageSize };
+  }
+  const pageSize = 5_000;
+  const candidatos: Row[] = [];
+  let page = 1;
+  let totalCandidatos = 0;
+  do {
+    const result = await store.list(recurso, { ...params, page, pageSize, filter }, tx);
+    totalCandidatos = result.total;
+    candidatos.push(...result.rows);
+    page += 1;
+  } while ((page - 1) * pageSize < totalCandidatos);
+  const visiveis = carteiraIds === null ? candidatos : candidatos.filter((cliente) => carteiraIds.has(Number(cliente.id)));
+  const inicio = (params.page - 1) * params.pageSize;
+  return {
+    rows: visiveis.slice(inicio, inicio + params.pageSize),
+    total: visiveis.length,
+    page: params.page,
+    pageSize: params.pageSize,
+  };
 }
 
 /**
@@ -262,6 +407,8 @@ export function aplicarFiltroCarteira(
 ): Record<string, unknown> | undefined {
   const base: Record<string, unknown> = { ...(filter || {}) };
   if (!r.escopo || !escopo || escopo.consolidado) return Object.keys(base).length ? base : undefined;
+  // Listagens de clientes exigem listarClientesDaCarteira; o caminho legado retorna conjunto vazio.
+  if (r.key === 'clientes' && idCarteiraValido(escopo.carteira) !== null) return { ...base, id: -1 };
   const carteira = Number(escopo.carteira);
   if (!Number.isInteger(carteira) || carteira <= 0) return Object.keys(base).length ? base : undefined;
   // O recorte do servidor SEMPRE vence: descarta o que o cliente tentou injetar.
@@ -338,6 +485,12 @@ export function protegerEmpresaNaEdicao(r: Resource, data: Payload): Payload {
 
 /** A06-14 — na edição, o dono da carteira não pode ser reatribuído por um representante. */
 export function protegerCarteiraNaEdicao(r: Resource, data: Payload, escopo: EscopoEmpresa | null | undefined): Payload {
+  // representante_id em clientes é legado e nunca pode ser atualizado por uma carteira temporal.
+  // A autorização já foi validada por clienteNaCarteira no serviço assíncrono.
+  if (r.key === 'clientes' && idCarteiraDoEscopo(escopo) !== null) {
+    delete data[r.escopo!];
+    return data;
+  }
   const carteira = carteiraDeEscrita(r, escopo);
   if (carteira !== null) data[r.escopo!] = carteira;
   return data;

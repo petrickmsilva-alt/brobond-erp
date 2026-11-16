@@ -1,7 +1,7 @@
 import type { Request, Response } from 'express';
 import { createHash, randomBytes } from 'node:crypto';
 import { HttpError } from './errors';
-import { assertRegistroDaEmpresaParaEscrita, buscarRegistroDaEmpresa, empresaDoRegistroAudit } from './empresa';
+import { assertRegistroDaEmpresaParaEscrita, buscarRegistroDaEmpresa, clienteNaCarteira, clienteNaCarteiraVigente, empresaDoRegistroAudit, idCarteiraDoEscopo } from './empresa';
 import { RESOURCES } from './resources';
 import { escopoDe, getStore } from './services';
 import { labelOf, type Row } from './store';
@@ -46,14 +46,28 @@ export async function criarAcessoPortal(clienteId: number, baseUrl: string, vali
 async function clienteDoAtor(clienteId: number, actor: Parameters<typeof escopoDe>[0], escrita = false) {
   const clienteR = RESOURCES.clientes;
   const escopo = escopoDe(actor as never);
+  const store = getStore();
   const cliente = await buscarRegistroDaEmpresa(
-    (id) => getStore().get(clienteR, id),
-    (where) => getStore().findOneWhere(clienteR, where),
+    (id) => store.get(clienteR, id),
+    (where) => store.findOneWhere(clienteR, where),
     clienteR,
     clienteId,
     escopo
   );
-  return escrita ? assertRegistroDaEmpresaParaEscrita(clienteR, cliente, escopo) : cliente;
+  // O helper síncrono de carteira não autoriza clientes: a fonte de verdade é
+  // o vínculo temporal representante_cliente, sempre dentro da empresa ativa.
+  const clienteAutorizado = escrita
+    ? await clienteNaCarteiraVigente(store, clienteId, escopo)
+    : await clienteNaCarteira(store, clienteId, escopo);
+  if (!clienteAutorizado) {
+    throw new HttpError(404, 'Cliente não encontrado nesta empresa.');
+  }
+  // Escrita exige vínculo vigente; leitura também preserva o histórico da carteira.
+  // Para gestão/consolidação, preserva-se a trava de escrita do escopo.
+  if (escrita && (escopo.consolidado || idCarteiraDoEscopo(escopo) === null)) {
+    assertRegistroDaEmpresaParaEscrita(clienteR, cliente, escopo);
+  }
+  return cliente;
 }
 
 async function acessosDoCliente(clienteId: number) {

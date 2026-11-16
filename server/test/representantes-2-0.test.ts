@@ -451,6 +451,11 @@ test('painel: cadastro, estrutura, carteira, metas, comissão, indicadores e ran
   assert.equal(painel.carteira.clientes_ativos, 1);
   assert.equal(painel.carteira.clientes_inativos, 1);
   assert.equal(painel.carteira.total, 2);
+  assert.deepEqual(
+    painel.carteira.clientes.map((c: any) => c.cliente).sort(),
+    [`Cliente ativo ${sufixo}`, `Cliente inativo ${sufixo}`].sort(),
+    'o painel resolve os nomes dos clientes da carteira temporal, não apenas os IDs'
+  );
   assert.equal(painel.metas.total, 1);
   assert.equal(painel.metas.linhas[0].meta, 10000);
   assert.equal(painel.metas.linhas[0].realizado, 2500, 'realizado derivado da venda faturada');

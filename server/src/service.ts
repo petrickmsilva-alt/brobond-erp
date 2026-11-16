@@ -18,7 +18,7 @@ import { getResource } from './resources';
 import { checkAccess } from './services';
 import { currentUser } from './auth';
 import type { AuthUser } from './auth';
-import { escopoDoAtor, foraDaCarteira, idCarteiraDoEscopo, type EscopoEmpresa } from './empresa';
+import { escopoDoAtor, idCarteiraDoEscopo, idsClientesDaCarteira, type EscopoEmpresa } from './empresa';
 import { domainLock } from './domainLock';
 import { HttpError } from './errors';
 import { round2 } from './utils';
@@ -31,18 +31,17 @@ function escopoDe(req: Request): EscopoEmpresa {
 }
 
 /**
- * SEC-01 — recorte de CARTEIRA do representante no Customer Platform.
+ * BL-017 / SEC-01 — carteira ATUAL pela fonte temporal representante_cliente.
  *
- * As telas de RFM/segmentação e o Customer 360 leem `clientes` diretamente e
- * filtravam apenas por `empresa_id`, ignorando `escopo.carteira`. O mesmo
- * recorte que `listRecords` aplica em `/api/clientes` (A06-14) passa a valer
- * aqui: o representante enxerga só os clientes da PRÓPRIA carteira; admin,
- * gerente, consolidado e operador sem vínculo não são recortados.
+ * `clientes.representante_id` é legado/conveniência e não pode autorizar acesso:
+ * transferências deixam esse campo sem histórico. O vínculo vigente é resolvido
+ * por empresa + representante + status + intervalo de vigência. Falha fechada:
+ * representante sem vínculos temporais não recebe clientes por fallback legado.
  */
-function clientesDaCarteira(escopo: EscopoEmpresa, rows: Row[]): Row[] {
-  const carteira = idCarteiraDoEscopo(escopo);
-  if (carteira === null) return rows;
-  return rows.filter((c) => Number(c.representante_id) === carteira);
+async function clientesDaCarteira(escopo: EscopoEmpresa, rows: Row[]): Promise<Row[]> {
+  const ids = await idsClientesDaCarteira(getStore(), escopo);
+  if (ids === null) return rows;
+  return rows.filter((cliente) => ids.has(Number(cliente.id)));
 }
 
 /** Data/hora ISO do prazo: agora + N horas. */
@@ -240,9 +239,12 @@ type MetricasCliente = {
 };
 
 /** Receita por cliente a partir das vendas faturadas/entregues (canônico). */
-async function metricasPorCliente(empresaId: number): Promise<Map<number, MetricasCliente>> {
+async function metricasPorCliente(empresaId: number, representanteId: number | null = null): Promise<Map<number, MetricasCliente>> {
   const s = getStore();
-  const vendas = await s.list(getResource('vendas')!, { page: 1, pageSize: 20000, filter: { empresa_id: empresaId } });
+  const filtroVendas: Record<string, unknown> = { empresa_id: empresaId };
+  // Histórico comercial permanece atribuído ao representante congelado na venda.
+  if (representanteId !== null) filtroVendas.representante_id = representanteId;
+  const vendas = await s.list(getResource('vendas')!, { page: 1, pageSize: 20000, filter: filtroVendas });
   const mapa = new Map<number, MetricasCliente>();
   const agora = Date.now();
   for (const v of vendas.rows) {
@@ -305,14 +307,17 @@ export async function customer360(req: Request, res: Response) {
   const s = getStore();
   // SEC-01: o representante não abre o Customer 360 de cliente fora da carteira.
   const cliente = await s.findOneWhere(getResource('clientes')!, { id: clienteId, empresa_id: escopo.empresaId });
-  if (!cliente || foraDaCarteira(getResource('clientes')!, cliente, escopo)) {
+  if (!cliente || !(await clientesDaCarteira(escopo, [cliente])).length) {
     throw new HttpError(404, 'Cliente não encontrado nesta empresa.');
   }
 
-  const metricas = (await metricasPorCliente(escopo.empresaId)).get(clienteId);
+  const carteira = idCarteiraDoEscopo(escopo);
+  const metricas = (await metricasPorCliente(escopo.empresaId, carteira)).get(clienteId);
 
-  // Produtos e categorias comprados (por itens das vendas do cliente).
-  const vendasCliente = await s.list(getResource('vendas')!, { page: 1, pageSize: 20000, filter: { empresa_id: escopo.empresaId, cliente_id: clienteId } });
+  // Produtos e categorias: somente vendas atribuídas historicamente ao representante.
+  const filtroVendasCliente: Record<string, unknown> = { empresa_id: escopo.empresaId, cliente_id: clienteId };
+  if (carteira !== null) filtroVendasCliente.representante_id = carteira;
+  const vendasCliente = await s.list(getResource('vendas')!, { page: 1, pageSize: 20000, filter: filtroVendasCliente });
   const vendaIds = new Set(vendasCliente.rows.map((v) => Number(v.id)));
   const itens = await s.list(getResource('itens_venda')!, { page: 1, pageSize: 40000, filter: { empresa_id: escopo.empresaId } });
   const porProduto = new Map<number, { produto_id: number; quantidade: number; receita: number }>();
@@ -381,10 +386,11 @@ export async function avaliarSegmento(req: Request, res: Response) {
   if (!segmento) throw new HttpError(404, 'Segmento não encontrado nesta empresa.');
   const regra: RegraSegmento = typeof segmento.regra === 'string' ? JSON.parse(String(segmento.regra || '{}')) : (segmento.regra || {});
 
-  const metricas = await metricasPorCliente(escopo.empresaId);
+  const carteira = idCarteiraDoEscopo(escopo);
+  const metricas = await metricasPorCliente(escopo.empresaId, carteira);
   const clientes = await s.list(getResource('clientes')!, { page: 1, pageSize: 20000, filter: { empresa_id: escopo.empresaId } });
-  // SEC-01: o segmento só avalia clientes da carteira do representante.
-  const clientesVisiveis = clientesDaCarteira(escopo, clientes.rows);
+  // BL-017: clientes pela carteira temporal; vendas pela atribuição histórica congelada.
+  const clientesVisiveis = await clientesDaCarteira(escopo, clientes.rows);
 
   // Consentimento de marketing por cliente (quando exigido pela regra).
   let consentidos: Set<number> | null = null;
@@ -441,10 +447,11 @@ export async function analiseRfm(req: Request, res: Response) {
   checkAccess(getResource('clientes')!, actor, 'read');
   const escopo = escopoDe(req);
   const s = getStore();
-  const metricas = await metricasPorCliente(escopo.empresaId);
+  const carteira = idCarteiraDoEscopo(escopo);
+  const metricas = await metricasPorCliente(escopo.empresaId, carteira);
   const clientes = await s.list(getResource('clientes')!, { page: 1, pageSize: 20000, filter: { empresa_id: escopo.empresaId } });
-  // SEC-01: o RFM só considera clientes da carteira do representante.
-  const visiveis = clientesDaCarteira(escopo, clientes.rows);
+  // BL-017: clientes pela carteira temporal; vendas pela atribuição histórica congelada.
+  const visiveis = await clientesDaCarteira(escopo, clientes.rows);
   const idsVisiveis = new Set(visiveis.map((c) => Number(c.id)));
   const nomePorId = new Map(visiveis.map((c) => [Number(c.id), String(c.nome)]));
 

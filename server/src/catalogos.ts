@@ -12,7 +12,7 @@ import QRCode from 'qrcode';
 import { createRequire } from 'node:module';
 import { createHash, randomBytes } from 'node:crypto';
 import { HttpError } from './errors';
-import { assertRegistroDaEmpresaParaEscrita, buscarRegistroDaEmpresa, empresaDoRegistroAudit, type EscopoEmpresa } from './empresa';
+import { assertRegistroDaEmpresaParaEscrita, buscarRegistroDaEmpresa, clienteNaCarteiraVigente, idsClientesDaCarteira, empresaDoRegistroAudit, type EscopoEmpresa } from './empresa';
 import { RESOURCES } from './resources';
 import { escopoDe, exigirComercial, getStore, toHttpError } from './services';
 import { currentUser } from './auth';
@@ -509,7 +509,9 @@ async function catalogoDoAtor(id: number, actor: Parameters<typeof escopoDe>[0],
 
 async function clienteDoAtor(id: number, escopo: EscopoEmpresa) {
   const r = RESOURCES.clientes;
-  return getStore().findOneWhere(r, { id, empresa_id: escopo.empresaId });
+  const cliente = await getStore().findOneWhere(r, { id, empresa_id: escopo.empresaId });
+  if (!cliente || !(await clienteNaCarteiraVigente(getStore(), id, escopo))) return null;
+  return cliente;
 }
 
 async function compartilhamentosDaEmpresa(empresaId: number | null, consolidado: boolean) {
@@ -618,15 +620,28 @@ export async function inteligenciaCatalogos(req: Request, res: Response) {
     s.list(RESOURCES.clientes, { page: 1, pageSize: 5000, filter: clientesFiltro }),
     s.list(RESOURCES.usuarios, { page: 1, pageSize: 1000 }),
   ]);
+  // BL-017: métricas comerciais também respeitam a carteira temporal. Links
+  // gerais só aparecem ao representante que os criou; links de cliente só
+  // aparecem quando o cliente pertence à carteira atual ou ao histórico.
+  const idsCarteira = await idsClientesDaCarteira(s, escopo);
+  const clientesVisiveis = idsCarteira === null
+    ? clientesR.rows
+    : clientesR.rows.filter((cliente) => idsCarteira.has(Number(cliente.id)));
+  const idsClientesVisiveis = new Set(clientesVisiveis.map((cliente) => Number(cliente.id)));
   const catalogoIds = new Set(catalogosR.rows.map((c) => Number(c.id)));
-  const comps = compR.rows.filter((x) => catalogoIds.has(Number(x.catalogo_id)) && new Date(String(x.criado_em)).getTime() >= desde);
+  const comps = compR.rows.filter((x) =>
+    catalogoIds.has(Number(x.catalogo_id))
+    && new Date(String(x.criado_em)).getTime() >= desde
+    && (idsCarteira === null
+      || (x.cliente_id ? idsClientesVisiveis.has(Number(x.cliente_id)) : Number(x.usuario_id) === Number(actor.id)))
+  );
   const ids = new Set(comps.map((x) => Number(x.id)));
   const eventos = eventosR.rows.filter((x) => ids.has(Number(x.compartilhamento_id)));
   const porTipo = (tipo: string) => eventos.filter((e) => e.tipo === tipo);
   const abertos = new Set(porTipo('abertura').map((e) => Number(e.compartilhamento_id)));
   const pedidos = porTipo('pedido_enviado');
   const nomes = (rows: Row[]) => new Map(rows.map((x) => [Number(x.id), String(x.nome || x.email || `#${x.id}`)]));
-  const cats = nomes(catalogosR.rows), clientes = nomes(clientesR.rows), usuarios = nomes(usuariosR.rows);
+  const cats = nomes(catalogosR.rows), clientes = nomes(clientesVisiveis), usuarios = nomes(usuariosR.rows);
   const agora = Date.now();
   const recentes = comps.slice(0, 100).map((c) => ({
     id: Number(c.id), catalogo: cats.get(Number(c.catalogo_id)) || `#${c.catalogo_id}`,
