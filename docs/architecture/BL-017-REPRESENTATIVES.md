@@ -34,7 +34,7 @@ Contas habilitadas ficam restritas no servidor a:
 - identidade e gestão da própria sessão/senha/MFA;
 - rotas autenticadas sob `/api/representante/portal/*`.
 
-Qualquer endpoint geral do ERP retorna 403, mesmo que seja chamado manualmente fora da interface. O vínculo de carteira é resolvido pelo servidor na empresa ativa, nunca por ID informado no cliente.
+Qualquer endpoint geral do ERP retorna 403, mesmo que seja chamado manualmente fora da interface. O Control Plane operacional e a autorização OAuth também recusam contas portal, inclusive tokens OAuth antigos já emitidos antes da ativação da flag. O vínculo de carteira é resolvido pelo servidor na empresa ativa, nunca por ID informado no cliente.
 
 ## 4. Sequência funcional
 
