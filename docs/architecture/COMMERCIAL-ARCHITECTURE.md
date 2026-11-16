@@ -36,8 +36,11 @@
 - **REPRESENTATIVES** não tem conector no repositório → `nao_homologado`, jamais
   conectado.
 - Nenhuma credencial (CK/CS/token) é devolvida.
-- RBAC: **gerente**/**admin** apenas (o `operador` recebe 403). Escopo por
-  empresa via `escopoDoAtor`.
+- RBAC do painel de gestão dos canais: **gerente**/**admin** apenas (o `operador`
+  recebe 403). Escopo por empresa via `escopoDoAtor`.
+- O acesso do representante ao portal first-party é separado desse painel:
+  conta `portal_representante` vinculada a representante ativo, com allowlist
+  própria de APIs e sem acesso aos módulos gerais do ERP (BL-017).
 
 > **A superfície pública nativa `/loja` foi RETIRADA no código** conforme
 > ADR-0007. As URLs antigas recebem 301 quando `STOREFRONT_REDIRECT_URL` está
