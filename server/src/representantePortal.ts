@@ -84,6 +84,6 @@ export async function obterIdentidadeRepresentante(req: Request, res: Response) 
       regiao: representante.regiao ?? null,
     },
     empresa_id: escopo.empresaId,
-    usuario: { id: actor.id, nome: actor.name, email: actor.email },
+    usuario: { nome: actor.name, email: actor.email },
   });
 }
