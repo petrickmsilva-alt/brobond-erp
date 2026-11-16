@@ -13,7 +13,8 @@ import { fileURLToPath } from 'node:url';
 import { BRANCH_AUTORIZADA, ENVIRONMENT_AUTORIZADO, ENVIRONMENT_PROIBIDO, verificarWorkflow, WORKFLOW_PADRAO } from '../../scripts/verificar-workflow-diagnostico.mjs';
 
 const RAIZ = fileURLToPath(new URL('../../', import.meta.url));
-const textoDoWorkflow = readFileSync(`${RAIZ}${WORKFLOW_PADRAO}`, 'utf8');
+// Normaliza CRLF/CR para LF: os testes de mutação abaixo alteram trechos YAML por texto.
+const textoDoWorkflow = readFileSync(`${RAIZ}${WORKFLOW_PADRAO}`, 'utf8').replace(/\r\n?/g, '\n');
 
 const aprovado = (texto: string) => verificarWorkflow(texto).ok;
 const detalhe = (texto: string, nome: string) => verificarWorkflow(texto).checagens.find((c) => c.nome === nome);

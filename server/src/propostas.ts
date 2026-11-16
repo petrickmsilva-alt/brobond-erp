@@ -34,7 +34,7 @@ import { HttpError } from './errors';
 import { getResource } from './resources';
 import { checkAccess, getStore, toHttpError } from './services';
 import { currentUser, type AuthUser } from './auth';
-import { assertRegistroDaEmpresa, escopoDoAtor, validarReferenciasDaEmpresa, type EscopoEmpresa, empresaDoRegistroAudit } from './empresa';
+import { assertRegistroDaEmpresa, clienteNaCarteiraVigente, escopoDoAtor, validarReferenciasDaEmpresa, type EscopoEmpresa, empresaDoRegistroAudit } from './empresa';
 import { parseId } from './validate';
 import { round2, diaISO } from './utils';
 import { precoDe } from './listasPreco';
@@ -244,8 +244,8 @@ export async function criarProposta(req: Request, res: Response) {
   try {
     const criada = await s.transaction(async (tx) => {
       // Cliente tem que existir E pertencer à empresa ativa.
-      const cliente = await s.get(getResource('clientes')!, clienteId, tx);
-      assertRegistroDaEmpresa(getResource('clientes')!, cliente, escopo);
+      const cliente = await s.findOneWhere(getResource('clientes')!, { id: clienteId, empresa_id: escopo.empresaId }, tx);
+      if (!cliente || !(await clienteNaCarteiraVigente(s, clienteId, escopo, tx))) throw new HttpError(404, 'Cliente não encontrado nesta empresa.');
 
       const cabecalho: Record<string, unknown> = {
         empresa_id: escopo.empresaId,

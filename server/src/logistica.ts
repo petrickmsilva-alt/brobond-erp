@@ -586,11 +586,10 @@ async function destinoDaVenda(venda: Row, escopo: EscopoEmpresa, tx?: Tx): Promi
   if (!venda.cliente_id) {
     throw new HttpError(400, 'A venda não tem cliente — não há endereço de entrega para cotar o frete.');
   }
-  const cliente = assertRegistroDaEmpresa(
-    getResource('clientes')!,
-    await getStore().get(getResource('clientes')!, Number(venda.cliente_id), tx),
-    escopo
-  );
+  // A venda já foi autorizada pela atribuição histórica do representante.
+  // O endereço do cliente é carregado apenas dentro do tenant, sem consultar o campo legado.
+  const cliente = await getStore().findOneWhere(getResource('clientes')!, { id: Number(venda.cliente_id), empresa_id: escopo.empresaId }, tx);
+  if (!cliente) throw new HttpError(404, 'Cliente não encontrado nesta empresa.');
   const end = await enderecoDe(cliente);
   if (!end.cep || end.cep.length !== 8) {
     throw new HttpError(400, 'O cliente não tem CEP cadastrado (ou está incompleto). Complete o endereço antes de cotar o frete.');

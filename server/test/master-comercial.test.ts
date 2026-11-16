@@ -244,6 +244,60 @@ test('MA-03: sobreposição de vigência é 409 e participação aberta não pas
   );
 });
 
+test('MA-03: carteira compartilhada aceita soma até 100% e takeover encerra todos os vínculos', async () => {
+  const ator = await criarAtor(1, 'gerente');
+  const cliente = await novoCliente({ empresa_id: 1 });
+  const repA = await criarRepresentante(ator);
+  const repB = await criarRepresentante(ator);
+  const repC = await criarRepresentante(ator);
+
+  const vinculoA = await createRecord(getResource('representante_cliente')!, {
+    representante_id: Number(repA.id),
+    cliente_id: Number(cliente.id),
+    inicio: '2026-01-01',
+    participacao_pct: 40,
+    status: 'ativo',
+  }, ator);
+  const vinculoB = await createRecord(getResource('representante_cliente')!, {
+    representante_id: Number(repB.id),
+    cliente_id: Number(cliente.id),
+    inicio: '2026-01-01',
+    participacao_pct: 60,
+    status: 'ativo',
+  }, ator);
+
+  assert.equal(Number(vinculoA.participacao_pct), 40);
+  assert.equal(Number(vinculoB.participacao_pct), 60);
+
+  await esperarErro(
+    () => createRecord(getResource('representante_cliente')!, {
+      representante_id: Number(repC.id),
+      cliente_id: Number(cliente.id),
+      inicio: '2026-01-01',
+      participacao_pct: 1,
+      status: 'ativo',
+    }, ator),
+    409,
+    /100%|participaç/i
+  );
+
+  const takeover = await createRecord(getResource('representante_cliente')!, {
+    representante_id: Number(repC.id),
+    cliente_id: Number(cliente.id),
+    inicio: '2026-07-01',
+    participacao_pct: 100,
+    status: 'ativo',
+  }, ator);
+  assert.equal(Number(takeover.participacao_pct), 100);
+
+  for (const anterior of [vinculoA, vinculoB]) {
+    const encerrado = await getStore().get(getResource('representante_cliente')!, Number(anterior.id));
+    assert.ok(encerrado);
+    assert.equal(String(encerrado!.status), 'encerrado');
+    assert.equal(String(encerrado!.fim).slice(0, 10), '2026-06-30');
+  }
+});
+
 // ----------------------------------------------------------------------------
 // MA-06 — EQUIPES E HIERARQUIA
 // ----------------------------------------------------------------------------

@@ -34,7 +34,7 @@ test('dashboard (PG): fronteiras SQL de America/Sao_Paulo são 03:00 UTC (indepe
   assert.equal(mes.rows[0].mes, '2026-01');
 
   // O mesmo instante em UTC puro seria fevereiro — é exatamente o bug corrigido.
-  const mesUtc = await query(`SELECT to_char(date_trunc('month', $1::timestamptz), 'YYYY-MM') AS mes`, ['2026-01-31T21:00:00-03:00']);
+  const mesUtc = await query(`SELECT to_char(date_trunc('month', $1::timestamptz AT TIME ZONE 'UTC'), 'YYYY-MM') AS mes`, ['2026-01-31T21:00:00-03:00']);
   assert.equal(mesUtc.rows[0].mes, '2026-02', 'sanidade: em UTC o instante cai em fevereiro');
 
   // Semana civil: domingo 23:59 BR pertence à semana da segunda anterior.

@@ -42,7 +42,7 @@ import { resolverDestinoImpressao } from './printTerminals';
 import { getResource, type Resource } from './resources';
 import { checkAccess, checkFluxo, escopoDe, getStore, resolveLocal, toHttpError } from './services';
 import { currentUser } from './auth';
-import { assertRegistroDaEmpresa, type EscopoEmpresa, empresaDoRegistroAudit } from './empresa';
+import { assertRegistroDaEmpresa, clienteNaCarteiraVigente, type EscopoEmpresa, empresaDoRegistroAudit } from './empresa';
 import { parseId } from './validate';
 import { round2 } from './utils';
 import { aplicarRegrasPedido } from './itens';
@@ -783,7 +783,8 @@ export async function venderPdv(req: Request, res: Response) {
       let clienteId: number | null = null;
       if (body.cliente_id !== undefined && body.cliente_id !== null && body.cliente_id !== '') {
         clienteId = Number(body.cliente_id);
-        assertRegistroDaEmpresa(getResource('clientes')!, await findInTenant(getResource('clientes')!, clienteId, escopo, tx), escopo);
+        const cliente = await s.findOneWhere(getResource('clientes')!, { id: clienteId, empresa_id: escopo.empresaId }, tx);
+        if (!cliente || !(await clienteNaCarteiraVigente(s, clienteId, escopo, tx))) throw new HttpError(404, 'Cliente não encontrado nesta empresa.');
       }
       let representanteId: number | null = null;
       if (body.representante_id !== undefined && body.representante_id !== null && body.representante_id !== '') {

@@ -35,9 +35,14 @@ if (process.exitCode) process.exit();
 
 // Shorten only *idle* connections held by node:test workers after they finish.
 // Query/transaction timeouts remain unchanged; PG_POOL_MAX remains unchanged.
-const child = spawn('npm', ['--workspace', 'server', 'run', 'test:pg'], {
+const comandoNpm = process.platform === 'win32' ? 'cmd.exe' : 'npm';
+const argumentosNpm = process.platform === 'win32'
+  ? ['/d', '/s', '/c', 'npm --workspace server run test:pg']
+  : ['--workspace', 'server', 'run', 'test:pg'];
+const child = spawn(comandoNpm, argumentosNpm, {
   env: { ...process.env, PG_IDLE_TIMEOUT: process.env.PG_IDLE_TIMEOUT || '1000' },
   stdio: ['inherit', 'pipe', 'pipe'],
+  windowsHide: true,
 });
 let tail = '';
 child.stdout.on('data', (data) => {

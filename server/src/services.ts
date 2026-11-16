@@ -42,6 +42,9 @@ import { invalidarCacheCarteira } from './empresasAcesso';
 import {
   aplicarFiltroEmpresa,
   aplicarFiltroCarteira,
+  clienteNaCarteira,
+  clienteNaCarteiraVigente,
+  listarClientesDaCarteira,
   assertRegistroDaEmpresa,
   EMPRESA_PADRAO,
   assertRegistroDaEmpresaParaEscrita,
@@ -350,13 +353,21 @@ export async function listRecords(r: Resource, p: ListParams, escopoOuAtor?: Esc
   // MULTIEMPRESA: o recorte entra como filtro obrigatório (AND) e descarta
   // qualquer `f.empresa_id` que o cliente tenha tentado injetar.
   // A06-14: o mesmo vale para a CARTEIRA — o representante só lista a própria.
-  const params: ListParams = { ...p, filter: aplicarFiltroCarteira(r, aplicarFiltroEmpresa(r, p.filter, escopo), escopo) };
+  const carteiraTemporalClientes = r.key === 'clientes' && escopo !== undefined && idCarteiraDoEscopo(escopo) !== null;
+  const params: ListParams = {
+    ...p,
+    filter: carteiraTemporalClientes
+      ? aplicarFiltroEmpresa(r, p.filter, escopo)
+      : aplicarFiltroCarteira(r, aplicarFiltroEmpresa(r, p.filter, escopo), escopo),
+  };
   // REPRESENTANTES 2.0: `f.equipe_id` e a busca pelo NOME DA EQUIPE são
   // filtros VIRTUAIS (a composição vive em `equipe_membros`, não em uma coluna
   // duplicada no cadastro). O caminho dedicado devolve lista/total/paginação
   // corretos — e, quando não há recorte por equipe, a listagem segue 100% SQL.
-  const out = (r.key === 'representantes' ? await listRepresentantesPorEquipe(r, params, escopo) : null)
-    ?? (await getStore().list(r, params));
+  const out = carteiraTemporalClientes
+    ? await listarClientesDaCarteira(getStore(), r, p, escopo!)
+    : (r.key === 'representantes' ? await listRepresentantesPorEquipe(r, params, escopo) : null)
+      ?? (await getStore().list(r, params));
   // Segurança de tenant primeiro: se alguma referência não pertence ao tenant do
   // registro raiz, a listagem termina em 404 — não se gasta consulta anotando
   // linha que não será devolvida.
@@ -694,8 +705,12 @@ export async function getRecord(r: Resource, id: number, escopoOuAtor?: EscopoOu
   if (!posse) throw new HttpError(404, `${r.singular} não encontrado(a).`);
   const row = await store.get(r, id);
   if (!row) throw new HttpError(404, `${r.singular} não encontrado(a).`);
-  // Registro de outra empresa responde 404 — 403 já vazaria que ele existe.
-  assertRegistroDaEmpresa(r, row, escopo);
+  // Clientes usam autorização temporal; o assert síncrono legado não é fonte de verdade.
+  if (r.key === 'clientes' && escopo && idCarteiraDoEscopo(escopo) !== null) {
+    if (!(await clienteNaCarteira(store, id, escopo))) throw new HttpError(404, 'Cliente não encontrado(a).');
+  } else {
+    assertRegistroDaEmpresa(r, row, escopo);
+  }
   await validarReferenciasDeSaida(r, [row], escopo);
   await attachImages(r, [row]);
   anotarStatusSenha(r, [row]);
@@ -1369,6 +1384,9 @@ export async function createRecord(r: Resource, body: unknown, actor: Actor, ctx
       // Nenhum id enviado pelo cliente fura o escopo: toda referência para um
       // recurso com empresa precisa pertencer à MESMA empresa ativa.
       await validarReferenciasDaEmpresa(r, data, escopo, (alvo, alvoId, empresaId, t) => s.findOneWhere(alvo, { id: alvoId, empresa_id: empresaId }, t), tx);
+      if (escopo.carteira != null && data.cliente_id !== undefined && data.cliente_id !== null && data.cliente_id !== '') {
+        if (!(await clienteNaCarteiraVigente(s, Number(data.cliente_id), escopo, tx))) throw new HttpError(404, 'Cliente não encontrado nesta empresa.');
+      }
       if (r.key === 'locais') await validarEnderecoWms(s, escopo.empresaId, data, null, tx);
       if (r.key === 'lotes') await validarLote(s, escopo.empresaId, data, null, tx);
       if (r.key === 'lotes') data.criado_por = actor.id || null;
@@ -1391,6 +1409,30 @@ export async function createRecord(r: Resource, body: unknown, actor: Actor, ctx
       }
 
       const row = await s.insert(r, data, tx);
+      // Cadastro criado pelo próprio representante recebe, na mesma transação,
+      // vínculo temporal inicial de 100%. O campo legado não concede acesso.
+      if (r.key === 'clientes' && carteiraImposta !== null) {
+        const vinculo = getResource('representante_cliente')!;
+        const vinculoData: Row = {
+          empresa_id: escopo.empresaId,
+          cliente_id: Number(row.id),
+          representante_id: carteiraImposta,
+          inicio: new Date().toISOString().slice(0, 10),
+          fim: null,
+          status: 'ativo',
+          prioridade: 1,
+          participacao_pct: 100,
+          observacao: 'Carteira inicial criada junto ao cadastro do cliente.',
+        };
+        const escopoInterno = { ...escopo, carteira: null };
+        await validarRegrasComerciais(vinculo, vinculoData, null, s, escopoInterno, tx);
+        const vinculoCriado = await s.insert(vinculo, vinculoData, tx);
+        await audit(tx, actor, 'criar', vinculo, Number(vinculoCriado.id), 'Vínculo inicial de carteira criado junto ao cliente.', {
+          cliente_id: Number(row.id),
+          representante_id: carteiraImposta,
+          participacao_pct: 100,
+        }, vinculoCriado);
+      }
       if (r.key === 'locais') await garantirLocalPadrao(tx, escopo);
       if (r.key === 'grades' && gradeTamanhos) await syncGradeTamanhos(Number(row.id), gradeTamanhos, tx);
 
@@ -1511,7 +1553,11 @@ export async function updateRecord(r: Resource, id: number, body: unknown, actor
       const filtroAntes = temEscopoEmpresa(r) ? { id, empresa_id: escopo.empresaId } : { id };
       const before = await s.findOneWhere(r, filtroAntes, tx);
       if (!before) throw new HttpError(404, `${r.singular} não encontrado(a).`);
-      assertRegistroDaEmpresaParaEscrita(r, before, escopo);
+      if (r.key === 'clientes' && idCarteiraDoEscopo(escopo) !== null) {
+        if (!(await clienteNaCarteiraVigente(s, id, escopo, tx))) throw new HttpError(404, 'Cliente não encontrado(a).');
+      } else {
+        assertRegistroDaEmpresaParaEscrita(r, before, escopo);
+      }
       if (r.key === 'lancamentos_financeiros' && (before.documento_origem_recurso === 'fin_importacoes_contabeis' || data.documento_origem_recurso === 'fin_importacoes_contabeis')) throw new HttpError(409, 'Partidas contábeis importadas são imutáveis; use uma nova escrituração de ajuste.');
       if (r.key === 'commerce_configuracoes') validarConfiguracaoFrete({ ...before, ...data } as ConfigFrete);
       if (r.key === 'commerce_configuracoes' && data.checkout_usuario_id) {
@@ -1533,6 +1579,10 @@ export async function updateRecord(r: Resource, id: number, body: unknown, actor
         }
       }
       await validarReferenciasDaEmpresa(r, data, escopo, (alvo, alvoId, empresaId, t) => s.findOneWhere(alvo, { id: alvoId, empresa_id: empresaId }, t), tx);
+      const clienteReferenciado = data.cliente_id === undefined ? before.cliente_id : data.cliente_id;
+      if (escopo.carteira != null && clienteReferenciado !== undefined && clienteReferenciado !== null && clienteReferenciado !== '') {
+        if (!(await clienteNaCarteiraVigente(s, Number(clienteReferenciado), escopo, tx))) throw new HttpError(404, 'Cliente não encontrado nesta empresa.');
+      }
       if (r.key === 'locais') await validarEnderecoWms(s, escopo.empresaId, data, before, tx);
       if (r.key === 'lotes') await validarLote(s, escopo.empresaId, data, before, tx);
       if (r.key === 'ordens' && data.terceiro_id !== undefined && Number(data.terceiro_id || 0) !== Number(before.terceiro_id || 0)) {
@@ -1848,7 +1898,11 @@ export async function deleteRecord(r: Resource, id: number, actor: Actor, escopo
       const filtroAntes = temEscopoEmpresa(r) ? { id, empresa_id: escopo.empresaId } : { id };
       const before = await s.findOneWhere(r, filtroAntes, tx);
       if (!before) throw new HttpError(404, `${r.singular} não encontrado(a).`);
-      assertRegistroDaEmpresaParaEscrita(r, before, escopo);
+      if (r.key === 'clientes' && idCarteiraDoEscopo(escopo) !== null) {
+        if (!(await clienteNaCarteiraVigente(s, id, escopo, tx))) throw new HttpError(404, 'Cliente não encontrado(a).');
+      } else {
+        assertRegistroDaEmpresaParaEscrita(r, before, escopo);
+      }
       if (r.key === 'lancamentos_financeiros' && before.documento_origem_recurso === 'fin_importacoes_contabeis') throw new HttpError(409, 'Partidas contábeis importadas não podem ser excluídas; use uma nova escrituração de ajuste.');
 
       if (r.key === 'usuarios') {

@@ -15,7 +15,7 @@ import type { Request, Response } from 'express';
 import { getStore, checkAccess, escopoDe } from './services';
 import { getResource } from './resources';
 import { currentUser } from './auth';
-import { foraDaCarteira } from './empresa';
+import { clienteNaCarteira } from './empresa';
 import { HttpError } from './errors';
 import type { Row } from './store';
 
@@ -44,7 +44,7 @@ export async function exportarDadosTitular(req: Request, res: Response) {
   const cliente = await s.findOneWhere(getResource('clientes')!, { id: clienteId, empresa_id: empresaId });
   // 404 (nunca 403) para cliente de outra empresa. Representante só exporta a
   // própria carteira — o recorte é do servidor, não do cliente HTTP.
-  if (!cliente || foraDaCarteira(getResource('clientes')!, cliente, escopo)) {
+  if (!cliente || !(await clienteNaCarteira(s, clienteId, escopo))) {
     throw new HttpError(404, 'Cliente não encontrado nesta empresa.');
   }
 

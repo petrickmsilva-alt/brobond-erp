@@ -223,12 +223,20 @@ test('LGPD: representante só exporta cliente da própria carteira', async () =>
   const outro = await s.insert(RESOURCES.representantes, { empresa_id: 1, nome: 'Rep Outra Carteira' });
   const repId = Number(rep.id);
   const cliente = await s.insert(RESOURCES.clientes, { empresa_id: 1, nome: 'Cliente Carteira Alheia', representante_id: Number(outro.id) });
+  await s.insert(RESOURCES.representante_cliente, {
+    empresa_id: 1, cliente_id: Number(cliente.id), representante_id: Number(outro.id),
+    inicio: '2026-01-01', status: 'ativo', prioridade: 1, participacao_pct: 100,
+  });
   const representante = { id: repId, name: 'Rep Carteira', perfil: 'representante' as const, empresa_id: 1, empresas: [1], carteira: repId };
   await assert.rejects(
     () => call(exportarDadosTitular, {}, { id: Number(cliente.id) }, representante),
     (e: any) => e.status === 404,
   );
   const proprio = await s.insert(RESOURCES.clientes, { empresa_id: 1, nome: 'Cliente Próprio', representante_id: repId });
+  await s.insert(RESOURCES.representante_cliente, {
+    empresa_id: 1, cliente_id: Number(proprio.id), representante_id: repId,
+    inicio: '2026-01-01', status: 'ativo', prioridade: 1, participacao_pct: 100,
+  });
   const ok = await call(exportarDadosTitular, {}, { id: Number(proprio.id) }, representante);
   assert.equal(ok.titular.id, Number(proprio.id), 'a própria carteira é exportável');
 });

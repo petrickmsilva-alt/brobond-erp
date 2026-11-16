@@ -137,7 +137,7 @@ async function lerDaEmpresa(
   if (r.empresa) where.empresa_id = escopo.empresaId;
   const row = await s.findOneWhere(r, where, tx);
   // A06-14: o recorte de CARTEIRA vale também na leitura direta por id.
-  if (!row || foraDaCarteira(r, row, escopo)) throw new HttpError(404, `${r.singular} não encontrado(a).`);
+  if (!row || (key !== 'clientes' && foraDaCarteira(r, row, escopo))) throw new HttpError(404, `${r.singular} não encontrado(a).`);
   return row;
 }
 
@@ -147,16 +147,23 @@ async function listarTudo(
   key: string | Resource,
   escopo: EscopoEmpresa,
   filtro: Record<string, unknown> = {},
-  tx?: Tx
+  tx?: Tx,
+  ignorarCarteira = false
 ): Promise<Row[]> {
   const r = (typeof key === 'string' ? getResource(key) : key)!;
-  const paginado = await s.list(
-    r,
-    // A06-14: o recorte de carteira entra como filtro obrigatório do servidor.
-    { page: 1, pageSize: 50_000, filter: aplicarFiltroCarteira(r, aplicarFiltroEmpresa(r, filtro, escopo), escopo) },
-    tx
-  );
-  return paginado.rows;
+  const filtroEmpresa = aplicarFiltroEmpresa(r, filtro, escopo);
+  const filter = ignorarCarteira ? filtroEmpresa : aplicarFiltroCarteira(r, filtroEmpresa, escopo);
+  const pageSize = 5_000;
+  const rows: Row[] = [];
+  let page = 1;
+  let total = 0;
+  do {
+    const resultado = await s.list(r, { page, pageSize, filter }, tx);
+    total = resultado.total;
+    rows.push(...resultado.rows);
+    page += 1;
+  } while ((page - 1) * pageSize < total);
+  return rows;
 }
 
 // ============================================================================
@@ -281,29 +288,62 @@ export async function validarCarteira(
   if (data) data.inicio = inicio;
 
   const participacao = numero(data?.participacao_pct ?? atual?.participacao_pct ?? 100);
-  const existentes = (await listarTudo(s, 'representante_cliente', escopo, {}, tx))
+
+  // Serializa todas as alterações da carteira do mesmo cliente dentro da
+  // transação. Sem isso, duas requisições concorrentes poderiam ler 60% + 0%
+  // e inserir simultaneamente mais 30% cada, ultrapassando 100%.
+  if (tx) {
+    await tx.query(
+      'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+      [`representante_cliente:${escopo.empresaId}:${clienteId}`]
+    );
+  }
+
+  const existentes = (await listarTudo(s, 'representante_cliente', escopo, {}, tx, true))
     .filter((r) => id === null || Number(r.id) !== id)
     .filter((r) => idOuNull(r.cliente_id) === clienteId)
     .filter((r) => String(r.status ?? 'ativo') !== 'cancelado');
 
-  // O vínculo ABERTO que este novo vai substituir sai da checagem de
-  // sobreposição: ele deixa de valer na véspera do novo início (é o mecanismo
-  // de troca de representante, não uma sobreposição).
-  // Só um vínculo de 100% SUBSTITUI o anterior. Participação parcial significa
-  // carteira COMPARTILHADA: os dois continuam abertos (e a soma tem de caber
-  // em 100%, checada abaixo).
-  const abertoAnterior = existentes.find((r) => !diaISO(r.fim) && String(r.status ?? 'ativo') === 'ativo');
-  const substituivel = abertoAnterior && !fim && participacao >= 100 && inicio > (diaISO(abertoAnterior.inicio) ?? '0001-01-01')
-    ? abertoAnterior
-    : null;
-  // CARTEIRA COMPARTILHADA: dois vínculos ABERTOS com participação PARCIAL
-  // (< 100%) no mesmo cliente são legítimos — eles dividem o cliente e a soma
-  // das participações é checada adiante. A exclusividade vale para o vínculo
-  // integral: nesse caso, um novo 100% encerra o anterior (takeover).
-  const compartilhado = (r: Row) => !diaISO(r.fim) && String(r.status ?? 'ativo') === 'ativo'
-    && numero(r.participacao_pct) < 100 && participacao < 100 && !fim;
+  // Representante não pode se autoatribuir um cliente usando o campo legado.
+  // Só a gestão cria novos vínculos; o representante pode operar um vínculo
+  // temporal vigente que já pertence à própria carteira.
+  if (escopo.carteira !== null && escopo.carteira !== undefined) {
+    if (representanteId !== Number(escopo.carteira)) {
+      throw new HttpError(403, 'Você só pode operar vínculos da sua própria carteira.');
+    }
+    const hoje = hojeISO();
+    const possuiVinculoProprioVigente = [...existentes, ...(atual ? [atual] : [])].some((v) => {
+      if (Number(v.representante_id) !== Number(escopo.carteira) || String(v.status ?? 'ativo') !== 'ativo') return false;
+      const inicioVinculo = diaISO(v.inicio);
+      const fimInformado = v.fim !== null && v.fim !== undefined && v.fim !== '';
+      const fimVinculo = fimInformado ? diaISO(v.fim) : null;
+      return !!inicioVinculo && inicioVinculo <= hoje && (!fimInformado || (!!fimVinculo && fimVinculo >= hoje));
+    });
+    if (!possuiVinculoProprioVigente) {
+      throw new HttpError(403, 'A atribuição de novos clientes à carteira é realizada pela gestão.');
+    }
+  }
+
+  const vinculosAbertos = existentes.filter(
+    (r) => !diaISO(r.fim) && String(r.status ?? 'ativo') === 'ativo'
+  );
+
+  // Um vínculo integral assume a carteira inteira. O takeover encerra TODOS
+  // os vínculos parciais abertos, mas somente se cada um começou antes da
+  // nova vigência. Caso contrário, a sobreposição é recusada.
+  const substituiveis = !fim && status === 'ativo' && participacao >= 100 && vinculosAbertos.length > 0
+    && vinculosAbertos.every((r) => inicio > (diaISO(r.inicio) ?? '9999-12-31'))
+    ? vinculosAbertos
+    : [];
+  const idsSubstituidos = new Set(substituiveis.map((r) => Number(r.id)));
+
+  // Participações parciais podem coexistir em vigência aberta. Os demais
+  // vínculos continuam sujeitos à regra de não sobreposição temporal.
+  const compartilhado = (r: Row) => !fim && participacao < 100
+    && !diaISO(r.fim) && String(r.status ?? 'ativo') === 'ativo'
+    && numero(r.participacao_pct) < 100;
   const conflitantes = existentes
-    .filter((r) => !substituivel || Number(r.id) !== Number(substituivel.id))
+    .filter((r) => !idsSubstituidos.has(Number(r.id)))
     .filter((r) => !compartilhado(r));
 
   // 1) Sobreposição de vigência — recusa explícita.
@@ -322,31 +362,32 @@ export async function validarCarteira(
     );
   }
 
-  // 2) Um único vínculo ABERTO por cliente: o novo encerra o anterior.
-  if (abertoAnterior && !fim && participacao >= 100) {
-    if (!substituivel) {
+  // 2) Takeover integral: encerra todos os vínculos abertos anteriores.
+  if (!fim && status === 'ativo' && participacao >= 100 && vinculosAbertos.length > 0) {
+    if (substituiveis.length !== vinculosAbertos.length) {
       throw new HttpError(
         409,
-        'Já existe um vínculo de carteira aberto para este cliente. Encerre-o antes de registrar outro com a mesma data de início.',
-        { inicio: 'Encerre o vínculo aberto' },
+        'Já existe uma carteira aberta com vigência igual ou posterior. Ajuste as datas antes de assumir 100% do cliente.',
+        { inicio: 'A nova vigência deve começar após todos os vínculos abertos' },
         'carteira_aberta'
       );
     }
-    await s.update(getResource('representante_cliente')!, Number(abertoAnterior.id), {
-      fim: somarDias(inicio, -1),
-      status: 'encerrado',
-      atualizado_em: new Date().toISOString(),
-    }, tx);
+    for (const anterior of substituiveis) {
+      await s.update(getResource('representante_cliente')!, Number(anterior.id), {
+        fim: somarDias(inicio, -1),
+        status: 'encerrado',
+        atualizado_em: new Date().toISOString(),
+      }, tx);
+    }
   }
 
   // 3) Carteira compartilhada: a soma das participações ABERTAS não passa de 100.
-  // A soma considera TODOS os vínculos abertos do cliente, menos o que este
-  // registro substitui (integrar 100% encerra o anterior).
+  // O registro editado é excluído da soma acima; vínculos substituídos também.
   const abertos = existentes
-    .filter((r) => !substituivel || Number(r.id) !== Number(substituivel.id))
+    .filter((r) => !idsSubstituidos.has(Number(r.id)))
     .filter((r) => !diaISO(r.fim) && String(r.status ?? 'ativo') === 'ativo');
   const total = abertos.reduce((soma, r) => soma + numero(r.participacao_pct), 0) + participacao;
-  if (!fim && total > 100.0001) {
+  if (!fim && status === 'ativo' && total > 100.0001) {
     throw new HttpError(
       409,
       `A soma das participações abertas deste cliente passaria de 100% (${total.toFixed(2)}%).`,
@@ -1414,7 +1455,10 @@ export async function painelDoRepresentante(s: Store, escopo: EscopoEmpresa, id:
     listarTudo(s, 'representante_hierarquia', escopo, {}),
     calcularIndicadores(s, escopo, { representante_id: id }, { de: null, ate: null }),
     listarTudo(s, 'equipes_comerciais', escopo, {}),
-    listarTudo(s, 'clientes', escopo, {}),
+    // O painel monta os rótulos somente dos clientes presentes nos vínculos
+    // deste representante; a consulta interna precisa carregar esses registros
+    // antes de projetar a carteira temporal (o filtro síncrono não autoriza cliente).
+    listarTudo(s, 'clientes', escopo, {}, undefined, true),
     listarTudo(s, 'metas', escopo, { representante_id: id }),
     listarTudo(s, R_COMISSOES_APURADAS, escopo, { representante_id: id }),
     listarTudo(s, R_COMISSOES_EVENTOS, escopo, { representante_id: id }),
