@@ -48,7 +48,7 @@ retirada da superfície pública no código.
 | BL-002 | **Parcial** — visão unificada dos canais existe; caminho legado Woo ainda requer cutover | Preparar runbook e validar credenciais/janela de cutover |
 | BL-009 | **Bloqueado por ambiente** — gates PostgreSQL/prisma dependem de execução CI/ambiente apropriado | Confirmar os jobs CI e registrar evidência |
 | BL-015 | **Encerrado** — retirada da loja nativa executada | Manter encerrado |
-| BL-017 | **Aberto** — conector/portal REPRESENTATIVES não implementado | Especificar autenticação, identidade, carteira e contratos; reutilizar domínios existentes |
+| BL-017 | **Em execução interna — fase 1**: identidade de portal, vínculo ativo por tenant e bloqueio de APIs gerais | Prosseguir carteira, catálogo/preço, pedidos/cotações, comissões e portal; contrato em `BL-017-REPRESENTATIVES.md` |
 | BL-018 | **Aberto externo** — homologação fiscal no PVA oficial/contador | Agendar homologação externa |
 
 BL-001 e BL-015 tratavam da mesma retirada em níveis históricos diferentes.
