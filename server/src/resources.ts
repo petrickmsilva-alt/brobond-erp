@@ -514,6 +514,7 @@ export const RESOURCES: Record<string, Resource> = {
       { name: 'nome', label: 'Nome', type: 'text', required: true, search: true, maxLength: 120 },
       { name: 'email', label: 'E-mail', type: 'email', required: true, unique: true, search: true, maxLength: 160, hint: 'Usado para o login e para o convite de acesso.' },
       { name: 'perfil', label: 'Perfil', type: 'select', required: true, options: PERFIS, default: 'operador', hint: 'Administrador: tudo (com MFA obrigatório). Gerente: tudo, exceto usuários. Operador: não exclui registros.' },
+      { name: 'portal_representante', label: 'Acesso exclusivo ao Portal do Representante', type: 'boolean', default: false, section: 'Acesso comercial', hint: 'Habilite somente para usuário operador vinculado a um representante ativo na mesma empresa. A conta ficará restrita às rotas do portal.' },
       { name: 'cargo', label: 'Cargo / função', type: 'text', search: true, maxLength: 80, section: 'Dados profissionais', placeholder: 'Ex.: Vendedora, Estoquista, Costureira...', hint: 'Função da pessoa na empresa (aparece na ficha do usuário).' },
       { name: 'departamento', label: 'Departamento', type: 'text', search: true, maxLength: 60, section: 'Dados profissionais', placeholder: 'Ex.: Vendas, Estoque, Produção, Financeiro...' },
       { name: 'telefone', label: 'Telefone / WhatsApp', type: 'phone', maxLength: 20, section: 'Dados profissionais', list: false },
