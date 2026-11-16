@@ -48,6 +48,7 @@ const ResetPage = lazy(() => import('./pages/ForgotReset').then((m) => ({ defaul
 const Convite = lazy(() => import('./pages/Convite'));
 const CatalogoPublico = lazy(() => import('./pages/CatalogoPublico'));
 const PortalCliente = lazy(() => import('./pages/PortalCliente'));
+const RepresentantePortalPage = lazy(() => import('./pages/RepresentantePortalPage'));
 // Catálogo de componentes de UI, só para referência visual — não entra no menu.
 const ComponentCatalog = lazy(() => import('./pages/dev/ComponentCatalog'));
 // Página genérica de NOVO/EDITAR — destino de TODO recurso do CRUD genérico.
@@ -113,8 +114,16 @@ function Protected({ children }: { children: JSX.Element }) {
   if (loading) return <Loading />;
   if (!user) return <Navigate to="/login" replace />;
   if (!meta) return <Loading />;
+  // BL-017: a conta marcada como portal exclusivo não pode abrir o Layout/ERP.
+  // O próprio portal trata eventual troca obrigatória de senha sem expor Settings.
+  if (user.portal_representante && loc.pathname !== '/representante/portal') {
+    return <Navigate to="/representante/portal" replace />;
+  }
+  if (!user.portal_representante && loc.pathname === '/representante/portal') {
+    return <Navigate to="/" replace />;
+  }
   // Fase 6 — senha padrão/legada: o sistema só libera o resto após a troca.
-  if (user.trocar_senha && loc.pathname !== '/config') {
+  if (!user.portal_representante && user.trocar_senha && loc.pathname !== '/config') {
     return <Navigate to="/config?trocar=1" replace />;
   }
   return children;
@@ -176,6 +185,7 @@ export default function App() {
           <Route path="/convite/:token" element={<Convite />} />
           <Route path="/catalogo/:token/*" element={<CatalogoPublico />} />
           <Route path="/portal/:token/*" element={<PortalCliente />} />
+          <Route path="/representante/portal" element={<Protected><RepresentantePortalPage /></Protected>} />
           {/* A vitrine B2C nativa (/loja) foi DESCONTINUADA (ADR-0007). As URLs
               antigas são tratadas no servidor (301 para a RETAIL quando
               STOREFRONT_REDIRECT_URL existe; senão 410). A loja pública de
