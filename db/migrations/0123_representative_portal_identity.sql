@@ -1,0 +1,21 @@
+-- ============================================================================
+-- 0123 — BL-017 · identidade de acesso ao portal REPRESENTATIVES
+--
+-- A identidade comercial continua sendo representantes.usuario_id.
+-- Esta flag distingue um acesso exclusivo ao portal de um usuário operacional
+-- comum que apenas possui vínculo comercial para fins de carteira/comissão.
+--
+-- Segurança:
+--   • FALSE por padrão: nenhuma conta existente muda de superfície de acesso.
+--   • Só usuário operador pode usar o portal (validação no requireAuth).
+--   • A flag só libera acesso quando há representante ativo vinculado na
+--     empresa ativa da sessão (validação no requireAuth).
+--   • O servidor restringe a sessão às rotas de autenticação/metadados e
+--     /api/representante/portal/*; demais APIs retornam 403.
+--
+-- Migração aditiva e idempotente. Rollback manual, se autorizado:
+--   ALTER TABLE usuarios DROP COLUMN portal_representante;
+-- Não executar rollback automaticamente: a flag pode estar em uso.
+-- ============================================================================
+ALTER TABLE usuarios
+  ADD COLUMN IF NOT EXISTS portal_representante BOOLEAN NOT NULL DEFAULT FALSE;
