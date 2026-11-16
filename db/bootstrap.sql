@@ -49,7 +49,8 @@ CREATE TABLE IF NOT EXISTS usuarios (
   senha_hash TEXT,
   perfil TEXT NOT NULL DEFAULT 'operador',   -- admin, gerente, operador
   CONSTRAINT usuarios_perfil_valido CHECK (perfil IN ('admin', 'gerente', 'operador')),
-  ativo BOOLEAN NOT NULL DEFAULT TRUE,
+  portal_representante BOOLEAN NOT NULL DEFAULT FALSE,
+  ativo BOOLEAN NOT NULL DEFAULT TRUE;
   ultimo_login TIMESTAMPTZ,
   criado_em TIMESTAMPTZ DEFAULT now(),
   atualizado_em TIMESTAMPTZ
