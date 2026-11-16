@@ -181,3 +181,54 @@ test('conta marcada como portal sem representante ativo é recusada na autentica
   invalidateUserCache(Number(usuario.id));
   invalidarCacheCarteira(Number(usuario.id));
 });
+
+test('conta portal não atravessa o Control Plane montado antes da guarda global /api', async () => {
+  const store = getStore();
+  const usuario = await store.insert(RESOURCES.usuarios, {
+    nome: 'Portal sem Control Plane',
+    email: 'portal.sem.controlplane@brobond.test',
+    perfil: 'operador',
+    empresa_id: 1,
+    portal_representante: true,
+    ativo: true,
+  });
+  await store.insert(RESOURCES.representantes, {
+    nome: 'Representante Portal Control Plane',
+    empresa_id: 1,
+    usuario_id: Number(usuario.id),
+    ativo: true,
+  });
+  const sid = await abrirSessao({
+    usuarioId: Number(usuario.id),
+    lembrar: false,
+    req: { headers: {}, socket: {} } as any,
+  });
+  const token = signToken({
+    id: Number(usuario.id),
+    name: String(usuario.nome),
+    email: String(usuario.email),
+    perfil: 'operador',
+  }, { sid, emp: 1 });
+  const { identidadeOperacional } = await import('../../modules/operational-control/http/operational-control.middleware');
+
+  let erro: any;
+  const req: any = {
+    headers: { authorization: 'Bearer ' + token },
+    query: {},
+    method: 'GET',
+    path: '/capabilities',
+    originalUrl: '/api/operational-control/capabilities',
+    socket: { remoteAddress: '203.0.113.10' },
+  };
+  const res: any = {
+    headersSent: false,
+    status() { return res; },
+    json() { return res; },
+  };
+  invalidateUserCache(Number(usuario.id));
+  invalidarCacheCarteira(Number(usuario.id));
+  await identidadeOperacional(req, res, (e?: unknown) => { erro = e; });
+  assert.match(String(erro?.message), /não podem usar o Control Plane operacional/i);
+  invalidateUserCache(Number(usuario.id));
+  invalidarCacheCarteira(Number(usuario.id));
+});
