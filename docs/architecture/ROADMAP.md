@@ -16,9 +16,11 @@
 | **Fases 9.1–9.3** | Integridade de dados, automação do CRM e UX operacional | Recorte tenant no SQL, caixa interna do CRM, moldura única de página | `architecture/fases-9-1-9-2-9-3` |
 | **Fases 9.4–9.6** | Fechamento da arquitetura comercial, maturidade financeira/fiscal e validação empresarial | Visão unificada dos canais, plano de contas + leiautes SPED/EFD versionados, matriz de tenancy/RBAC e baseline de desempenho | `architecture/fases-9-4-9-5-9-6` |
 
-> **Nota (revisão):** na Fase 2 o núcleo de dados foi entregue; a **retirada da
-> `/loja` NÃO foi executada** (bloqueada por ambiente/decisão — BL-015). A
-> superfície nativa segue **ativa**. Ver `NATIVE-STORE-DECOMMISSION-REPORT.md`.
+> **Atualização de estado (2026-11-16):** a retirada da superfície pública
+> nativa `/loja` foi **EXECUTADA no código**, conforme ADR-0007 e
+> `NATIVE-STORE-DECOMMISSION-REPORT.md`. As URLs antigas recebem 301/410; RETAIL
+> WooCommerce foi preservada. DNS e homologação externa não foram alterados.
+> A linha histórica da Fase 2 abaixo foi reconciliada nesta atualização.
 
 Cada fase parte da base consolidada da anterior (encadeamento de PRs).
 
