@@ -30,6 +30,7 @@ import type { Row } from '../../store';
 import { getResource } from '../../resources';
 import { recalcularTotal } from '../../itens';
 import { escopoDeSistema, type EscopoEmpresa } from '../../empresa';
+import { gradeVendavelDaEmpresa } from '../../estoqueCanonico';
 import type { ConfigStore, StoreKey } from './registry';
 import { wooStoreFetch, ehDryRun } from './cliente';
 import { estadoDaStore, avancarAguaMarcaPedidos, registrarSincronizacao } from './estado';
@@ -42,7 +43,6 @@ const R_ITENS = () => getResource('itens_venda')!;
 const R_CLIENTES = () => getResource('clientes')!;
 const R_PRODUTOS = () => getResource('produtos')!;
 const R_TAMANHOS = () => getResource('tamanhos')!;
-const R_ESTOQUES = () => getResource('estoques')!;
 
 type LinhaWoo = {
   sku?: string;
@@ -88,7 +88,7 @@ export type ContextoImportacao = {
   escopo: EscopoEmpresa;
   produtoPorSku: Map<string, Row>;
   tamanhoPorCodigo: Map<string, Row>;
-  primeiroTamanhoComSaldo: (produtoId: number) => number | null;
+  primeiroTamanhoComSaldo: (produto: Row) => number | null;
   tamanhoFallback: number;
   /**
    * Exceção AUDITADA ao mínimo de atacado (A06-11), por produto. Ausente = sem
@@ -241,10 +241,10 @@ export async function buscarPedidoDaLoja(cfg: ConfigStore, pedidoId: number | st
  */
 export async function carregarContextoImportacao(empresaId: number): Promise<ContextoImportacao> {
   const s = getStore();
-  const [produtosR, tamanhosR, estoquesR] = await Promise.all([
+  const [produtosR, tamanhosR, estoqueVendavel] = await Promise.all([
     s.list(R_PRODUTOS(), { page: 1, pageSize: 20000, filter: { empresa_id: empresaId } }),
     s.list(R_TAMANHOS(), { page: 1, pageSize: 20000, sort: 'ordem', dir: 'asc' }),
-    s.list(R_ESTOQUES(), { page: 1, pageSize: 20000, filter: { empresa_id: empresaId } }),
+    gradeVendavelDaEmpresa(escopoDeSistema(empresaId)),
   ]);
   const produtoPorSku = new Map<string, Row>();
   for (const p of produtosR.rows) {
@@ -260,9 +260,15 @@ export async function carregarContextoImportacao(empresaId: number): Promise<Con
     if (codigo && tamanhoPorCodigo.has(codigo)) throw new HttpError(409, 'Há códigos de tamanho duplicados. A importação WooCommerce foi bloqueada.');
     if (codigo) tamanhoPorCodigo.set(codigo, t);
   }
-  const primeiroTamanhoComSaldo = (produtoId: number): number | null => {
-    const comSaldo = estoquesR.rows.find((e) => Number(e.produto_id) === produtoId && Number(e.quantidade || 0) > 0);
-    return comSaldo ? Number(comSaldo.tamanho_id) : null;
+  const primeiroTamanhoComSaldo = (produto: Row): number | null => {
+    const produtoEstoqueId = produto.produto_pai_id ? Number(produto.produto_pai_id) : Number(produto.id);
+    const tamanhoVariacao = produto.variacao_tamanho_id ? Number(produto.variacao_tamanho_id) : null;
+    const comSaldo = estoqueVendavel.find((linha) =>
+      linha.produto_id === produtoEstoqueId &&
+      linha.disponivel > 0 &&
+      (tamanhoVariacao === null || linha.tamanho_id === tamanhoVariacao)
+    );
+    return comSaldo?.tamanho_id ?? null;
   };
   return {
     empresaId,
@@ -304,7 +310,7 @@ async function resolverItensDoPedido(cfg: ConfigStore, ctx: ContextoImportacao, 
     }
     const pedidoTamanho = extrairTamanho(linha);
     const tamanho = pedidoTamanho ? ctx.tamanhoPorCodigo.get(pedidoTamanho) : undefined;
-    const tamanhoId = tamanho ? Number(tamanho.id) : (ctx.primeiroTamanhoComSaldo(Number(produto.id)) ?? ctx.tamanhoFallback);
+    const tamanhoId = tamanho ? Number(tamanho.id) : (ctx.primeiroTamanhoComSaldo(produto) ?? ctx.tamanhoFallback);
     if (!tamanhoId) {
       pendentes.push(`${rotuloLinha(linha)} (sem tamanho no ERP)`);
       continue;
@@ -330,7 +336,7 @@ async function resolverItensDoPedido(cfg: ConfigStore, ctx: ContextoImportacao, 
         : Number.isFinite(totalLinha) && totalLinha > 0
           ? Math.round((totalLinha / quantidade) * 100) / 100
           : null;
-    const { preco: precoErp, fonte } = await precoOficialDoErp(empresaId, produto, cfg.store_key);
+    const { preco: precoErp, fonte } = await precoOficialDoErp(empresaId, produto, cfg.store_key, undefined, quantidade);
     const desfecho = decidirPrecoItem({ precoErp, fonte, precoRemoto });
     if (desfecho.preco <= 0) {
       pendentes.push(`${rotuloLinha(linha)} (produto sem ${fonte} válido no ERP)`);
@@ -610,7 +616,6 @@ export async function importarPedidosDaLoja(
   opcoes: { dias?: number; status?: string; limite?: number; incremental?: boolean; actor?: { id: number | null; name: string } } = {}
 ): Promise<ResultadoPedidosLoja> {
   const s = getStore();
-  const escopo: EscopoEmpresa = escopoDeSistema(empresaId);
   const status = String(opcoes.status || 'processing').trim() || 'processing';
   const limite = Math.min(500, Math.max(1, Number(opcoes.limite) || 100));
   const dias = Math.min(90, Math.max(1, Number(opcoes.dias) || 7));

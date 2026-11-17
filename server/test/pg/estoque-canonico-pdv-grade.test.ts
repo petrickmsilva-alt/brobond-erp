@@ -128,6 +128,63 @@ test('estoque canônico: Grade, PDV, faturamento e cancelamento usam a mesma ide
   await store.adjustStock(Number(pai.id), Number(tamanhos.M.id), String(deposito.nome), 9, undefined, Number(deposito.id), empresaId);
 
   // ---------------------------------------------------------------------
+  // A projeção vendável do Commerce e a do PDV precisam compartilhar o mesmo
+  // saldo físico, a mesma reserva ativa e o mesmo local de saída.
+  // ---------------------------------------------------------------------
+  await t.test('grade vendável unificada: Commerce e PDV enxergam o mesmo estoque e descontam reservas', async () => {
+    const { gradeVendavelDaEmpresa } = await import('../../src/estoqueCanonico');
+    const { disponibilidadesPorTamanho } = await import('../../src/commerce/catalogo');
+
+
+    const gradeInicial = await gradeVendavelDaEmpresa(escopo);
+    const mInicial = gradeInicial.find((linha) => linha.produto_id === Number(pai.id) && linha.tamanho_id === Number(tamanhos.M.id));
+    assert.ok(mInicial);
+    assert.equal(mInicial.fisico, 10, 'o físico soma loja + depósito');
+    assert.equal(mInicial.disponivel, 1, 'a venda sai do local padrão, não soma o depósito como se fosse a mesma saída');
+    assert.equal(mInicial.local_id, Number(loja.id));
+    assert.equal(mInicial.outros_locais, 9);
+
+    const reservas = await query(
+      `INSERT INTO estoque_reservas (empresa_id, produto_id, tamanho_id, local_id, tipo, quantidade, status, motivo)
+       VALUES ($1, $2, $3, $4, 'reserva', 1, 'ativa', 'teste de disponibilidade unificada')
+       RETURNING id`,
+      [empresaId, Number(pai.id), Number(tamanhos.M.id), Number(loja.id)]
+    );
+    try {
+      const [gradeComReserva, comercioComReserva] = await Promise.all([
+        gradeVendavelDaEmpresa(escopo),
+        disponibilidadesPorTamanho(escopo, Number(pai.id)),
+      ]);
+      const m = gradeComReserva.find((linha) => linha.produto_id === Number(pai.id) && linha.tamanho_id === Number(tamanhos.M.id));
+      const mCommerce = comercioComReserva.find((linha) => linha.tamanho_id === Number(tamanhos.M.id));
+      assert.equal(m?.fisico, 10);
+      assert.equal(m?.reservado, 1);
+      assert.equal(m?.disponivel, 0, 'a reserva bloqueia a última peça no local de saída');
+      assert.equal(mCommerce?.disponivel, 0, 'o catálogo/Commerce recebe o mesmo disponível');
+      assert.equal(mCommerce?.reservado, 1);
+    } finally {
+      await query('DELETE FROM estoque_reservas WHERE id = $1', [Number(reservas.rows[0].id)]);
+    }
+
+    const reservaGlobal = await query(
+      `INSERT INTO estoque_reservas (empresa_id, produto_id, tamanho_id, local_id, tipo, quantidade, status, motivo)
+       VALUES ($1, $2, $3, NULL, 'bloqueio', 2, 'ativa', 'teste de bloqueio sem local')
+       RETURNING id`,
+      [empresaId, Number(pai.id), Number(tamanhos.G.id)]
+    );
+    try {
+      const linhaG = (await gradeVendavelDaEmpresa(escopo)).find(
+        (linha) => linha.produto_id === Number(pai.id) && linha.tamanho_id === Number(tamanhos.G.id)
+      );
+      assert.equal(linhaG?.fisico, 10);
+      assert.equal(linhaG?.reservado, 2);
+      assert.equal(linhaG?.disponivel, 8, 'bloqueio sem local também é descontado da disponibilidade comercial');
+    } finally {
+      await query('DELETE FROM estoque_reservas WHERE id = $1', [Number(reservaGlobal.rows[0].id)]);
+    }
+  });
+
+  // ---------------------------------------------------------------------
   // Helpers de leitura — sempre pelos handlers reais (nenhum atalho de teste)
   // ---------------------------------------------------------------------
   const gradeDe = async (localId?: number) => {

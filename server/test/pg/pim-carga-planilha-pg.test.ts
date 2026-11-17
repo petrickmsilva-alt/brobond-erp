@@ -1,6 +1,6 @@
 // ============================================================================
 // CARGA DA POLÍTICA COMERCIAL EM POSTGRESQL REAL — o preview NÃO grava e a
-// confirmação PERSISTE pai, variações, atributos e preços por condição.
+// confirmação PERSISTE pai, variações, atributos, preços e o snapshot físico.
 //
 // O teste de memória (`carga-politica-comercial.test.ts`) prova a regra; este
 // prova o que só o PostgreSQL mostra:
@@ -10,8 +10,9 @@
 //   • o CHECK `jsonb_typeof = 'object'` aceita o mapa e recusa escalar;
 //   • produto-pai × variação respeitam a FK composta por empresa;
 //   • a reimportação é IDEMPOTENTE (nenhum produto/preço duplicado);
-//   • a base do canal só é preenchida quando estava ZERADA;
-//   • NENHUMA quantidade física é criada em `estoques` (o Diretor lança depois).
+//   • preco_venda/preco_atacado recebem a base calculada pelo motor de preço;
+//   • o snapshot físico de todas as abas é gravado em um único local LOJA;
+//   • reimportação idêntica não duplica saldo nem movimentos de ajuste.
 //
 // Sem DATABASE_URL o arquivo se auto-pula (gate test:pg / job testes-postgres).
 // ============================================================================
@@ -28,9 +29,14 @@ process.env.NODE_ENV = 'test';
 const CABECALHO = [
   'Item', 'Cód Categoria', 'MARCA', 'CATEGORIA MASTER', 'COLEÇÃO', 'VARIANTE COR', 'DESCRIÇÃO',
   'Tamanho', 'Código Industria', 'Tipo', 'STATUS', 'Peso KG', 'Altura CM', 'Largura CM',
-  'Comprimento ou profundidade CM', 'Custo Unitário Fabricação', 'Material Predominante', 'Fornecedor',
-  'Atacado À Vista', 'Atacado Boleto 30/60', 'Varejo À Vista', 'Vlr Cartão Parcelado',
-  'Margem MGB (%)', 'Preço Varejo',
+  'Comprimento ou profundidade CM', 'Custo Unitário Fabricação',
+  'Simples Nacional', 'ICMS', 'ICMS2', 'Mgb Atacado Vista', 'Mgb Vrj Vista',
+  'Mgb Vrj Vista 2 un', 'MGL VRJ CARTÃO À VISTA', 'VRJ =/> 2 PÇ CARTÃO até  3X',
+  'Material Predominante', 'Fornecedor',
+  'Atacado À Vista', 'Atacado Boleto 30', 'Atacado Boleto 30/60', 'Atacado Boleto 30/60/90',
+  'Atacado Cartão Débido', 'Atacado Cartão Crédito à vista', 'Atacado Cartão Crédito 30/60',
+  'Atacado Cartão Crédito 30/60/90', 'Varejo À Vista', 'VRJ 2 Un',
+  'Vlr Cartão à Vista', 'Vlr Cartão Parcelado', 'Margem MGB (%)', 'Preço Varejo', 'Preço Atacado',
 ];
 
 type Linha = Partial<Record<(typeof CABECALHO)[number], string | number>>;
@@ -40,10 +46,91 @@ async function xlsxBase64(linhas: Linha[]): Promise<string> {
   const ws = wb.addWorksheet('Política Comercial Completa');
   for (let r = 1; r <= 10; r++) ws.getRow(r).getCell(1).value = r === 1 ? 'TABELA DE PREÇO BASE' : '';
   CABECALHO.forEach((h, i) => (ws.getRow(11).getCell(i + 1).value = h));
+
+  // Mesmos fatores financeiros e parâmetros de formação usados pela suíte
+  // funcional. Os valores finais da planilha são conferências; o ERP calcula
+  // as condições a partir de custo, tributos, margens e ajustes da linha 10.
+  const fatoresFinanceiros: Record<string, number> = {
+    'Atacado À Vista': 0,
+    'Atacado Boleto 30': 0.04,
+    'Atacado Boleto 30/60': 0.08,
+    'Atacado Boleto 30/60/90': 0.10,
+    'Atacado Cartão Débido': 0.08,
+    'Atacado Cartão Crédito à vista': 0.08,
+    'Atacado Cartão Crédito 30/60': 0.12,
+    'Atacado Cartão Crédito 30/60/90': 0.15,
+    'VRJ 2 Un': 0.20,
+  };
+  for (const [rotulo, fator] of Object.entries(fatoresFinanceiros)) {
+    const coluna = CABECALHO.indexOf(rotulo);
+    if (coluna >= 0) ws.getRow(10).getCell(coluna + 1).value = fator;
+  }
+  const parametrosPadrao: Record<string, number> = {
+    'Simples Nacional': 0.06,
+    ICMS: 0.02,
+    ICMS2: 0.01,
+    'Mgb Atacado Vista': 0.45,
+    'Mgb Vrj Vista': 0.60,
+    'Mgb Vrj Vista 2 un': 0.55,
+    'MGL VRJ CARTÃO À VISTA': 0.65,
+    'VRJ =/> 2 PÇ CARTÃO até  3X': 0.60,
+  };
   linhas.forEach((l, i) => {
     const row = ws.getRow(12 + i);
-    CABECALHO.forEach((h, j) => { if (l[h] !== undefined) row.getCell(j + 1).value = l[h] as any; });
+    CABECALHO.forEach((h, j) => {
+      if (l[h] !== undefined) row.getCell(j + 1).value = l[h] as any;
+      else if (parametrosPadrao[h] !== undefined) row.getCell(j + 1).value = parametrosPadrao[h];
+    });
   });
+
+  // As abas abaixo representam o contrato mínimo do inventário físico real.
+  // O primeiro SKU declara uma unidade no saldo consolidado; os demais ficam
+  // explicitamente zerados. As demais fontes de contagem estão vazias.
+  const saida = wb.addWorksheet('CONTROLE ESTOQUE SAÍDA');
+  const cabSaida = [
+    'Codigo Cadastro', 'COLEÇÃO', 'CATEGORIA', 'SUBCATEGORIA',
+    'Código Internto Industria', 'Descrição', 'Nº', 'Estoque', 'Saída',
+    'Saldo', 'Estoque2', 'Saída2', 'Saldo2', 'Reservado',
+    'TT Est.', 'TT Saída', 'TT Saldo',
+  ];
+  cabSaida.forEach((h, i) => (saida.getRow(7).getCell(i + 1).value = h));
+  linhas.forEach((item, i) => {
+    const row = saida.getRow(8 + i);
+    const quantidade = i === 0 ? 1 : 0;
+    row.getCell(1).value = item.Item ?? String(i + 1);
+    row.getCell(5).value = item['Código Industria'] ?? '';
+    row.getCell(6).value = item['DESCRIÇÃO'] ?? '';
+    row.getCell(8).value = quantidade;
+    row.getCell(9).value = 0;
+    row.getCell(10).value = quantidade;
+    row.getCell(11).value = 0;
+    row.getCell(12).value = 0;
+    row.getCell(13).value = 0;
+    row.getCell(15).value = quantidade;
+    row.getCell(16).value = 0;
+    row.getCell(17).value = quantidade;
+  });
+
+  const baseControle = wb.addWorksheet('BASE CONTROLE DE ESTOQUE');
+  [
+    'Item', 'COLEÇÃO', 'CATEGORIA', 'SUBCATEGORIA',
+    'Descrição do produto/serviço2', 'Tamanho', 'Código Industria',
+  ].forEach((h, i) => (baseControle.getRow(11).getCell(i + 1).value = h));
+  // Esta fixture não declara SKUs da fonte complementar controle_estoque.
+  // Os SKUs testados pertencem exclusivamente à aba principal; mantê-los aqui
+  // duplicaria a identidade em duas fontes diferentes e deve ser rejeitado.
+
+  const jefferson = wb.addWorksheet('Estoque Com Jefferson');
+  for (const cab of [4, 12]) {
+    ['DESCRIÇÃO', 'P', 'M', 'G', 'GG', 'XG', 'TOTAL'].forEach((h, i) => {
+      jefferson.getRow(cab).getCell(i + 1).value = h;
+    });
+  }
+
+  const roupas = wb.addWorksheet('Política Comercial Roupas (2)');
+  ['Item', 'Categoria', 'Descrição do produto/serviço2', 'Código Industria', 'Qtd. Estoque']
+    .forEach((h, i) => (roupas.getRow(4).getCell(i + 1).value = h));
+
   const buf = await wb.xlsx.writeBuffer();
   return Buffer.from(buf as ArrayBuffer).toString('base64');
 }
@@ -69,7 +156,7 @@ function linhas(sufixo: string): Linha[] {
   ];
 }
 
-test('carga em PG real: preview não grava, confirmação persiste cadastro + atributos + preços e zera estoque', { skip }, async (t) => {
+test('carga em PG real: preview não grava, confirmação persiste cadastro, preços e snapshot físico', { skip }, async (t) => {
   const { migrate, query } = await import('../../src/db');
   await migrate();
   const { RESOURCES: R } = await import('../../src/resources');
@@ -84,9 +171,25 @@ test('carga em PG real: preview não grava, confirmação persiste cadastro + at
   const empresaId = Number(empresa.id);
   const usuario = await store.insert(R.usuarios, { nome: `Gestor ${sufixo}`, email: `carga-${sufixo}@brobond.test`, perfil: 'gerente', empresa_id: empresaId, ativo: true });
   const ator = { id: Number(usuario.id), name: String(usuario.nome), perfil: 'gerente' as const, empresa_id: empresaId, empresas: [empresaId] };
+  // A carga exige exatamente um local físico ativo/padrão chamado LOJA.
+  // Cria-se a pré-condição operacional da empresa de teste, como no helper
+  // before() da suíte de memória, antes da prévia/confirmação.
+  await store.insert(R.locais, {
+    empresa_id: empresaId,
+    nome: 'LOJA',
+    tipo: 'loja',
+    nivel_wms: 'local',
+    ativo: true,
+    padrao: true,
+  });
 
   t.after(async () => {
     const apagar = async (sql: string) => query(sql, [empresaId]).catch(() => undefined);
+    await apagar(`DELETE FROM auditoria WHERE empresa_id = $1`);
+    await apagar(`DELETE FROM movimentacoes WHERE empresa_id = $1`);
+    await apagar(`DELETE FROM estoque_reservas WHERE empresa_id = $1`);
+    await apagar(`DELETE FROM estoques WHERE empresa_id = $1`);
+    await apagar(`DELETE FROM locais WHERE empresa_id = $1`);
     await apagar(`DELETE FROM produto_precos_condicao_historico WHERE empresa_id = $1`);
     await apagar(`DELETE FROM produto_precos_condicao WHERE empresa_id = $1`);
     await apagar(`DELETE FROM precificacao_memoria WHERE empresa_id = $1`);
@@ -117,7 +220,9 @@ test('carga em PG real: preview não grava, confirmação persiste cadastro + at
   assert.equal(conf.saida.status ?? 200, 200, JSON.stringify(conf.saida.json));
   assert.equal(conf.saida.json.produtos, 2, 'dois produtos-pai');
   assert.equal(conf.saida.json.variacoes, 2, 'duas variações da camiseta');
-  assert.equal(conf.saida.json.estoque_importado, false);
+  assert.equal(conf.saida.json.estoque_importado, true, 'a confirmação importa o saldo físico da planilha para LOJA');
+  assert.equal(conf.saida.json.estoque.unidades_importadas, 1);
+  assert.equal(conf.saida.json.estoque.celulas_importadas, 3);
 
   // 3) PERSISTÊNCIA conferida por SQL direto (não pela resposta HTTP).
   const pai = (await query(
@@ -133,8 +238,8 @@ test('carga em PG real: preview não grava, confirmação persiste cadastro + at
   assert.equal(varP.codigo_industria, `CB2B${sufixo}010`, 'código da indústria preservado como texto');
   assert.equal(varP.cor, 'PRETA');
   assert.equal(varP.unidade, 'un', 'Tipo=UN → unidade un');
-  assert.equal(Number(varP.preco_venda), 99.9, 'base do varejo vem do à vista');
-  assert.equal(Number(varP.preco_atacado), 49.9, 'base do atacado vem do à vista');
+  assert.equal(Number(varP.preco_venda), 69.49, 'base varejo calculada com tributos e margem-alvo de 60%');
+  assert.equal(Number(varP.preco_atacado), 50.54, 'base atacado calculada com tributos e margem-alvo de 45%');
 
   // Atributos adicionais: JSONB de verdade, com o mapa esperado.
   assert.equal(typeof varP.atributos_adicionais, 'object');
@@ -142,14 +247,14 @@ test('carga em PG real: preview não grava, confirmação persiste cadastro + at
   assert.equal(varP.atributos_adicionais['Material Predominante'], 'ALGODÃO');
   assert.equal(varP.atributos_adicionais['Margem MGB (%)'], undefined, 'coluna calculada NÃO entra como atributo');
 
-  // 4) Preços oficiais por condição (dados de entrada).
+  // 4) Preços calculados por condição, com vigência e origem rastreável.
   const boleto = (await query(
     `SELECT * FROM produto_precos_condicao WHERE empresa_id = $1 AND produto_id = $2 AND canal = 'atacado' AND condicao = 'boleto_30_60' AND vigencia_fim IS NULL`,
     [empresaId, Number(varP.id)]
   )).rows[0];
   assert.ok(boleto, 'preço de boleto 30/60 gravado como dado');
-  assert.equal(Number(boleto.preco), 54.9);
-  assert.equal(boleto.origem, 'planilha');
+  assert.equal(Number(boleto.preco), 54.93, 'margem atacado de 45% + fator financeiro de 8%');
+  assert.equal(boleto.origem, 'planilha_calculada');
 
   // 5) O CHECK recusa JSONB escalar em atributos_adicionais.
   await assert.rejects(
@@ -163,11 +268,15 @@ test('carga em PG real: preview não grava, confirmação persiste cadastro + at
   assert.equal(oculos.ativo, false);
   assert.equal(oculos.produto_pai_id ?? null, null);
 
-  // 7) NENHUMA quantidade física foi importada.
-  const estoques = await store.countWhere(R.estoques, { empresa_id: empresaId });
-  assert.equal(estoques, 0, 'a carga não cria saldo de estoque');
+  // 7) O snapshot físico final fica no único local LOJA.
+  const estoques = await store.list(R.estoques, { page: 1, pageSize: 100, filter: { empresa_id: empresaId } });
+  assert.equal(estoques.rows.length, 3, 'uma célula canônica por SKU da planilha');
+  assert.equal(estoques.rows.reduce((total: number, row: any) => total + Number(row.quantidade), 0), 1);
+  assert.equal(estoques.rows.filter((row: any) => Number(row.quantidade) > 0).length, 1);
+  assert.ok(estoques.rows.every((row: any) => row.local === 'LOJA'));
+  const movimentosAntes = await store.countWhere(R.movimentacoes, { empresa_id: empresaId });
 
-  // 8) IDEMPOTÊNCIA: reimportar não duplica produto nem preço.
+  // 8) IDEMPOTÊNCIA: reimportar não duplica produto, preço, saldo ou movimento.
   const prodAntes = await store.countWhere(R.produtos, { empresa_id: empresaId });
   const precosAntes = await store.countWhere(R.produto_precos_condicao, { empresa_id: empresaId });
   const conf2 = resFake();
@@ -176,5 +285,9 @@ test('carga em PG real: preview não grava, confirmação persiste cadastro + at
   assert.equal(conf2.saida.json.variacoes, 0, 'nenhuma variação nova');
   assert.equal(await store.countWhere(R.produtos, { empresa_id: empresaId }), prodAntes);
   assert.equal(await store.countWhere(R.produto_precos_condicao, { empresa_id: empresaId }), precosAntes, 'preços não duplicam');
+  const estoquesDepois = await store.list(R.estoques, { page: 1, pageSize: 100, filter: { empresa_id: empresaId } });
+  assert.equal(estoquesDepois.rows.length, estoques.rows.length, 'reimportação idêntica mantém a mesma quantidade de células');
+  assert.equal(estoquesDepois.rows.reduce((total: number, row: any) => total + Number(row.quantidade), 0), 1);
+  assert.equal(await store.countWhere(R.movimentacoes, { empresa_id: empresaId }), movimentosAntes, 'reimportação sem delta não duplica movimentos');
   assert.ok(escopo.empresaId === empresaId);
 });

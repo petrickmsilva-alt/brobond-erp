@@ -195,6 +195,24 @@ CREATE TABLE IF NOT EXISTS produtos (
   ncm TEXT,                                  -- classificação fiscal (NF-e futura)
   peso_g INTEGER,                            -- peso da peça em gramas
   custo NUMERIC(12,2) DEFAULT 0,             -- custo unitário (valoriza o estoque)
+  custo_unitario_fabricacao NUMERIC(12,6),
+  custo_aquisicao_unitario NUMERIC(12,6),
+  simples_nacional_pct NUMERIC(8,6),
+  simples_nacional_valor NUMERIC(12,6),
+  icms_planilha_pct NUMERIC(8,6),
+  icms2_planilha_pct NUMERIC(8,6),
+  icms_planilha_valor NUMERIC(12,6),
+  icms2_planilha_valor NUMERIC(12,6),
+  total_imposto_pct NUMERIC(8,6),
+  total_imposto_valor NUMERIC(12,6),
+  custo_total_imposto NUMERIC(12,6),
+  margem_atacado_pct NUMERIC(8,6),
+  margem_varejo_pct NUMERIC(8,6),
+  margem_varejo_2un_pct NUMERIC(8,6),
+  margem_varejo_cartao_pct NUMERIC(8,6),
+  margem_varejo_combo_cartao_pct NUMERIC(8,6),
+  memoria_formacao_preco JSONB NOT NULL DEFAULT '{}'::jsonb
+    CHECK (jsonb_typeof(memoria_formacao_preco) = 'object'),
   preco_venda NUMERIC(12,2) DEFAULT 0,
   ativo BOOLEAN DEFAULT TRUE,
   criado_em TIMESTAMPTZ DEFAULT now(),
@@ -2421,6 +2439,10 @@ CREATE TABLE IF NOT EXISTS produto_precos_condicao (
   canal TEXT NOT NULL,
   condicao TEXT NOT NULL,
   preco NUMERIC(12,2) NOT NULL,
+  quantidade_minima INTEGER NOT NULL DEFAULT 1 CHECK (quantidade_minima >= 1),
+  margem_pct NUMERIC(8,6),
+  ajuste_pct NUMERIC(8,6) NOT NULL DEFAULT 0,
+  regra_calculo JSONB NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(regra_calculo) = 'object'),
   origem TEXT NOT NULL DEFAULT 'planilha',
   vigencia_inicio DATE NOT NULL DEFAULT CURRENT_DATE,
   vigencia_fim DATE,
@@ -2435,7 +2457,10 @@ CREATE TABLE IF NOT EXISTS produto_precos_condicao (
     REFERENCES condicoes_pagamento (empresa_id, codigo)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS uq_produto_precos_condicao_vigente
-  ON produto_precos_condicao (empresa_id, produto_id, canal, condicao)
+  ON produto_precos_condicao (empresa_id, produto_id, canal, condicao, quantidade_minima)
+  WHERE vigencia_fim IS NULL;
+CREATE INDEX IF NOT EXISTS produto_precos_condicao_faixa_idx
+  ON produto_precos_condicao (empresa_id, produto_id, canal, condicao, quantidade_minima)
   WHERE vigencia_fim IS NULL;
 CREATE INDEX IF NOT EXISTS produto_precos_condicao_produto_idx
   ON produto_precos_condicao (empresa_id, produto_id);
@@ -2448,6 +2473,10 @@ CREATE TABLE IF NOT EXISTS produto_precos_condicao_historico (
   condicao TEXT NOT NULL,
   preco_anterior NUMERIC(12,2),
   preco_novo NUMERIC(12,2),
+  quantidade_minima INTEGER NOT NULL DEFAULT 1 CHECK (quantidade_minima >= 1),
+  margem_pct NUMERIC(8,6),
+  ajuste_pct NUMERIC(8,6) NOT NULL DEFAULT 0,
+  regra_calculo JSONB NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(regra_calculo) = 'object'),
   vigencia_inicio DATE,
   vigencia_fim DATE,
   origem TEXT NOT NULL DEFAULT 'planilha',

@@ -18,7 +18,7 @@ import { HttpError } from '../../errors';
 import { getStore } from '../../services';
 import type { Row, Tx } from '../../store';
 import { getResource } from '../../resources';
-import { disponivelDoProdutoVendavel } from '../catalogo';
+import { gradeVendavelDaEmpresa } from '../../estoqueCanonico';
 import { escopoDeSistema } from '../../empresa';
 import type { ConfigStore, StoreKey } from './registry';
 import { dryRun } from './registry';
@@ -50,8 +50,22 @@ type FilaProduto = { externalProductId: string; produto: ItemEstoque | null; var
 async function disponiveis(empresaId: number, produtos: Row[], tx?: Tx): Promise<Map<number, number>> {
   const mapa = new Map<number, number>();
   const escopo = escopoDeSistema(empresaId);
-  for (const p of produtos) {
-    mapa.set(Number(p.id), await disponivelDoProdutoVendavel(escopo, p, tx));
+  const grade = await gradeVendavelDaEmpresa(escopo, tx);
+  const porProduto = new Map<number, typeof grade>();
+  for (const linha of grade) {
+    const linhas = porProduto.get(linha.produto_id) ?? [];
+    linhas.push(linha);
+    porProduto.set(linha.produto_id, linhas);
+  }
+  for (const produto of produtos) {
+    const produtoId = Number(produto.id);
+    const produtoEstoqueId = produto.produto_pai_id ? Number(produto.produto_pai_id) : produtoId;
+    const tamanhoVariacao = produto.variacao_tamanho_id ? Number(produto.variacao_tamanho_id) : null;
+    const linhas = (porProduto.get(produtoEstoqueId) ?? []).filter(
+      (linha) => tamanhoVariacao === null || linha.tamanho_id === tamanhoVariacao
+    );
+    const disponivel = linhas.reduce((total, linha) => total + Math.max(0, Math.trunc(linha.disponivel)), 0);
+    mapa.set(produtoId, disponivel);
   }
   return mapa;
 }

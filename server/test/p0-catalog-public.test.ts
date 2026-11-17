@@ -36,8 +36,24 @@ async function fixtureCatalogos() {
     empresa_id: 2, sku: skuCompartilhado, nome: `Produto igual ${sufixo}`, colecao_id: Number(colecaoB.id),
     preco_venda: 99, ativo: true, exibir_site: true,
   });
-  await store.insert(RESOURCES.estoques, { empresa_id: 1, produto_id: Number(produtoA.id), tamanho_id: Number(tamanho.id), local: `P0-A-${sufixo}`, quantidade: 3 });
-  await store.insert(RESOURCES.estoques, { empresa_id: 2, produto_id: Number(produtoB.id), tamanho_id: Number(tamanho.id), local: `P0-B-${sufixo}`, quantidade: 77 });
+  const localA = await store.findOneWhere(RESOURCES.locais, {
+    empresa_id: 1, padrao: true, ativo: true,
+  }) ?? await store.insert(RESOURCES.locais, {
+    empresa_id: 1, nome: `P0-A-${sufixo}`, tipo: 'loja', padrao: true, ativo: true,
+  });
+  // A empresa B não é consultada neste teste. Mantemos seu local inativo
+  // para não introduzir outro local padrão no escopo global do harness em memória.
+  const localB = await store.insert(RESOURCES.locais, {
+    empresa_id: 2, nome: `P0-B-${sufixo}`, tipo: 'loja', padrao: false, ativo: false,
+  });
+  await store.insert(RESOURCES.estoques, {
+    empresa_id: 1, produto_id: Number(produtoA.id), tamanho_id: Number(tamanho.id),
+    local: String(localA.nome), local_id: Number(localA.id), quantidade: 3,
+  });
+  await store.insert(RESOURCES.estoques, {
+    empresa_id: 2, produto_id: Number(produtoB.id), tamanho_id: Number(tamanho.id),
+    local: String(localB.nome), local_id: Number(localB.id), quantidade: 77,
+  });
   const clienteB = await store.insert(RESOURCES.clientes, { empresa_id: 2, nome: `Cliente B ${sufixo}`, tipo: 'pf', ativo: true });
   return { sufixo, tamanho, colecaoA, colecaoB, catalogoA, catalogoB, produtoA, produtoB, clienteB };
 }

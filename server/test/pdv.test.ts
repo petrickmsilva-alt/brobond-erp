@@ -188,6 +188,51 @@ test('pdv: a busca devolve o preço da lista de preço vigente, não o da ficha'
 // 3) O servidor calcula tudo
 // ---------------------------------------------------------------------------
 
+test('pdv: seleciona preço oficial por condição e faixa mínima pela quantidade', async () => {
+  await fecharTudo();
+  await abrirCaixa(100, 'CAIXA-FAIXA');
+  const s = getStore();
+  const produto = await novoProduto({ preco_venda: 100 });
+  await saldoInicial(produto, 500);
+
+  await s.insert(RESOURCES.produto_precos_condicao, {
+    empresa_id: 1,
+    produto_id: Number(produto.id),
+    canal: 'varejo',
+    condicao: 'varejo_vista',
+    quantidade_minima: 1,
+    preco: 100,
+    margem_pct: 60,
+    ajuste_pct: 0,
+    regra_calculo: { teste: 'faixa-base' },
+    origem: 'teste',
+    vigencia_inicio: new Date().toISOString().slice(0, 10),
+    vigencia_fim: null,
+  });
+  await s.insert(RESOURCES.produto_precos_condicao, {
+    empresa_id: 1,
+    produto_id: Number(produto.id),
+    canal: 'varejo',
+    condicao: 'varejo_vista',
+    quantidade_minima: 2,
+    preco: 80,
+    margem_pct: 50,
+    ajuste_pct: -20,
+    regra_calculo: { teste: 'faixa-duas-pecas' },
+    origem: 'teste',
+    vigencia_inicio: new Date().toISOString().slice(0, 10),
+    vigencia_fim: null,
+  });
+
+  const uma = await venderPdv([linhaDe(produto, 1)], [{ forma: 'pix', valor: 100 }]);
+  assert.equal(Number(uma.itens[0].preco_unitario), 100, 'uma unidade usa a faixa mínima 1');
+  assert.equal(Number(uma.calculo.total), 100);
+
+  const duas = await venderPdv([linhaDe(produto, 2)], [{ forma: 'pix', valor: 160 }]);
+  assert.equal(Number(duas.itens[0].preco_unitario), 80, 'duas unidades usam o preço unitário da faixa mínima 2');
+  assert.equal(Number(duas.calculo.total), 160);
+});
+
 test('pdv: subtotal, desconto e total são DO SERVIDOR — os números do corpo são ignorados', async () => {
   await fecharTudo();
   await abrirCaixa(100, 'CAIXA-A');

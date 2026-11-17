@@ -25,7 +25,7 @@ import { configLoja, wooFetch, empresaVinculadaWoo } from '../loja';
 import { domainLock } from '../domainLock';
 import type { StoreKey } from './woocommerce/registry';
 import { listarTodos } from '../producao';
-import { celulasDaEmpresa, locaisDeSaida, reservadoDaCelula, reservadoDoProduto, reservasAtivasPorCelula } from '../estoqueCanonico';
+import { gradeVendavelDaEmpresa, type SaldoVendavelGrade } from '../estoqueCanonico';
 import { attachImages } from '../uploads';
 import { gradeTamanhosDoProduto, nomesProdutos } from './grade';
 import type { Row, Tx } from '../store';
@@ -75,53 +75,36 @@ function sanitizarErro(e: unknown): string {
 // Disponibilidade canônica (somente leitura — a mesma regra de quem vende)
 // ----------------------------------------------------------------------------
 
-type DisponivelPorCelula = Awaited<ReturnType<typeof prepararDisponibilidade>>;
+type DisponivelPorCelula = SaldoVendavelGrade[];
 
 /**
- * Uma única leitura de células + reservas + locais de saída para responder
- * disponibilidade de VÁRIOS produtos sem N+1 (locais candidatos = local
- * preferido + padrão, exatamente como o faturamento escolhe).
+ * Uma leitura da projeção vendável comum a todos os canais, sem N+1.
+ * O físico continua sendo lido de estoques; reservas e local de saída só
+ * determinam a quantidade comercialmente disponível.
  */
-async function prepararDisponibilidade(escopo: EscopoEmpresa, tx?: Tx) {
-  const [celulas, reservas, { candidatos }] = await Promise.all([
-    celulasDaEmpresa(escopo, tx),
-    reservasAtivasPorCelula(escopo, {}, tx),
-    locaisDeSaida(escopo, null, tx),
-  ]);
-  const localIds = candidatos.map((l) => l.id);
-  const chavesLocal = new Set(localIds.map(String));
-  return { celulas, reservas, candidatos, localIds, chavesLocal };
+async function prepararDisponibilidade(escopo: EscopoEmpresa, tx?: Tx): Promise<DisponivelPorCelula> {
+  return gradeVendavelDaEmpresa(escopo, tx);
 }
 
-/**
- * Disponível do produto = Σ_tamanho do MELHOR local candidato
- * (mesma quantidade que UMA venda conseguiria baixar agora).
- */
+/** Disponível do produto = soma do melhor local por tamanho. */
 function disponivelDoProduto(ctx: DisponivelPorCelula, produtoId: number): number {
-  const porTamanho = new Map<string, Map<number, number>>();
-  for (const c of ctx.celulas) {
-    if (Number(c.produto_id) !== produtoId) continue;
-    if (c.local_id == null || !ctx.chavesLocal.has(String(c.local_id))) continue;
-    const tam = c.tamanho_id == null ? 0 : Number(c.tamanho_id);
-    const locais = porTamanho.get(String(tam)) ?? new Map<number, number>();
-    const disponivel = Math.max(0, c.quantidade - reservadoDaCelula(ctx.reservas, produtoId, c.tamanho_id, Number(c.local_id)));
-    locais.set(Number(c.local_id), Math.max(locais.get(Number(c.local_id)) ?? 0, disponivel));
-    porTamanho.set(String(tam), locais);
-  }
-  let total = 0;
-  for (const locais of porTamanho.values()) {
-    let melhor = 0;
-    for (const qtd of locais.values()) melhor = Math.max(melhor, qtd);
-    total += melhor;
-  }
-  return total;
+  return ctx
+    .filter((linha) => linha.produto_id === produtoId)
+    .reduce((total, linha) => total + linha.disponivel, 0);
 }
 
-/** Físico total do produto (todas as células, todos os locais). Somente exibição. */
+/** Físico total do produto (todos os tamanhos e locais). */
 function fisicoDoProduto(ctx: DisponivelPorCelula, produtoId: number): number {
-  let total = 0;
-  for (const c of ctx.celulas) if (Number(c.produto_id) === produtoId) total += c.quantidade;
-  return total;
+  return ctx
+    .filter((linha) => linha.produto_id === produtoId)
+    .reduce((total, linha) => total + linha.fisico, 0);
+}
+
+/** Reservas ativas do produto (compromissos, sem duplicar reservas sem local). */
+function reservadoDoProduto(ctx: DisponivelPorCelula, produtoId: number): number {
+  return ctx
+    .filter((linha) => linha.produto_id === produtoId)
+    .reduce((total, linha) => total + linha.reservado, 0);
 }
 
 /** Disponibilidade por tamanho do produto, com código do tamanho. */
@@ -131,45 +114,37 @@ export async function disponibilidadesPorTamanho(
   tx?: Tx
 ): Promise<{ tamanho_id: number | null; codigo: string | null; fisico: number; reservado: number; disponivel: number; local: string | null }[]> {
   const s = getStore();
-  const ctx = await prepararDisponibilidade(escopo, tx);
-  const produto = await s.findOneWhere(R_PRODUTOS(), { id: produtoId, empresa_id: escopo.empresaId }, tx);
+  const [ctx, produto] = await Promise.all([
+    prepararDisponibilidade(escopo, tx),
+    s.findOneWhere(R_PRODUTOS(), { id: produtoId, empresa_id: escopo.empresaId }, tx),
+  ]);
   if (!produto) throw new HttpError(404, 'Produto não encontrado.');
 
-  const tamanhos = new Set<number | null>();
-  if (produto.grade_id) for (const t of await gradeTamanhosDoProduto(Number(produto.grade_id), tx)) tamanhos.add(t);
-  for (const c of ctx.celulas) if (Number(c.produto_id) === produtoId) tamanhos.add(c.tamanho_id == null ? null : Number(c.tamanho_id));
+  const porTamanho = new Map<number | null, SaldoVendavelGrade>();
+  for (const linha of ctx) if (linha.produto_id === produtoId) porTamanho.set(linha.tamanho_id, linha);
+  const tamanhos = new Set<number | null>(porTamanho.keys());
+  if (produto.grade_id) {
+    for (const tamanhoId of await gradeTamanhosDoProduto(Number(produto.grade_id), tx)) tamanhos.add(tamanhoId);
+  }
   if (!tamanhos.size) tamanhos.add(null);
 
   const codigos = new Map<number, string>();
-  if ([...tamanhos].some((t) => t != null)) {
+  if ([...tamanhos].some((t) => t !== null)) {
     const lista = await s.list(getResource('tamanhos')!, { page: 1, pageSize: 5000 }, tx);
-    for (const t of lista.rows) codigos.set(Number(t.id), String(t.codigo || ''));
+    for (const tamanho of lista.rows) codigos.set(Number(tamanho.id), String(tamanho.codigo || ''));
   }
 
-  const nomeLocal = new Map(ctx.candidatos.map((l) => [l.id, l.nome]));
   return [...tamanhos]
     .sort((a, b) => (a ?? -1) - (b ?? -1))
     .map((tamanhoId) => {
-      const doTamanho = ctx.celulas.filter(
-        (c) => Number(c.produto_id) === produtoId && (c.tamanho_id == null ? null : Number(c.tamanho_id)) === tamanhoId
-      );
-      const fisico = doTamanho.reduce((soma, c) => soma + c.quantidade, 0);
-      let melhor = { qtd: 0, local: null as number | null };
-      for (const c of doTamanho) {
-        if (c.local_id == null || !ctx.chavesLocal.has(String(c.local_id))) continue;
-        const qtd = Math.max(0, c.quantidade - reservadoDaCelula(ctx.reservas, produtoId, c.tamanho_id, Number(c.local_id)));
-        if (qtd > melhor.qtd) melhor = { qtd, local: Number(c.local_id) };
-      }
+      const linha = porTamanho.get(tamanhoId);
       return {
         tamanho_id: tamanhoId,
-        codigo: tamanhoId == null ? null : codigos.get(tamanhoId) ?? null,
-        fisico,
-        // Exibição: Disponível = Físico − Reservado − Empenhado − Bloqueado
-        // (melhor local vendável). Checkout pendente RESERVA; só o pagamento
-        // aprovado baixa o físico.
-        reservado: reservadoDoProduto(ctx.reservas, produtoId, tamanhoId),
-        disponivel: melhor.qtd,
-        local: melhor.local != null ? nomeLocal.get(melhor.local) ?? null : null,
+        codigo: tamanhoId === null ? null : codigos.get(tamanhoId) ?? null,
+        fisico: linha?.fisico ?? 0,
+        reservado: linha?.reservado ?? 0,
+        disponivel: linha?.disponivel ?? 0,
+        local: linha?.local ?? null,
       };
     });
 }
@@ -181,28 +156,19 @@ export async function disponivelTotalProduto(escopo: EscopoEmpresa, produtoId: n
 }
 
 /**
- * Disponível vendável de um produto do ERP pelo VÍNCULO CANÔNICO de estoque.
- *
- * Variação (produto com `produto_pai_id` + `variacao_tamanho_id`): o saldo
- * pertence ao PAI + tamanho — nunca à linha de `estoques` da variação, que não
- * é vendável. Consultar a variação diretamente devolvia 0 mesmo com saldo no
- * pai (A06-04).
- *
- * Produto simples/pai: soma dos tamanhos, cada um pelo melhor local vendável.
- *
- * Reutilizado pela publicação, pela sincronização de estoque Multi-Store e pelo
- * caminho legado — a regra de estoque é UMA só.
+ * Disponível vendável de um produto do ERP pelo vínculo canônico de estoque.
+ * Variações usam sempre o produto pai + tamanho; nunca possuem saldo paralelo.
  */
 export async function disponivelDoProdutoVendavel(escopo: EscopoEmpresa, produto: Row, tx?: Tx): Promise<number> {
   const paiId = produto.produto_pai_id ? Number(produto.produto_pai_id) : null;
   const tamanhoVariacao = produto.variacao_tamanho_id ? Number(produto.variacao_tamanho_id) : null;
   if (paiId && tamanhoVariacao) {
     const linhas = await disponibilidadesPorTamanho(escopo, paiId, tx);
-    const linha = linhas.find((l) => l.tamanho_id != null && Number(l.tamanho_id) === tamanhoVariacao);
+    const linha = linhas.find((item) => item.tamanho_id !== null && Number(item.tamanho_id) === tamanhoVariacao);
     return Math.max(0, Math.trunc(Number(linha?.disponivel ?? 0)));
   }
   const linhas = await disponibilidadesPorTamanho(escopo, Number(produto.id), tx);
-  return linhas.reduce((soma, l) => soma + Math.max(0, Number(l.disponivel || 0)), 0);
+  return linhas.reduce((soma, linha) => soma + Math.max(0, Number(linha.disponivel || 0)), 0);
 }
 
 // ----------------------------------------------------------------------------
@@ -794,7 +760,7 @@ export async function listarProdutosCommerce(req: Request, res: Response) {
       preco_base: Number(p.preco_venda ?? 0),
       categoria_id: p.categoria_id != null ? Number(p.categoria_id) : null,
       fisico: fisicoDoProduto(ctx, pid),
-      reservado: reservadoDoProduto(ctx.reservas, pid),
+      reservado: reservadoDoProduto(ctx, pid),
       disponivel: disponivelDoProduto(ctx, pid),
       na_vitrine: !!proj,
       slug: proj ? String(proj.slug) : null,

@@ -189,12 +189,44 @@ describe('A06-01 — autoridade de preço na importação', () => {
   test('precoOficialDoErp: RETAIL usa preco_venda e WHOLESALE usa preco_atacado', async () => {
     const empresaId = novaEmpresa();
     const produto = await novoProduto(empresaId, { preco_venda: 90, preco_atacado: 55 });
+    const s = getStore();
+    const condicaoAtacado = await s.findOneWhere(RESOURCES.condicoes_pagamento, { empresa_id: empresaId, codigo: 'atacado_vista' });
+    if (!condicaoAtacado) {
+      await s.insert(RESOURCES.condicoes_pagamento, {
+        empresa_id: empresaId,
+        codigo: 'atacado_vista',
+        nome: 'Atacado à vista (teste)',
+        canal: 'atacado',
+        parcelas: 1,
+        prazo_dias: 0,
+        ativo: true,
+      });
+    }
     const retail = await precoOficialDoErp(empresaId, produto, 'RETAIL');
     const wholesale = await precoOficialDoErp(empresaId, produto, 'WHOLESALE');
     assert.equal(retail.preco, 90);
     assert.equal(retail.fonte, 'preco_venda');
     assert.equal(wholesale.preco, 55);
     assert.equal(wholesale.fonte, 'preco_atacado');
+
+    await s.insert(RESOURCES.produto_precos_condicao, {
+      empresa_id: empresaId,
+      produto_id: Number(produto.id),
+      canal: 'atacado',
+      condicao: 'atacado_vista',
+      quantidade_minima: 10,
+      preco: 48,
+      margem_pct: 42,
+      ajuste_pct: 0,
+      regra_calculo: { teste: 'politica-atacado-min10' },
+      origem: 'teste',
+      vigencia_inicio: new Date().toISOString().slice(0, 10),
+      vigencia_fim: null,
+    });
+    const abaixoDaFaixa = await precoOficialDoErp(empresaId, produto, 'WHOLESALE', undefined, 5);
+    const faixaAtacada = await precoOficialDoErp(empresaId, produto, 'WHOLESALE', undefined, 10);
+    assert.equal(abaixoDaFaixa.preco, 55, 'abaixo do mínimo 10 não aplica a faixa do atacado');
+    assert.equal(faixaAtacada.preco, 48, 'atingido o mínimo, prevalece o preço oficial do Neon');
   });
 
   test('importação RETAIL com preço remoto divergente grava o preço do ERP e a evidência', async () => {

@@ -11,7 +11,7 @@
 //   • identificadores preservados como texto (zeros à esquerda intactos);
 //   • códigos de barras concatenados NÃO entram como código de barras.
 // ============================================================================
-import { test } from 'node:test';
+import { test, before } from 'node:test';
 import assert from 'node:assert/strict';
 import ExcelJS from 'exceljs';
 
@@ -26,6 +26,23 @@ const { previewCarga, confirmarCarga, classificarColuna, normalizarItem, descric
 );
 
 const ADMIN = { id: 1, name: 'Admin', perfil: 'admin' as const, empresa_id: 1, empresas: [1] };
+
+before(async () => {
+  const s = getStore();
+  const locais = await s.list(RESOURCES.locais, { page: 1, pageSize: 100, filter: { empresa_id: 1 } });
+  let loja = locais.rows.find((item: any) => String(item.nome ?? '').trim().toUpperCase() === 'LOJA');
+  if (!loja) {
+    loja = await s.insert(RESOURCES.locais, { empresa_id: 1, nome: 'LOJA', tipo: 'loja', nivel_wms: 'local', ativo: true, padrao: false });
+  }
+  for (const local of locais.rows) {
+    if (local.padrao === true && Number(local.id) !== Number(loja.id)) {
+      await s.update(RESOURCES.locais, Number(local.id), { padrao: false }, undefined);
+    }
+  }
+  if (loja.ativo !== true || loja.padrao !== true) {
+    await s.update(RESOURCES.locais, Number(loja.id), { ativo: true, padrao: true }, undefined);
+  }
+});
 
 function app(user: any = ADMIN) {
   const a = express();
@@ -48,9 +65,14 @@ const CABECALHO = [
   'Item', 'Cód Categoria', 'MARCA', 'CATEGORIA MASTER', 'COLEÇÃO', 'VARIANTE COR', 'DESCRIÇÃO',
   'Tamanho', 'Código Industria', 'Tipo', 'STATUS', 'Peso KG', 'Altura CM', 'Largura CM',
   'Comprimento ou profundidade CM', 'Custo Unitário Fabricação',
-  // Preços OFICIAIS (dados de ENTRADA) — importados como preço por condição.
-  'Atacado À Vista', 'Atacado Boleto 30/60', 'Varejo À Vista', 'Vlr Cartão Parcelado',
-  // Colunas CALCULADAS — devem ser classificadas como conferência e ignoradas.
+  // Entradas tributárias e margens-alvo usadas pelo servidor para recalcular os preços.
+  'Simples Nacional', 'ICMS', 'ICMS2', 'Mgb Atacado Vista', 'Mgb Vrj Vista',
+  'Mgb Vrj Vista 2 un', 'MGL VRJ CARTÃO À VISTA', 'VRJ =/> 2 PÇ CARTÃO até  3X',
+  // Colunas de saída da planilha, usadas apenas como conferência do cálculo.
+  'Atacado À Vista', 'Atacado Boleto 30', 'Atacado Boleto 30/60', 'Atacado Boleto 30/60/90',
+  'Atacado Cartão Débido', 'Atacado Cartão Crédito à vista', 'Atacado Cartão Crédito 30/60',
+  'Atacado Cartão Crédito 30/60/90', 'Varejo À Vista', 'VRJ 2 Un',
+  'Vlr Cartão à Vista', 'Vlr Cartão Parcelado',
   'Margem MGB (%)', 'Preço Varejo', 'Preço Atacado',
 ];
 
@@ -71,16 +93,43 @@ function abaGenerica(wb: ExcelJS.Workbook, nome: string, cabecalho: string[], li
 async function xlsxBase64(
   linhas: Linha[],
   barras: { codigo: string; industria: string }[] = [],
-  extras: { controle?: Record<string, string | number>[]; roupas?: Record<string, string | number>[]; movimentacao?: boolean } = {}
+  extras: { controle?: Record<string, string | number>[]; roupas?: Record<string, string | number>[]; movimentacao?: boolean; fatoresFinanceiros?: Record<string, number> } = {}
 ): Promise<string> {
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet('Política Comercial Completa');
   for (let r = 1; r <= 10; r++) ws.getRow(r).getCell(1).value = r === 1 ? 'TABELA DE PREÇO BASE' : '';
   CABECALHO.forEach((h, i) => (ws.getRow(11).getCell(i + 1).value = h));
+  const fatoresFinanceiros: Record<string, number> = {
+    'Atacado À Vista': 0,
+    'Atacado Boleto 30': 0.04,
+    'Atacado Boleto 30/60': 0.08,
+    'Atacado Boleto 30/60/90': 0.10,
+    'Atacado Cartão Débido': 0.08,
+    'Atacado Cartão Crédito à vista': 0.08,
+    'Atacado Cartão Crédito 30/60': 0.12,
+    'Atacado Cartão Crédito 30/60/90': 0.15,
+    'VRJ 2 Un': 0.20,
+    ...(extras.fatoresFinanceiros ?? {}),
+  };
+  for (const [rotulo, taxa] of Object.entries(fatoresFinanceiros)) {
+    const col = CABECALHO.indexOf(rotulo);
+    if (col >= 0) ws.getRow(10).getCell(col + 1).value = taxa;
+  }
+  const parametrosPadrao: Record<string, number> = {
+    'Simples Nacional': 0.06,
+    ICMS: 0.02,
+    ICMS2: 0.01,
+    'Mgb Atacado Vista': 0.45,
+    'Mgb Vrj Vista': 0.60,
+    'Mgb Vrj Vista 2 un': 0.55,
+    'MGL VRJ CARTÃO À VISTA': 0.65,
+    'VRJ =/> 2 PÇ CARTÃO até  3X': 0.60,
+  };
   linhas.forEach((l, i) => {
     const row = ws.getRow(12 + i);
     CABECALHO.forEach((h, j) => {
       if (l[h] !== undefined) row.getCell(j + 1).value = l[h] as any;
+      else if (parametrosPadrao[h] !== undefined) row.getCell(j + 1).value = parametrosPadrao[h];
     });
   });
   const wsB = wb.addWorksheet('Código de Barras');
@@ -90,15 +139,35 @@ async function xlsxBase64(
     wsB.getRow(2 + i).getCell(1).value = b.industria;
     wsB.getRow(2 + i).getCell(2).value = b.codigo;
   });
-  if (extras.controle) {
-    abaGenerica(wb, 'BASE CONTROLE DE ESTOQUE',
-      ['Item', 'COLEÇÃO', 'CATEGORIA', 'SUBCATEGORIA', 'Descrição do produto/serviço2', 'Tamanho', 'Código Industria', 'Tipo', 'Fornecedor', 'Valor unitário Custo', 'ATACADO À Vista Min. 10 Pças', 'VRJ À VISTA'],
-      extras.controle, 11);
-  }
-  if (extras.roupas) {
-    abaGenerica(wb, 'Política Comercial Roupas (2)',
-      ['Item', 'Categoria', 'Descrição do produto/serviço2', 'Código Industria', 'Tipo', 'Fornecedor', 'Qtd. Estoque', 'Valor unitário Custo', 'Preço à Vista  10% Desc.', 'Preço de Venda Cartão'],
-      extras.roupas, 4);
+  const cabControle = ['Item', 'COLEÇÃO', 'CATEGORIA', 'SUBCATEGORIA', 'Descrição do produto/serviço2', 'Tamanho', 'Código Industria', 'Tipo', 'Fornecedor', 'Valor unitário Custo', 'ATACADO À Vista Min. 10 Pças', 'ATACADO BOLETO Mín. 10 pças', 'VRJ À VISTA', 'VRJ =/> 2 PÇ', 'VR CARTÃO À VISTA', 'VRJ =/> 2 PÇ CARTÃO PRAZO', 'Simples Nacional', 'ICMS'];
+  abaGenerica(wb, 'BASE CONTROLE DE ESTOQUE', cabControle, extras.controle ?? [], 11);
+  const cabRoupas = ['Item', 'Categoria', 'Descrição do produto/serviço2', 'Código Industria', 'Tipo', 'Fornecedor', 'Qtd. Estoque', 'Valor unitário Custo', 'Margem Luco Preço Vista', 'Margem Luco Prazo Cartão', 'Preço à Vista  10% Desc.', 'Preço de Venda Cartão'];
+  abaGenerica(wb, 'Política Comercial Roupas (2)', cabRoupas, extras.roupas ?? [], 4);
+
+  // Inventário físico de teste da planilha sintética: um SKU principal com 1
+  // unidade e todos os demais sem saldo. A fonte real utiliza TT Saldo.
+  const cabSaida = ['Codigo Cadastro', 'COLEÇÃO', 'CATEGORIA', 'SUBCATEGORIA', 'Código Internto Industria', 'Descrição', 'Nº', 'Estoque', 'Saída', 'Saldo', 'Estoque2', 'Saída2', 'Saldo2', 'Reservado', 'TT Est.', 'TT Saída', 'TT Saldo'];
+  const saidas = linhas.map((l, i) => {
+    const saldo = i === 0 ? 1 : 0;
+    return {
+      'Codigo Cadastro': l.Item ?? String(i + 1),
+      'Código Internto Industria': l['Código Industria'] ?? '',
+      'Descrição': l['DESCRIÇÃO'] ?? '',
+      'Estoque': saldo,
+      'Saída': 0,
+      'Saldo': saldo,
+      'Estoque2': 0,
+      'Saída2': 0,
+      'Saldo2': 0,
+      'TT Est.': saldo,
+      'TT Saída': 0,
+      'TT Saldo': saldo,
+    };
+  });
+  abaGenerica(wb, 'CONTROLE ESTOQUE SAÍDA', cabSaida, saidas, 7);
+  const contagem = wb.addWorksheet('Estoque Com Jefferson');
+  for (const cab of [4, 12]) {
+    ['DESCRIÇÃO', 'P', 'M', 'G', 'GG', 'XG', 'TOTAL'].forEach((h, i) => { contagem.getRow(cab).getCell(i + 1).value = h; });
   }
   if (extras.movimentacao) {
     // Aba de MOVIMENTAÇÃO: tem código de indústria e quantidade, mas NÃO é cadastro.
@@ -122,12 +191,12 @@ const LINHAS_BASE: Linha[] = [
 // ---------------------------------------------------------------------------
 // Unidade: helpers puros.
 // ---------------------------------------------------------------------------
-test('a classificação separa entrada, conferência e ignorada', () => {
+test('a classificação separa parâmetros de entrada, preços de conferência e ignoradas', () => {
   assert.equal(classificarColuna('Custo Unitário Fabricação').natureza, 'entrada');
   assert.equal(classificarColuna('Código Industria').natureza, 'entrada');
-  assert.equal(classificarColuna('Atacado À Vista').natureza, 'entrada');
-  assert.equal(classificarColuna('Vlr Cartão Parcelado').natureza, 'entrada');
-  assert.equal(classificarColuna('Margem MGB (%)').natureza, 'conferencia');
+  assert.equal(classificarColuna('Atacado À Vista').natureza, 'conferencia');
+  assert.equal(classificarColuna('Vlr Cartão Parcelado').natureza, 'conferencia');
+  assert.equal(classificarColuna('Mgb Atacado Vista').natureza, 'entrada', 'margem-alvo é parâmetro para o motor do ERP');
   assert.equal(classificarColuna('Preço Varejo').natureza, 'conferencia');
   assert.equal(classificarColuna('Preço Atacado').natureza, 'conferencia');
   assert.equal(classificarColuna('Coluna7').natureza, 'ignorada');
@@ -189,16 +258,16 @@ test('a prévia não grava nada e reporta as validações', async () => {
   const resp = await request(app()).post('/api/carga/politica-comercial/preview').send({ conteudo, nome: 'x.xlsx' });
   assert.equal(resp.status, 200, JSON.stringify(resp.body));
   assert.equal(resp.body.total, 5);
-  assert.equal(resp.body.validacoes.familias, 2);
-  assert.equal(resp.body.validacoes.campos_conferencia, 3, 'as 3 colunas calculadas viram conferência');
-  assert.ok(resp.body.familias.some((f: any) => f.itens === 4), 'família CAMISETA com 4 itens');
+  assert.equal(resp.body.validacoes.familias, 3, 'cores diferentes formam pais de estoque diferentes');
+  assert.equal(resp.body.validacoes.campos_conferencia, 15, 'preços, custos totais e campos derivados são conferências; margens e taxas são entradas');
+  assert.equal(resp.body.familias.filter((f: any) => f.itens === 2).length, 2, 'camiseta preta e branca têm pais independentes');
   assert.ok(resp.body.familias.some((f: any) => f.itens === 1), 'família ÓCULOS com 1 item');
 
   const depois = await s.countWhere(RESOURCES.produtos, {});
   assert.equal(depois, antes, 'a prévia não cria produtos');
 });
 
-test('a confirmação cria pai + variações, importa preços oficiais e NÃO importa estoque', async () => {
+test('a confirmação cria pais por cor, recalcula preços e substitui o estoque pelo saldo da planilha', async () => {
   const conteudo = await xlsxBase64(LINHAS_BASE, [
     { industria: 'CB2B010', codigo: 'DTF ORIGINALPRETAP' }, // concatenação: NÃO é GTIN
     { industria: 'CB2B011', codigo: '7891234567895' }, // EAN-13 com dígito verificador VÁLIDO
@@ -206,13 +275,16 @@ test('a confirmação cria pai + variações, importa preços oficiais e NÃO im
   const s = getStore();
   const resp = await request(app()).post('/api/carga/politica-comercial/confirmar').send({ conteudo, nome: 'x.xlsx' });
   assert.equal(resp.status, 200, JSON.stringify(resp.body));
-  assert.equal(resp.body.produtos, 2, 'dois produtos-pai (CAMISETA e ÓCULOS)');
+  assert.equal(resp.body.produtos, 3, 'pais independentes para CAMISETA PRETA, CAMISETA BRANCA e ÓCULOS');
   assert.equal(resp.body.variacoes, 4, 'quatro variações da camiseta');
-  assert.equal(resp.body.estoque_importado, false);
+  assert.equal(resp.body.estoque_importado, true);
+  assert.equal(resp.body.estoque.celulas_importadas, 5);
+  assert.equal(resp.body.estoque.unidades_importadas, 1, 'a planilha sintética declara uma unidade física na linha principal');
+  assert.equal(resp.body.estoque.local, 'LOJA');
   assert.equal(resp.body.precos_sobrescritos, false);
-  assert.equal(resp.body.formulas_importadas, false);
+  assert.equal(resp.body.formulas_planilha_importadas, false);
 
-  const pai = await s.findOneWhere(RESOURCES.produtos, { sku: 'CAMISETA-BORDADO-B', empresa_id: 1 });
+  const pai = await s.findOneWhere(RESOURCES.produtos, { sku: 'CAMISETA-BORDADO-B-PRETA', empresa_id: 1 });
   assert.ok(pai, 'o produto-pai foi criado');
   assert.equal(pai!.formato, 'variacao');
   assert.equal(pai!.marca, 'BROBOND');
@@ -226,9 +298,15 @@ test('a confirmação cria pai + variações, importa preços oficiais e NÃO im
   assert.equal(varPreta!.codigo_item, '1001');
   assert.equal(varPreta!.codigo_categoria, 'CB2B');
   assert.equal(varPreta!.codigo_industria, 'CB2B010');
-  assert.equal(Number(varPreta!.custo), 25.5, 'o custo-base é importado');
-  assert.equal(Number(varPreta!.preco_venda), 99.9, 'a BASE do varejo vem do preço oficial à vista');
-  assert.equal(Number(varPreta!.preco_atacado), 49.9, 'a BASE do atacado vem do preço oficial à vista');
+  assert.equal(Number(varPreta!.custo), 27.8, 'custo de fabricação acrescido dos 9% de tributos calculados');
+  assert.equal(Number(varPreta!.custo_unitario_fabricacao), 25.5);
+  assert.equal(Number(varPreta!.simples_nacional_pct), 6);
+  assert.equal(Number(varPreta!.icms_planilha_pct), 2);
+  assert.equal(Number(varPreta!.icms2_planilha_pct), 1);
+  assert.equal(Number(varPreta!.total_imposto_pct), 9);
+  assert.equal(Number(varPreta!.preco_venda), 69.49, 'o varejo é calculado com margem bruta de 60%');
+  assert.equal(Number(varPreta!.preco_atacado), 50.54, 'o atacado é calculado com margem bruta de 45%');
+  assert.equal((varPreta!.memoria_formacao_preco as any).versao, 'BROBOND-PRECO-0125-v1');
   assert.equal(varPreta!.codigo_barras, null, 'concatenação não vira código de barras');
   assert.equal(Number(varPreta!.peso_liquido_g), 200);
   assert.equal(Number(varPreta!.altura_mm), 20);
@@ -238,10 +316,11 @@ test('a confirmação cria pai + variações, importa preços oficiais e NÃO im
   // Preços OFICIAIS gravados por condição (dados de entrada, não fórmula).
   const condBoleto = await s.findOneWhere(RESOURCES.produto_precos_condicao, { empresa_id: 1, produto_id: Number(varPreta!.id), canal: 'atacado', condicao: 'boleto_30_60' });
   assert.ok(condBoleto, 'o preço de atacado boleto 30/60 foi importado');
-  assert.equal(Number(condBoleto!.preco), 54.9);
+  assert.equal(Number(condBoleto!.preco), 54.93, 'preço recalculado com margem atacado e fator financeiro de 8%');
   const condParcelado = await s.findOneWhere(RESOURCES.produto_precos_condicao, { empresa_id: 1, produto_id: Number(varPreta!.id), canal: 'varejo', condicao: 'cartao_parcelado' });
   assert.ok(condParcelado);
-  assert.equal(Number(condParcelado!.preco), 109.9);
+  assert.equal(Number(condParcelado!.preco), 69.49, 'cartão parcelado usa a margem de 60% da faixa com quantidade mínima 2');
+  assert.equal(Number(condParcelado!.quantidade_minima), 2);
 
   // Cadastro estrutural das condições de pagamento criado (idempotente).
   assert.ok(await s.findOneWhere(RESOURCES.condicoes_pagamento, { empresa_id: 1, codigo: 'boleto_30_60' }));
@@ -258,9 +337,11 @@ test('a confirmação cria pai + variações, importa preços oficiais e NÃO im
   assert.equal(oculos!.ativo, false, 'STATUS INATIVO desativa o produto');
   assert.equal(oculos!.produto_pai_id ?? null, null, 'produto simples não tem pai');
 
-  // NENHUMA quantidade física foi criada.
-  const estoques = await s.countWhere(RESOURCES.estoques, { empresa_id: 1 });
-  assert.equal(estoques, 0, 'nenhum saldo de estoque importado');
+  // Uma única célula física foi criada em LOJA, com o saldo da planilha.
+  const estoques = await s.list(RESOURCES.estoques, { page: 1, pageSize: 50, filter: { empresa_id: 1, local: 'LOJA' } });
+  assert.equal(estoques.rows.length, 5);
+  assert.equal(estoques.rows.reduce((total: number, row: any) => total + Number(row.quantidade), 0), 1);
+  assert.ok(await s.countWhere(RESOURCES.movimentacoes, { empresa_id: 1 }) > 0, 'ajuste do saldo fica auditado');
 });
 
 test('reimportar o mesmo arquivo não duplica nada (idempotência)', async () => {
@@ -268,19 +349,20 @@ test('reimportar o mesmo arquivo não duplica nada (idempotência)', async () =>
   const s = getStore();
   const antes = await s.countWhere(RESOURCES.produtos, { empresa_id: 1 });
   const precosAntes = await s.countWhere(RESOURCES.produto_precos_condicao, { empresa_id: 1 });
+  const condicoesAntes = await s.countWhere(RESOURCES.condicoes_pagamento, { empresa_id: 1 });
 
   const resp = await request(app()).post('/api/carga/politica-comercial/confirmar').send({ conteudo, nome: 'x.xlsx' });
   assert.equal(resp.status, 200, JSON.stringify(resp.body));
   assert.equal(resp.body.produtos, 0, 'nenhum produto novo');
   assert.equal(resp.body.variacoes, 0, 'nenhuma variação nova');
-  assert.equal(resp.body.ignorados, 5, 'todas as linhas já existiam');
+  assert.equal(resp.body.ignorados, 7, 'cinco SKUs e dois pais de variação já existiam');
 
   const depois = await s.countWhere(RESOURCES.produtos, { empresa_id: 1 });
   assert.equal(depois, antes, 'a contagem de produtos não muda');
   const precosDepois = await s.countWhere(RESOURCES.produto_precos_condicao, { empresa_id: 1 });
   assert.equal(precosDepois, precosAntes, 'a reimportação não duplica preços por condição');
-  const condicoes = await s.countWhere(RESOURCES.condicoes_pagamento, { empresa_id: 1 });
-  assert.equal(condicoes, 4, 'as condições de pagamento também são idempotentes');
+  const condicoesDepois = await s.countWhere(RESOURCES.condicoes_pagamento, { empresa_id: 1 });
+  assert.equal(condicoesDepois, condicoesAntes, 'as condições de pagamento também são idempotentes');
 });
 
 test('mudar o preço de uma condição VERSIONA (fecha a vigência e registra histórico), nunca apaga', async () => {
@@ -288,33 +370,31 @@ test('mudar o preço de uma condição VERSIONA (fecha a vigência e registra hi
   const variacao = await s.findOneWhere(RESOURCES.produtos, { sku: 'CB2B010', empresa_id: 1 });
   assert.ok(variacao, 'a variação CB2B010 existe da carga anterior');
 
-  // Nova versão do arquivo com o boleto 30/60 de 54,90 → 59,90.
-  const linhas = LINHAS_BASE.map((l) =>
-    l['Código Industria'] === 'CB2B010' ? { ...l, 'Atacado Boleto 30/60': 59.9 } : l
-  );
-  const conteudo = await xlsxBase64(linhas);
+  // Nova versão de política: só o fator do Boleto 30/60 muda de 8% para 9%.
+  // Os preços resultantes da planilha não são importados; são recalculados no servidor.
+  const conteudo = await xlsxBase64(LINHAS_BASE, [], { fatoresFinanceiros: { 'Atacado Boleto 30/60': 0.09 } });
   const resp = await request(app()).post('/api/carga/politica-comercial/confirmar').send({ conteudo, nome: 'x.xlsx' });
   assert.equal(resp.status, 200, JSON.stringify(resp.body));
   assert.equal(resp.body.produtos, 0, 'nenhum produto novo');
-  assert.equal(resp.body.precos_versionados, 1, 'um preço versionado');
+  assert.equal(resp.body.precos_versionados, 5, 'o fator do boleto mudou para os cinco SKUs da família principal');
   assert.equal(resp.body.precos_gravados, 0, 'nenhuma linha nova "vigente" contada como gravação simples');
 
   // Vigente agora é o preço novo.
   const vigente = await s.findOneWhere(RESOURCES.produto_precos_condicao, { empresa_id: 1, produto_id: Number(variacao!.id), canal: 'atacado', condicao: 'boleto_30_60', vigencia_fim: null });
   assert.ok(vigente, 'existe linha vigente');
-  assert.equal(Number(vigente!.preco), 59.9);
+  assert.equal(Number(vigente!.preco), 55.54);
 
   // A linha antiga NÃO foi apagada: virou histórico (vigência fechada).
   const { rows } = await s.list(RESOURCES.produto_precos_condicao, { page: 1, pageSize: 50, filter: { empresa_id: 1, produto_id: Number(variacao!.id), canal: 'atacado', condicao: 'boleto_30_60' } });
   assert.equal(rows.length, 2, 'histórico + vigente coexistem (nada apagado)');
   const antiga = rows.find((r) => r.vigencia_fim !== null && r.vigencia_fim !== undefined);
   assert.ok(antiga, 'a linha anterior tem vigência fechada');
-  assert.equal(Number(antiga!.preco), 54.9);
+  assert.equal(Number(antiga!.preco), 54.93);
 
   // E a mudança está auditada em `produto_precos_condicao_historico`.
   const { rows: hist } = await s.list(RESOURCES.produto_precos_condicao_historico, { page: 1, pageSize: 50, filter: { empresa_id: 1, produto_id: Number(variacao!.id), canal: 'atacado', condicao: 'boleto_30_60' } });
-  const mudanca = hist.find((h) => Number(h.preco_anterior) === 54.9 && Number(h.preco_novo) === 59.9);
-  assert.ok(mudanca, 'a mudança 54,90 → 59,90 entrou no histórico');
+  const mudanca = hist.find((h) => Number(h.preco_anterior) === 54.93 && Number(h.preco_novo) === 55.54);
+  assert.ok(mudanca, 'a mudança recalculada 54,93 → 55,54 entrou no histórico');
 });
 
 test('status inválido é reportado sem descartar a linha em silêncio', async () => {
@@ -370,12 +450,15 @@ test('a prévia examina TODAS as abas e separa cadastro de movimentação', asyn
   assert.deepEqual(rec.codigos_aba_ausentes_na_principal['Política Comercial Roupas (2)'].sort(), ['93882-40', '93882-42']);
 });
 
-test('a confirmação cria produtos das TRÊS abas de cadastro e NÃO importa a quantidade de controle', async () => {
+test('a confirmação cria produtos das TRÊS abas e substitui o saldo físico pelo inventário da planilha', async () => {
   const conteudo = await xlsxBase64(LINHAS_BASE, [], { ...EXTRAS, movimentacao: true });
   const s = getStore();
   const resp = await request(app()).post('/api/carga/politica-comercial/confirmar').send({ conteudo, nome: 'x.xlsx' });
   assert.equal(resp.status, 200, JSON.stringify(resp.body));
-  assert.equal(resp.body.estoque_importado, false);
+  assert.equal(resp.body.estoque_importado, true);
+  assert.equal(resp.body.estoque.celulas_importadas, 9);
+  assert.equal(resp.body.estoque.unidades_importadas, 3);
+  assert.equal(resp.body.estoque.local, 'LOJA');
 
   // Produto da aba de CONTROLE: cadastro próprio, custo e preço-base preservados.
   const controle = await s.findOneWhere(RESOURCES.produtos, { sku: '1001P', empresa_id: 1 });
@@ -392,9 +475,14 @@ test('a confirmação cria produtos das TRÊS abas de cadastro e NÃO importa a 
   assert.ok(condCartao, 'o preço de venda no cartão entra como preço por condição');
   assert.equal(Number(condCartao!.preco), 142.7);
 
-  // A quantidade de controle ("Qtd. Estoque" = 1) NÃO virou estoque/movimentação.
-  const movs = await s.countWhere(RESOURCES.movimentacoes, { empresa_id: 1 });
-  assert.equal(movs, 0, 'nenhuma movimentação de estoque foi criada');
+  // O saldo explícito da linha principal e as quantidades da aba de roupas
+  // foram importados; os SKUs de controle sem contagem física ficam em zero.
+  const saldoControle = await s.findOneWhere(RESOURCES.estoques, { empresa_id: 1, produto_id: Number(controle!.id), local: 'LOJA' });
+  assert.equal(Number(saldoControle?.quantidade ?? 0), 0);
+  const saldosLoja = await s.list(RESOURCES.estoques, { page: 1, pageSize: 100, filter: { empresa_id: 1, local: 'LOJA' } });
+  assert.equal(saldosLoja.rows.length, 9, 'todos os SKUs têm uma única célula física em LOJA');
+  assert.equal(saldosLoja.rows.reduce((total: number, row: any) => total + Number(row.quantidade), 0), 3, 'uma unidade principal mais duas unidades da aba de roupas');
+  assert.ok(await s.countWhere(RESOURCES.movimentacoes, { empresa_id: 1 }) > 0, 'o delta físico fica registrado no razão');
 });
 
 test('reimportar com as abas extras não duplica (idempotência entre fontes)', async () => {
@@ -481,7 +569,7 @@ test('roupas: dois tamanhos do MESMO código são pai + variações (não dois p
 // do mesmo tamanho geravam a MESMA chave de variação (`TAM:G`) e a segunda era
 // rejeitada como duplicada — variações reais eram PERDIDAS na carga.
 // ---------------------------------------------------------------------------
-test('roupas: cores diferentes do mesmo tamanho são variações distintas (não colidem)', async () => {
+test('roupas: cores diferentes nunca compartilham a mesma célula de estoque', async () => {
   const conteudo = await xlsxBase64(LINHAS_BASE, [], {
     roupas: [
       { Item: '1', Categoria: 'CAMISETA', 'Descrição do produto/serviço2': '94000 CAMISETA BAS:g', 'Código Industria': '94000-azulclaro-g', Tipo: 'UN', 'Valor unitário Custo': 30 },
@@ -491,16 +579,17 @@ test('roupas: cores diferentes do mesmo tamanho são variações distintas (não
   });
   const resp = await request(app()).post('/api/carga/politica-comercial/preview').send({ conteudo, nome: 'x.xlsx' });
   assert.equal(resp.status, 200, JSON.stringify(resp.body));
-  const variacoes = resp.body.amostra.filter((i: any) => i.acao === 'criar_variacao' && String(i.sku).startsWith('94000'));
-  assert.equal(variacoes.length, 3, 'as três cores/tamanhos são variações');
-  const chaves = variacoes.map((i: any) => i.cor && i.tamanho ? `COR:${i.cor}|TAM:${i.tamanho}` : '');
-  assert.equal(new Set(chaves).size, 3, 'cada cor×tamanho tem chave própria (nenhuma colisão)');
+  const itens = resp.body.amostra.filter((i: any) => String(i.sku).startsWith('94000'));
+  assert.equal(itens.length, 3, 'as três combinações de SKU foram preservadas');
+  assert.equal(new Set(itens.map((i: any) => i.pai_sku)).size, 3, 'cada cor tem um produto-pai de estoque independente');
+  assert.ok(itens.every((i: any) => i.cor && i.tamanho), 'cor e tamanho continuam explícitos no cadastro');
   const confirm = await request(app()).post('/api/carga/politica-comercial/confirmar').send({ conteudo, nome: 'x.xlsx' });
   assert.equal(confirm.status, 200, JSON.stringify(confirm.body));
   assert.equal(confirm.body.rejeitados.length, 0, 'nenhuma variação é rejeitada por colisão falsa');
   const s = getStore();
-  const doPai = await s.countWhere(RESOURCES.produtos, { empresa_id: 1, variacao_chave: 'COR:nude|TAM:GG' });
-  assert.equal(doPai, 1, 'a variação NUDE/GG foi realmente persistida');
+  const skuNude = itens.find((i: any) => i.cor === 'nude')?.sku;
+  const nude = skuNude ? await s.findOneWhere(RESOURCES.produtos, { empresa_id: 1, sku: skuNude }) : null;
+  assert.ok(nude && nude.ativo !== false, 'o SKU NUDE/GG foi realmente persistido e ativo');
 });
 
 test('descricaoSemCor remove a cor no MEIO da descrição (controle de estoque)', () => {
@@ -532,7 +621,7 @@ test('unidadeDoTipo traduz só o conhecido e nunca inventa unidade', async () =>
   assert.equal(unidadeDoTipo('CAIXA DE PAPELÃO'), null, 'desconhecido não é inventado');
 });
 
-test('a confirmação grava unidade, fornecedor e atributos adicionais — sem preço/movimento', async () => {
+test('a confirmação grava unidade, fornecedor, atributos adicionais e saldo único da planilha', async () => {
   const { atributosAdicionais } = await import('../src/cargaPoliticaComercial');
   const conteudo = await xlsxBase64(LINHAS_BASE, [], {
     roupas: [
@@ -553,9 +642,13 @@ test('a confirmação grava unidade, fornecedor e atributos adicionais — sem p
   assert.ok(!('Preço de Venda Cartão' in attrs), 'preço oficial NÃO vira atributo (tem tabela própria)');
   assert.ok(!('Valor unitário Custo' in attrs), 'custo não vira atributo livre');
 
-  // Nem estoque nem movimentação nascem da carga.
-  assert.equal(await s.countWhere(RESOURCES.movimentacoes, { empresa_id: 1 }), 0);
-  assert.equal(await s.countWhere(RESOURCES.estoques, { empresa_id: 1 }), 0);
+  // A quantidade física vem da coluna Qtd. Estoque e entra no mesmo local LOJA.
+  const saldoRoupas = await s.list(RESOURCES.estoques, { page: 1, pageSize: 20, filter: { empresa_id: 1, produto_id: Number(roupas!.id), local: 'LOJA' } });
+  assert.equal(saldoRoupas.rows.reduce((total: number, row: any) => total + Number(row.quantidade), 0), 3);
+  const saldos = await s.list(RESOURCES.estoques, { page: 1, pageSize: 50, filter: { empresa_id: 1, local: 'LOJA' } });
+  assert.equal(saldos.rows.length, 6, 'cinco SKUs principais mais um SKU de roupas, em um só local');
+  assert.equal(saldos.rows.reduce((total: number, row: any) => total + Number(row.quantidade), 0), 4, 'uma unidade principal mais três unidades de roupas');
+  assert.ok(await s.countWhere(RESOURCES.movimentacoes, { empresa_id: 1 }) > 0, 'a alteração de saldo fica auditada no razão');
 });
 
 test('atributos adicionais ignoram preço, cálculo e movimento — só cadastro livre', async () => {
