@@ -21,7 +21,7 @@ const express = (await import('express')).default;
 const request = (await import('supertest')).default;
 const { RESOURCES } = await import('../src/resources');
 const { getStore } = await import('../src/services');
-const { previewCarga, confirmarCarga, classificarColuna, normalizarItem, descricaoBase, descricaoSemTamanho, descricaoSemCor, parseCodigoRoupas, skuPaiDe, sanitizarXlsx, extrairPrecosOficiais, hashChave } = await import(
+const { previewCarga, confirmarCarga, classificarColuna, normalizarItem, extrairLinhas, celulaTexto, descricaoBase, descricaoSemTamanho, descricaoSemCor, parseCodigoRoupas, skuPaiDe, sanitizarXlsx, extrairPrecosOficiais, hashChave } = await import(
   '../src/cargaPoliticaComercial'
 );
 
@@ -685,3 +685,59 @@ test('atributos adicionais ignoram preço, cálculo e movimento — só cadastro
   assert.deepEqual(attrs, { Fornecedor: 'CEREJA DOCE', 'Material Predominante': 'LINHO' });
 });
 
+
+
+test('fórmulas de SKU são lidas pelo resultado em cache e reconciliadas por Item + Tamanho quando ausente', () => {
+  assert.equal(celulaTexto({ formula: 'A12&B12', result: '1001P' }), '1001P');
+  assert.equal(celulaTexto({ formula: '$B$8', result: { error: '#REF!' } }), '#REF!');
+  assert.equal(celulaTexto({ formula: 'A12&B12' }), '');
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet('BASE CONTROLE DE ESTOQUE');
+  ws.getRow(11).getCell(2).value = 'Item';
+  ws.getRow(11).getCell(3).value = 'Tamanho';
+  ws.getRow(11).getCell(4).value = 'Código Industria';
+  ws.getRow(12).getCell(2).value = '1001';
+  ws.getRow(12).getCell(3).value = 'P';
+  ws.getRow(12).getCell(4).value = { formula: 'B12&C12' };
+  const leitura = extrairLinhas(ws, { id: 'controle_estoque', aba: 'BASE CONTROLE DE ESTOQUE', cabecalho: 11, primeira_linha: 12, descricao: 'teste' });
+  assert.equal(leitura.linhas[0].celulas['Código Industria'], '1001P');
+  assert.match(leitura.linhas[0].celulas['__SKU_FORMULA_ORIGEM'], /Item&Tamanho/);
+});
+
+test('custo #REF! mantém preço explícito, mas não inventa custo nem margem', () => {
+  const item = normalizarItem({ linha: 12, celulas: {
+    Item: '1001', 'COLEÇÃO': 'COLEÇÃO 2 STAMPA', CATEGORIA: 'BROBOND ORIGINAL', SUBCATEGORIA: 'BRANCA',
+    'Descrição do produto/serviço2': 'CAMISETA BROBOND GOLA O BRANCA - P', Tamanho: 'P', 'Código Industria': '1001P', Tipo: 'PÇ',
+    'Valor unitário Custo': '#REF!', 'Simples Nacional': '4%', 'ATACADO À Vista Min. 10 Pças': '49,90', 'VRJ À VISTA': '69,90'
+  } }, new Map(), 'controle_estoque');
+  assert.equal(item.codigo_industria, '1001P');
+  assert.equal(item.custo_base, null);
+  assert.equal(item.calculo_precificacao, null);
+  assert.equal(item.precos.length, 2);
+  assert.equal(item.precos.find((p) => p.condicao === 'varejo_vista')?.preco, 69.9);
+  assert.equal(item.precos.every((p) => p.margem_pct === null), true);
+  assert.match(item.erros_precificacao.join(' '), /custo e margem pendentes/);
+});
+
+
+test('a confirmação preserva custo ausente como NULL no cadastro e registra a pendência', async () => {
+  const extras = {
+    controle: [{
+      Item: '7001', 'COLEÇÃO': 'COLEÇÃO TESTE', CATEGORIA: 'BROBOND ORIGINAL', SUBCATEGORIA: 'AZUL',
+      'Descrição do produto/serviço2': 'CAMISETA TESTE AZUL - P', Tamanho: 'P', 'Código Industria': '7001P', Tipo: 'PÇ',
+      'Valor unitário Custo': '#REF!', 'Simples Nacional': 0.04,
+      'ATACADO À Vista Min. 10 Pças': 49.9, 'VRJ À VISTA': 69.9
+    }],
+    roupas: [],
+  };
+  const conteudo = await xlsxBase64(LINHAS_BASE, [], extras);
+  const s = getStore();
+  const resp = await request(app()).post('/api/carga/politica-comercial/confirmar').send({ conteudo, nome: 'x.xlsx' });
+  assert.equal(resp.status, 200, JSON.stringify(resp.body));
+  const produto = await s.findOneWhere(RESOURCES.produtos, { sku: '7001P', empresa_id: 1 });
+  assert.ok(produto);
+  assert.equal(produto!.custo, null, 'NULL explícito não pode virar o default zero');
+  assert.equal(Number(produto!.preco_venda), 69.9, 'preço explícito continua sendo incorporado');
+  assert.equal((produto!.memoria_formacao_preco as any).status, 'precos_explicitos_importados_custo_ou_margem_pendentes');
+  assert.match(String((produto!.atributos_adicionais as any).__precificacao_pendencias), /custo e margem pendentes/);
+});

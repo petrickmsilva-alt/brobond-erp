@@ -224,11 +224,17 @@ export function celulaTexto(v: unknown): string {
   if (v === null || v === undefined) return '';
   if (v instanceof Date) return v.toISOString().slice(0, 10);
   if (typeof v === 'object') {
-    const obj = v as { text?: unknown; result?: unknown; richText?: unknown };
+    const obj = v as { text?: unknown; result?: unknown; richText?: unknown; error?: unknown; formula?: unknown; sharedFormula?: unknown };
     if (Array.isArray(obj.richText)) return obj.richText.map((t: any) => String(t?.text ?? '')).join('');
     if (obj.text !== undefined) return String(obj.text);
-    if (obj.result !== undefined) return String(obj.result);
-    return String(v);
+    const resultado = obj.result as unknown;
+    if (resultado !== undefined) {
+      if (resultado && typeof resultado === 'object' && 'error' in resultado) return '#' + String((resultado as { error: unknown }).error).replace(/^#/, '');
+      return resultado === null ? '' : String(resultado);
+    }
+    if (obj.error !== undefined) return '#' + String(obj.error).replace(/^#/, '');
+    if (obj.formula !== undefined || obj.sharedFormula !== undefined) return '';
+    return '';
   }
   return String(v);
 }
@@ -287,6 +293,18 @@ export function extrairLinhas(ws: ExcelJS.Worksheet, spec: FonteSpec = FONTES_CA
       celulas[rotulo] = texto;
     }
     if (vazia) continue;
+    if (spec.id === 'controle_estoque') {
+      const colunaSku = Object.keys(celulas).find((k) => normalizarRotulo(k) === normalizarRotulo('Código Industria'));
+      const skuAtual = colunaSku ? celulas[colunaSku].trim() : '';
+      if (colunaSku && (!skuAtual || /^#(?:REF|N\/A|VALUE|NAME)\b/i.test(skuAtual))) {
+        const item = pegar(celulas, 'Item').trim();
+        const tamanho = pegar(celulas, 'Tamanho').trim();
+        if (item && tamanho) {
+          celulas[colunaSku] = item + tamanho;
+          celulas['__SKU_FORMULA_ORIGEM'] = 'Item&Tamanho (fallback determinístico; fórmula sem resultado em cache ou com erro)';
+        }
+      }
+    }
     linhas.push({ linha: r, celulas });
   }
   const classificacao = cabecalho.filter((c) => c).map((coluna) => ({ coluna, ...classificarColuna(coluna) }));
@@ -1224,6 +1242,9 @@ export function normalizarItem(
       __planilha_linha: String(linha.linha),
       __planilha_ids_item: pegar(c, 'IDs Item Origem') || pegar(c, 'Item'),
       __planilha_dados_originais: pegar(c, 'Linhas Originais Planilha') || JSON.stringify([c]),
+      __sku_formula_origem: pegar(c, '__SKU_FORMULA_ORIGEM'),
+      __precificacao_status: formacao?.calculo ? 'calculada' : (formacao?.precos.length ? 'precos_explicitos_custo_ou_margem_pendentes' : 'pendente'),
+      __precificacao_pendencias: JSON.stringify(formacao?.erros ?? []),
     },
     calculo_precificacao: formacao?.calculo ?? null,
     erros_precificacao: errosPrecificacao,
@@ -2645,7 +2666,14 @@ function camposComuns(it: ItemNormalizado, empresaId: number, corId: number | nu
     margem_varejo_2un_pct: formacao?.margem_varejo_2un_pct ?? null,
     margem_varejo_cartao_pct: formacao?.margem_varejo_cartao_pct ?? null,
     margem_varejo_combo_cartao_pct: formacao?.margem_varejo_combo_cartao_pct ?? null,
-    memoria_formacao_preco: formacao?.memoria ?? {},
+    memoria_formacao_preco: formacao?.memoria ?? {
+      versao: 'BROBOND-PRECO-0125-v1', origem: 'TABELA DE PREÇO BASE PARA ERP',
+      status: it.precos.length ? 'precos_explicitos_importados_custo_ou_margem_pendentes' : 'formacao_pendente',
+      fonte: it.fonte, linha_planilha: it.linha, sku: it.codigo_industria,
+      pendencias: it.erros_precificacao, custo_base_origem: it.custo_base,
+      precos_explicitos: it.precos.map((p) => ({ canal: p.canal, condicao: p.condicao, quantidade_minima: p.quantidade_minima, preco: p.preco, margem_pct: null, regra_calculo: p.regra_calculo })),
+      observacao: 'Nenhum custo ou margem foi estimado. Campos permanecem nulos até existir custo-fonte válido.',
+    },
     peso_liquido_g: it.peso_g,
     peso_bruto_g: it.peso_g,
     altura_mm: it.altura_mm,
