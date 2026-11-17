@@ -12,7 +12,7 @@ import QRCode from 'qrcode';
 import { createRequire } from 'node:module';
 import { createHash, randomBytes } from 'node:crypto';
 import { HttpError } from './errors';
-import { assertRegistroDaEmpresaParaEscrita, buscarRegistroDaEmpresa, clienteNaCarteiraVigente, idsClientesDaCarteira, empresaDoRegistroAudit, type EscopoEmpresa } from './empresa';
+import { assertRegistroDaEmpresaParaEscrita, buscarRegistroDaEmpresa, clienteNaCarteiraVigente, idsClientesDaCarteira, empresaDoRegistroAudit, escopoDeSistema, type EscopoEmpresa } from './empresa';
 import { RESOURCES } from './resources';
 import { escopoDe, exigirComercial, getStore, toHttpError } from './services';
 import { currentUser } from './auth';
@@ -21,6 +21,7 @@ import type { Row } from './store';
 import { labelOf } from './store';
 import { attachImages } from './uploads';
 import { recalcularTotal } from './itens';
+import { gradeVendavelDaEmpresa } from './estoqueCanonico';
 import { montarTabelaMedidas, tsIso } from './medidas';
 import type { TabelaMedidas } from './medidas';
 import { criarAcessoPortal } from './portal';
@@ -176,9 +177,9 @@ export async function catalogoPublico(req: Request, res: Response) {
     });
   }
 
-  const [produtos, estoques, tamanhos] = await Promise.all([
+  const [produtos, estoqueVendavel, tamanhos] = await Promise.all([
     s.list(RESOURCES.produtos, { page: 1, pageSize: 2000, filter: filtro, sort: 'nome', dir: 'asc' }),
-    s.list(RESOURCES.estoques, { page: 1, pageSize: 6000, filter: { empresa_id: empresaId } }),
+    gradeVendavelDaEmpresa(escopoDeSistema(empresaId)),
     s.list(RESOURCES.tamanhos, { page: 1, pageSize: 200, sort: 'ordem', dir: 'asc' }),
   ]);
   await attachImages(RESOURCES.produtos, produtos.rows);
@@ -278,22 +279,33 @@ export async function catalogoPublico(req: Request, res: Response) {
   const lista: Row[] = produtos.rows
     .filter((p) => p.exibir_site !== false && p.ativo !== false)
     .map((p) => {
-    const doProduto = estoques.rows.filter((e) => Number(e.produto_id) === Number(p.id));
-    // Sempre devolve os tamanhos com saldo para o cliente selecionar. A
-    // quantidade só aparece quando `mostrar_saldo` está habilitado.
-    const tamanhosLinha = [...new Set(doProduto.map((e) => Number(e.tamanho_id)))]
-      .map((tid) => ({
-        tamanho_id: tid,
-        codigo: tamCodigo.get(tid) || '',
-        quantidade_real: doProduto.filter((e) => Number(e.tamanho_id) === tid).reduce((a, e) => a + Number(e.quantidade || 0), 0),
+    // Variações não possuem saldo próprio: consultam o produto pai e a célula
+    // do seu tamanho, como PDV, faturamento e WooCommerce.
+    const produtoEstoqueId = p.produto_pai_id ? Number(p.produto_pai_id) : Number(p.id);
+    const tamanhoVariacaoId = p.variacao_tamanho_id ? Number(p.variacao_tamanho_id) : null;
+    // Catálogo exibe somente tamanhos efetivamente vendáveis. O saldo visível
+    // é o mesmo que o PDV/faturamento conseguem baixar após compromissos ativos.
+    const doProduto = estoqueVendavel.filter((linha) =>
+      linha.produto_id === produtoEstoqueId &&
+      linha.disponivel > 0 &&
+      (tamanhoVariacaoId === null || linha.tamanho_id === tamanhoVariacaoId)
+    );
+    const tamanhosLinha = doProduto
+      .map((linha) => ({
+        tamanho_id: linha.tamanho_id,
+        codigo: linha.tamanho_id === null ? '' : tamCodigo.get(Number(linha.tamanho_id)) || '',
+        quantidade_real: linha.disponivel,
       }))
-      .filter((t) => t.quantidade_real > 0)
       .sort((a, b) => {
-        const ai = tamanhos.rows.findIndex((x) => Number(x.id) === a.tamanho_id);
-        const bi = tamanhos.rows.findIndex((x) => Number(x.id) === b.tamanho_id);
+        const ai = a.tamanho_id === null ? -1 : tamanhos.rows.findIndex((x) => Number(x.id) === a.tamanho_id);
+        const bi = b.tamanho_id === null ? -1 : tamanhos.rows.findIndex((x) => Number(x.id) === b.tamanho_id);
         return ai - bi;
       })
-      .map((t) => ({ tamanho_id: t.tamanho_id, codigo: t.codigo, quantidade: mostrarSaldo ? t.quantidade_real : null }));
+      .map((linha) => ({
+        tamanho_id: linha.tamanho_id,
+        codigo: linha.codigo,
+        quantidade: mostrarSaldo ? linha.quantidade_real : null,
+      }));
     const precos = precoDoProduto(p);
     return {
       id: Number(p.id),
@@ -370,16 +382,16 @@ export async function criarPedidoCatalogo(req: Request, res: Response) {
   }
 
   const filtro = await filtrosPublicosDoCatalogo(catalogo, empresaId);
-  const [produtosR, tamanhosR, estoquesR] = await Promise.all([
+  const [produtosR, tamanhosR] = await Promise.all([
     s.list(RESOURCES.produtos, { page: 1, pageSize: 2000, filter: filtro }),
     s.list(RESOURCES.tamanhos, { page: 1, pageSize: 200 }),
-    s.list(RESOURCES.estoques, { page: 1, pageSize: 10000, filter: { empresa_id: empresaId } }),
   ]);
   const produtoPorId = new Map<number, Row>(produtosR.rows.map((p) => [Number(p.id), p]));
   const tamanhoPorId = new Map<number, Row>(tamanhosR.rows.map((t) => [Number(t.id), t]));
 
   try {
     const pedido = await s.transaction(async (tx) => {
+      const estoqueVendavelTx = await gradeVendavelDaEmpresa(escopoDeSistema(empresaId), tx);
       const clientesR = RESOURCES.clientes;
       let cliente = email ? await s.findOneWhere(clientesR, { empresa_id: empresaId, email }, tx) : null;
       if (!cliente) {
@@ -424,7 +436,9 @@ export async function criarPedidoCatalogo(req: Request, res: Response) {
       let subtotal = 0;
       for (const raw of itens) {
         const produtoId = Number(raw.produto_id);
-        let tamanhoId = Number(raw.tamanho_id);
+        let tamanhoId: number | null = raw.tamanho_id === null || raw.tamanho_id === undefined || raw.tamanho_id === ''
+          ? null
+          : Number(raw.tamanho_id);
         const quantidade = Number(raw.quantidade);
         const produto = produtoPorId.get(produtoId);
         if (!produto || !Number.isInteger(quantidade) || quantidade <= 0 || quantidade > 9999) {
@@ -432,17 +446,25 @@ export async function criarPedidoCatalogo(req: Request, res: Response) {
         }
         if (politica?.produto_min_qtd && quantidade < politica.produto_min_qtd) throw new HttpError(400, `A política “${politica.nome}” exige ao menos ${politica.produto_min_qtd} peça(s) por item.`);
         if (politica && quantidade % politica.multiplo_qtd !== 0) throw new HttpError(400, `A política “${politica.nome}” exige quantidades múltiplas de ${politica.multiplo_qtd}.`);
-        // O tamanho precisa pertencer ao produto deste tenant. O dicionário
-        // global de tamanhos, isoladamente, não é autoridade para casar o item.
-        if (!Number.isInteger(tamanhoId) || tamanhoId <= 0) {
-          const comSaldo = estoquesR.rows.find((e) => Number(e.produto_id) === produtoId && Number(e.quantidade) > 0);
-          if (!comSaldo) throw new HttpError(400, 'Selecione um tamanho disponível para este produto.');
-          tamanhoId = Number(comSaldo.tamanho_id);
+
+        // A variação usa a mesma célula do pai. O tamanho é validado pela grade
+        // vendável do Neon, nunca pela existência de uma linha física isolada.
+        const produtoEstoqueId = produto.produto_pai_id ? Number(produto.produto_pai_id) : produtoId;
+        if (tamanhoId === null && produto.variacao_tamanho_id) tamanhoId = Number(produto.variacao_tamanho_id);
+        if (tamanhoId !== null && (!Number.isInteger(tamanhoId) || tamanhoId <= 0)) tamanhoId = null;
+        if (tamanhoId === null) {
+          const comSaldo = estoqueVendavelTx
+            .filter((linha) => linha.produto_id === produtoEstoqueId && linha.disponivel > 0)
+            .sort((a, b) => (a.tamanho_id ?? -1) - (b.tamanho_id ?? -1))[0];
+          if (!comSaldo) throw new HttpError(409, 'Este produto não possui tamanho com estoque disponível para venda.');
+          tamanhoId = comSaldo.tamanho_id;
         }
-        const tamanho = tamanhoPorId.get(tamanhoId);
-        const tamanhoDoProduto = estoquesR.rows.some((e) => Number(e.produto_id) === produtoId && Number(e.tamanho_id) === tamanhoId);
-        if (!tamanho || !tamanhoDoProduto) {
-          throw new HttpError(400, 'Selecione um tamanho válido para este produto.');
+        const tamanho = tamanhoId === null ? null : tamanhoPorId.get(tamanhoId);
+        const linhaEstoque = estoqueVendavelTx.find(
+          (linha) => linha.produto_id === produtoEstoqueId && linha.tamanho_id === tamanhoId
+        );
+        if ((tamanhoId !== null && !tamanho) || !linhaEstoque || linhaEstoque.disponivel <= 0) {
+          throw new HttpError(409, 'O tamanho selecionado não possui estoque disponível neste momento. Atualize o catálogo e tente novamente.');
         }
         if (produto.exibir_site === false || produto.ativo === false) {
           throw new HttpError(400, `O produto "${labelOf(RESOURCES.produtos, produto)}" não está disponível para pedido pelo site.`);
@@ -793,9 +815,9 @@ export async function catalogoEmbed(req: Request, res: Response) {
     });
   }
 
-  const [produtos, estoques, tamanhos] = await Promise.all([
+  const [produtos, estoqueVendavel, tamanhos] = await Promise.all([
     s.list(RESOURCES.produtos, { page: 1, pageSize: 500, filter: filtro, sort: 'nome', dir: 'asc' }),
-    s.list(RESOURCES.estoques, { page: 1, pageSize: 6000, filter: { empresa_id: empresaId } }),
+    gradeVendavelDaEmpresa(escopoDeSistema(empresaId)),
     s.list(RESOURCES.tamanhos, { page: 1, pageSize: 200, sort: 'ordem', dir: 'asc' }),
   ]);
   await attachImages(RESOURCES.produtos, produtos.rows);
@@ -814,13 +836,20 @@ export async function catalogoEmbed(req: Request, res: Response) {
   const cards = produtos.rows
     .filter((p) => p.exibir_site !== false && p.ativo !== false)
     .map((p) => {
-      const doProduto = estoques.rows.filter((e) => Number(e.produto_id) === Number(p.id));
-      const tamanhosLinha = [...new Set(doProduto.map((e) => Number(e.tamanho_id)))]
-        .map((tid) => ({
-          codigo: tamCodigo.get(tid) || '',
-          saldo: doProduto.filter((e) => Number(e.tamanho_id) === tid).reduce((a, e) => a + Number(e.quantidade || 0), 0),
-        }))
-        .filter((t) => t.saldo > 0);
+      // Variações leem o saldo do pai + tamanho, nunca uma célula própria.
+      const produtoEstoqueId = p.produto_pai_id ? Number(p.produto_pai_id) : Number(p.id);
+      const tamanhoVariacaoId = p.variacao_tamanho_id ? Number(p.variacao_tamanho_id) : null;
+      // Embed usa a mesma disponibilidade vendável do catálogo JSON e do PDV.
+      const tamanhosLinha = estoqueVendavel
+        .filter((linha) =>
+          linha.produto_id === produtoEstoqueId &&
+          linha.disponivel > 0 &&
+          (tamanhoVariacaoId === null || linha.tamanho_id === tamanhoVariacaoId)
+        )
+        .map((linha) => ({
+          codigo: linha.tamanho_id === null ? '' : tamCodigo.get(Number(linha.tamanho_id)) || '',
+          saldo: linha.disponivel,
+        }));
       const varejo = Number(p.preco_venda || 0);
       const atacado = Number(p.preco_atacado || p.preco_venda || 0);
       const preco = precoComPolitica(canalEfetivo === 'atacado' ? atacado : varejo, politica);

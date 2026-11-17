@@ -39,6 +39,7 @@ import { getResource } from './resources';
 import { checkAccess, getStore, lancarMovimentacaoDentro, toHttpError, type Actor } from './services';
 import { currentUser } from './auth';
 import { assertRegistroDaEmpresa, escopoDoAtor, type EscopoEmpresa } from './empresa';
+import { celulasDaEmpresa, reservasAtivasPorCelula, reservasDetalhadasDaCelula } from './estoqueCanonico';
 import { parseId } from './validate';
 import type { Row, Store, Tx } from './store';
 
@@ -93,68 +94,77 @@ export async function calcularDisponibilidade(
   filtro: { produto_id?: number | null; tamanho_id?: number | null; local_id?: number | null } = {},
   tx?: Tx
 ): Promise<LinhaDisponibilidade[]> {
-  const where: Record<string, unknown> = { empresa_id: escopo.empresaId };
-  if (filtro.produto_id) where.produto_id = filtro.produto_id;
-  if (filtro.tamanho_id) where.tamanho_id = filtro.tamanho_id;
-  if (filtro.local_id) where.local_id = filtro.local_id;
-
-  const saldos = await s.list(R_ESTOQUE(), { page: 1, pageSize: 50_000, filter: where }, tx);
-  const reservas = await s.list(R_RESERVA(), { page: 1, pageSize: 50_000, filter: where }, tx);
-  const transferencias = await s.list(
-    R_TRANSF(),
-    { page: 1, pageSize: 50_000, filter: { empresa_id: escopo.empresaId, status: 'em_transito' } },
-    tx
-  );
+  const [saldos, reservas, transferencias] = await Promise.all([
+    celulasDaEmpresa(escopo, tx),
+    reservasAtivasPorCelula(escopo, {}, tx),
+    s.list(
+      R_TRANSF(),
+      { page: 1, pageSize: 50_000, filter: { empresa_id: escopo.empresaId, status: 'em_transito' } },
+      tx
+    ),
+  ]);
   const itensEmTransito = transferencias.rows.length
-    ? await s.list(
-        R_ITEM(),
-        { page: 1, pageSize: 50_000, filter: { empresa_id: escopo.empresaId } },
-        tx
-      )
-    : { rows: [] as Row[] };
+    ? await s.list(R_ITEM(), { page: 1, pageSize: 50_000, filter: { empresa_id: escopo.empresaId } }, tx)
+    : { rows: [] as Row[], total: 0 };
+  if (saldos.length > 50_000 || transferencias.total > transferencias.rows.length || itensEmTransito.total > itensEmTransito.rows.length) {
+    throw new HttpError(409, 'A disponibilidade de estoque excede o limite seguro de leitura. Nenhum resultado parcial foi retornado.');
+  }
   const idsEmTransito = new Set(transferencias.rows.map((t) => Number(t.id)));
   const localDe = new Map(transferencias.rows.map((t) => [Number(t.id), Number(t.origem_local_id)]));
 
-  const chave = (produtoId: number, tamanhoId: number | null, localId: number | null) => `${produtoId}|${tamanhoId ?? ''}|${localId ?? ''}`;
+  const chave = (produtoId: number, tamanhoId: number | null, localId: number | null) =>
+    produtoId + '|' + (tamanhoId === null ? '' : tamanhoId) + '|' + (localId === null ? '' : localId);
   const mapa = new Map<string, LinhaDisponibilidade>();
 
-  for (const row of saldos.rows) {
-    const produtoId = Number(row.produto_id);
-    const tamanhoId = n(row.tamanho_id);
-    const localId = n(row.local_id);
-    const k = chave(produtoId, tamanhoId, localId);
-    mapa.set(k, {
-      produto_id: produtoId,
-      tamanho_id: tamanhoId,
-      local_id: localId,
-      local: row.local ? String(row.local) : null,
-      fisico: Number(row.quantidade ?? 0),
-      reservado: 0,
-      empenhado: 0,
-      bloqueado: 0,
-      em_transito: 0,
-      disponivel: 0,
-    });
-  }
-
-  for (const r of reservas.rows) {
-    if (String(r.status ?? 'ativa') !== 'ativa') continue;
-    const produtoId = Number(r.produto_id);
-    const tamanhoId = n(r.tamanho_id);
-    const localId = n(r.local_id);
+  const garantirLinha = (produtoId: number, tamanhoId: number | null, localId: number | null): LinhaDisponibilidade => {
     const k = chave(produtoId, tamanhoId, localId);
     let linha = mapa.get(k);
     if (!linha) {
-      // Comprometimento sem saldo registrado: aparece com físico zero (é
-      // exatamente o caso que precisa de atenção — reserva sem estoque).
-      linha = { produto_id: produtoId, tamanho_id: tamanhoId, local_id: localId, local: null, fisico: 0, reservado: 0, empenhado: 0, bloqueado: 0, em_transito: 0, disponivel: 0 };
+      const detalhe = reservasDetalhadasDaCelula(reservas, produtoId, tamanhoId, localId);
+      linha = {
+        produto_id: produtoId,
+        tamanho_id: tamanhoId,
+        local_id: localId,
+        local: null,
+        fisico: 0,
+        reservado: detalhe.reservado,
+        empenhado: detalhe.empenhado,
+        bloqueado: detalhe.bloqueado,
+        em_transito: 0,
+        disponivel: 0,
+      };
       mapa.set(k, linha);
     }
-    const qtd = Number(r.quantidade ?? 0);
-    const tipo = String(r.tipo ?? 'reserva');
-    if (tipo === 'bloqueio') linha.bloqueado += qtd;
-    else if (tipo === 'empenho') linha.empenhado += qtd;
-    else linha.reservado += qtd;
+    return linha;
+  };
+
+  // O físico e a identidade da célula vêm do canonicalizador, nunca de uma
+  // soma por nome de local. Compromissos sem local são descontados de cada
+  // célula candidata exatamente como no faturamento.
+  for (const saldo of saldos) {
+    const linha = garantirLinha(saldo.produto_id, saldo.tamanho_id, saldo.local_id);
+    const detalhe = reservasDetalhadasDaCelula(reservas, saldo.produto_id, saldo.tamanho_id, saldo.local_id);
+    linha.local = saldo.local;
+    linha.fisico = saldo.quantidade;
+    linha.reservado = detalhe.reservado;
+    linha.empenhado = detalhe.empenhado;
+    linha.bloqueado = detalhe.bloqueado;
+  }
+
+  // Compromissos ainda sem célula física são exibidos com físico zero, sem
+  // criar saldo ou inventar local.
+  for (const mapaTipo of [reservas.porTipo, reservas.semLocalPorTipo]) {
+    if (!mapaTipo) continue;
+    for (const mapaTipoLinha of Object.values(mapaTipo)) {
+      for (const chaveReserva of mapaTipoLinha.keys()) {
+        const [produtoBruto, tamanhoBruto, localBruto] = chaveReserva.split(':');
+        const produtoId = Number(produtoBruto);
+        const tamanhoId = tamanhoBruto === 'null' ? null : Number(tamanhoBruto);
+        const localId = localBruto === 'null' ? null : Number(localBruto);
+        if (!Number.isInteger(produtoId) || produtoId <= 0 || (tamanhoId !== null && !Number.isInteger(tamanhoId))) continue;
+        garantirLinha(produtoId, tamanhoId, localId);
+      }
+    }
   }
 
   for (const item of itensEmTransito.rows) {
@@ -162,20 +172,21 @@ export async function calcularDisponibilidade(
     const produtoId = Number(item.produto_id);
     const tamanhoId = n(item.tamanho_id);
     const localId = n(localDe.get(Number(item.transferencia_id)));
-    const k = chave(produtoId, tamanhoId, localId);
-    let linha = mapa.get(k);
-    if (!linha) {
-      linha = { produto_id: produtoId, tamanho_id: tamanhoId, local_id: localId, local: null, fisico: 0, reservado: 0, empenhado: 0, bloqueado: 0, em_transito: 0, disponivel: 0 };
-      mapa.set(k, linha);
-    }
+    const linha = garantirLinha(produtoId, tamanhoId, localId);
     const jaRecebido = Number(item.quantidade_recebida ?? 0);
     linha.em_transito += Math.max(0, Number(item.quantidade ?? 0) - jaRecebido);
   }
 
   for (const linha of mapa.values()) {
-    linha.disponivel = linha.fisico - linha.reservado - linha.bloqueado - linha.empenhado;
+    linha.disponivel = Math.max(0, linha.fisico - linha.reservado - linha.bloqueado - linha.empenhado);
   }
-  return [...mapa.values()].sort((a, b) => a.produto_id - b.produto_id || (a.tamanho_id ?? 0) - (b.tamanho_id ?? 0));
+  return [...mapa.values()]
+    .filter((linha) =>
+      (filtro.produto_id == null || linha.produto_id === filtro.produto_id) &&
+      (filtro.tamanho_id == null || linha.tamanho_id === filtro.tamanho_id) &&
+      (filtro.local_id == null || linha.local_id === filtro.local_id)
+    )
+    .sort((a, b) => a.produto_id - b.produto_id || (a.tamanho_id ?? 0) - (b.tamanho_id ?? 0) || (a.local_id ?? 0) - (b.local_id ?? 0));
 }
 
 /** GET /api/estoque/disponibilidade?produto_id=&tamanho_id=&local_id= */

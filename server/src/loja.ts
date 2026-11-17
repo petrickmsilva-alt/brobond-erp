@@ -31,6 +31,7 @@ import { checkAccess, escopoDe, getStore, validarReferenciasDeSaida, validarTama
 import { RESOURCES } from './resources';
 import { currentUser } from './auth';
 import { recalcularTotal } from './itens';
+import { gradeVendavelDaEmpresa } from './estoqueCanonico';
 import { normalizarOrigem } from './urlPublica';
 import { precoOficialDoErp, decidirPrecoItem } from './commerce/woocommerce/precoAutoridade';
 import { registrarDivergenciasPreco, registrarMinimoAtacadoRejeitado } from './commerce/woocommerce/reconciliacao';
@@ -203,25 +204,23 @@ export async function produtosLoja(req: Request, res: Response) {
   checkAccess(RESOURCES.produtos, actor, 'read');
   const escopo = exigirEscopoWoo(actor);
   const s = getStore();
-  const [produtosR, estoquesR, tamanhosR] = await Promise.all([
+  const [produtosR, estoqueVendavel, tamanhosR] = await Promise.all([
     s.list(RESOURCES.produtos, { page: 1, pageSize: 20000, sort: 'sku', dir: 'asc', filter: { empresa_id: escopo.empresaId } }),
-    s.list(RESOURCES.estoques, { page: 1, pageSize: 20000, filter: { empresa_id: escopo.empresaId } }),
+    gradeVendavelDaEmpresa(escopo),
     s.list(RESOURCES.tamanhos, { page: 1, pageSize: 20000, sort: 'ordem', dir: 'asc' }),
   ]);
-  garantirLeituraCompleta('produtos e saldos', produtosR, estoquesR, tamanhosR);
-  await Promise.all([
-    validarReferenciasDeSaida(RESOURCES.produtos, produtosR.rows, escopo),
-    validarReferenciasDeSaida(RESOURCES.estoques, estoquesR.rows, escopo),
-  ]);
+  garantirLeituraCompleta('produtos e tamanhos', produtosR, tamanhosR);
+  await validarReferenciasDeSaida(RESOURCES.produtos, produtosR.rows, escopo);
   const tamanhoPorId = new Map<number, string>(tamanhosR.rows.map((t) => [Number(t.id), String(t.codigo || '').toUpperCase()]));
+  const linhasPorProduto = new Map<number, typeof estoqueVendavel>();
+  for (const linha of estoqueVendavel) {
+    const linhas = linhasPorProduto.get(linha.produto_id) ?? [];
+    linhas.push(linha);
+    linhasPorProduto.set(linha.produto_id, linhas);
+  }
   const saldoPorProduto = new Map<number, number>();
-  const celulas = new Set<string>();
-  for (const e of estoquesR.rows) {
-    const chave = `${Number(e.produto_id)}:${e.tamanho_id === null || e.tamanho_id === undefined ? 'null' : Number(e.tamanho_id)}:${String(e.local || '')}`;
-    if (celulas.has(chave)) throw new HttpError(409, 'Há saldos duplicados para o mesmo produto/tamanho/local. A sincronização com a loja foi bloqueada.');
-    celulas.add(chave);
-    const id = Number(e.produto_id);
-    saldoPorProduto.set(id, (saldoPorProduto.get(id) || 0) + Number(e.quantidade || 0));
+  for (const [produtoId, linhas] of linhasPorProduto) {
+    saldoPorProduto.set(produtoId, linhas.reduce((total, linha) => total + linha.disponivel, 0));
   }
 
   const cfg = configLoja();
@@ -256,19 +255,25 @@ export async function produtosLoja(req: Request, res: Response) {
         .trim()
         .toUpperCase();
       const encontrado = sku ? naLoja.get(sku) : undefined;
+      const produtoEstoqueId = p.produto_pai_id ? Number(p.produto_pai_id) : Number(p.id);
+      const tamanhoVariacaoId = p.variacao_tamanho_id ? Number(p.variacao_tamanho_id) : null;
+      const linhasVendaveis = (linhasPorProduto.get(produtoEstoqueId) ?? []).filter((linha) =>
+        linha.disponivel > 0 &&
+        (tamanhoVariacaoId === null || linha.tamanho_id === tamanhoVariacaoId)
+      );
       return {
         sku,
         nome: String(p.nome || ''),
         exibir_site: p.exibir_site !== false,
-        saldo: saldoPorProduto.get(Number(p.id)) || 0,
+        saldo: linhasVendaveis.reduce((total, linha) => total + linha.disponivel, 0),
         preco_venda: Number(p.preco_venda || 0),
         preco_atacado: Number(p.preco_atacado || 0),
         na_loja: encontrado ? { id: encontrado.id, tipo: encontrado.tipo, url: encontrado.permalink || null } : null,
         tamanhos: [
           ...new Set(
-            estoquesR.rows
-              .filter((e) => Number(e.produto_id) === Number(p.id))
-              .map((e) => tamanhoPorId.get(Number(e.tamanho_id)))
+            linhasVendaveis
+              .filter((linha) => linha.tamanho_id !== null)
+              .map((linha) => tamanhoPorId.get(Number(linha.tamanho_id)))
               .filter(Boolean)
           ),
         ],
@@ -350,16 +355,13 @@ export async function importarPedidosLoja(req: Request, res: Response) {
       `/orders?status=${encodeURIComponent(status)}&after=${encodeURIComponent(depois)}&per_page=${limite}&orderby=date&order=desc`
     )) || [];
 
-  const [produtosR, tamanhosR, estoquesR] = await Promise.all([
+  const [produtosR, tamanhosR, estoqueVendavel] = await Promise.all([
     s.list(RESOURCES.produtos, { page: 1, pageSize: 20000, filter: { empresa_id: escopo.empresaId } }),
     s.list(RESOURCES.tamanhos, { page: 1, pageSize: 20000, sort: 'ordem', dir: 'asc' }),
-    s.list(RESOURCES.estoques, { page: 1, pageSize: 20000, filter: { empresa_id: escopo.empresaId } }),
+    gradeVendavelDaEmpresa(escopo),
   ]);
-  garantirLeituraCompleta('produtos, tamanhos e saldos', produtosR, tamanhosR, estoquesR);
-  await Promise.all([
-    validarReferenciasDeSaida(RESOURCES.produtos, produtosR.rows, escopo),
-    validarReferenciasDeSaida(RESOURCES.estoques, estoquesR.rows, escopo),
-  ]);
+  garantirLeituraCompleta('produtos e tamanhos', produtosR, tamanhosR);
+  await validarReferenciasDeSaida(RESOURCES.produtos, produtosR.rows, escopo);
   const produtoPorSku = new Map<string, Row>();
   for (const p of produtosR.rows) {
     const sku = String(p.sku || '')
@@ -375,15 +377,15 @@ export async function importarPedidosLoja(req: Request, res: Response) {
     if (codigo && tamanhoPorCodigo.has(codigo)) throw new HttpError(409, 'Há códigos de tamanho duplicados. A importação WooCommerce foi bloqueada.');
     if (codigo) tamanhoPorCodigo.set(codigo, t);
   }
-  const celulasSaldo = new Set<string>();
-  for (const saldo of estoquesR.rows) {
-    const chave = `${Number(saldo.produto_id)}:${saldo.tamanho_id === null || saldo.tamanho_id === undefined ? 'null' : Number(saldo.tamanho_id)}:${String(saldo.local || '')}`;
-    if (celulasSaldo.has(chave)) throw new HttpError(409, 'Há saldos duplicados para o mesmo produto/tamanho/local. A importação WooCommerce foi bloqueada.');
-    celulasSaldo.add(chave);
-  }
-  const primeiroTamanhoComSaldo = (produtoId: number): number | null => {
-    const comSaldo = estoquesR.rows.find((e) => Number(e.produto_id) === produtoId && Number(e.quantidade || 0) > 0);
-    return comSaldo ? Number(comSaldo.tamanho_id) : null;
+  const primeiroTamanhoComSaldo = (produto: Row): number | null => {
+    const produtoEstoqueId = produto.produto_pai_id ? Number(produto.produto_pai_id) : Number(produto.id);
+    const tamanhoVariacao = produto.variacao_tamanho_id ? Number(produto.variacao_tamanho_id) : null;
+    const comSaldo = estoqueVendavel.find((linha) =>
+      linha.produto_id === produtoEstoqueId &&
+      linha.disponivel > 0 &&
+      (tamanhoVariacao === null || linha.tamanho_id === tamanhoVariacao)
+    );
+    return comSaldo?.tamanho_id ?? null;
   };
 
   const canal = canalLoja();
@@ -415,7 +417,7 @@ export async function importarPedidosLoja(req: Request, res: Response) {
       }
       const pedidoTamanho = extrairTamanho(linha);
       const tamanho = pedidoTamanho ? tamanhoPorCodigo.get(pedidoTamanho) : undefined;
-      const tamanhoId = tamanho ? Number(tamanho.id) : (primeiroTamanhoComSaldo(Number(produto.id)) ?? Number(tamanhos[0]?.id ?? 0));
+      const tamanhoId = tamanho ? Number(tamanho.id) : (primeiroTamanhoComSaldo(produto) ?? Number(tamanhos[0]?.id ?? 0));
       if (!tamanhoId) {
         itensPendentes.push(`${rotuloLinha(linha)} (sem tamanho no ERP)`);
         continue;
@@ -651,24 +653,38 @@ export async function enviarEstoqueLojaInterno(escopo: EscopoEmpresa, actor: { i
   const saldoProduto = new Map<number, number>();
   const saldoProdutoTamanho = new Map<number, Map<string, number>>();
   const fisicoProduto = new Map<number, number>();
-  const { disponibilidadesPorTamanho } = await import('./commerce/catalogo');
+  const codigoTamanhoPorId = new Map<number, string>(
+    tamanhosR.rows.map((t) => [Number(t.id), String(t.codigo || '').trim().toUpperCase()])
+  );
+  const estoqueVendavel = await gradeVendavelDaEmpresa(escopo);
+  const gradePorProduto = new Map<number, typeof estoqueVendavel>();
+  for (const linha of estoqueVendavel) {
+    const linhas = gradePorProduto.get(linha.produto_id) ?? [];
+    linhas.push(linha);
+    gradePorProduto.set(linha.produto_id, linhas);
+  }
   for (const p of produtosR.rows) {
     if (p.ativo === false || p.exibir_site === false) continue;
     const pid = Number(p.id);
     const paiId = p.produto_pai_id ? Number(p.produto_pai_id) : null;
     const tamanhoVariacao = p.variacao_tamanho_id ? Number(p.variacao_tamanho_id) : null;
-    // Variação: o saldo pertence ao PAI + tamanho (nunca à linha de `estoques`
-    // da variação, que não é vendável) — mesma regra do PDV/faturamento.
-    const linhas = await disponibilidadesPorTamanho(escopo, paiId && tamanhoVariacao ? paiId : pid);
+    // Variação: o saldo pertence ao PAI + tamanho, nunca à linha filha.
+    // A grade inteira é consultada uma vez e reutilizada por todas as SKUs.
+    const produtoEstoqueId = paiId && tamanhoVariacao ? paiId : pid;
+    const linhas = (gradePorProduto.get(produtoEstoqueId) ?? []).filter(
+      (linha) => !paiId || !tamanhoVariacao || linha.tamanho_id === tamanhoVariacao
+    );
     let totalDisponivel = 0;
     let totalFisico = 0;
     const porTam = new Map<string, number>();
-    for (const l of linhas) {
-      if (paiId && tamanhoVariacao && Number(l.tamanho_id) !== tamanhoVariacao) continue;
-      const disponivel = Math.max(0, Math.trunc(Number(l.disponivel || 0)));
+    for (const linha of linhas) {
+      const disponivel = Math.max(0, Math.trunc(Number(linha.disponivel || 0)));
       totalDisponivel += disponivel;
-      totalFisico += Math.max(0, Math.trunc(Number(l.fisico || 0)));
-      if (!paiId && l.codigo) porTam.set(String(l.codigo).trim().toUpperCase(), disponivel);
+      totalFisico += Math.max(0, Math.trunc(Number(linha.fisico || 0)));
+      if (!paiId && linha.tamanho_id !== null) {
+        const codigo = codigoTamanhoPorId.get(Number(linha.tamanho_id));
+        if (codigo) porTam.set(codigo, disponivel);
+      }
     }
     saldoProduto.set(pid, totalDisponivel);
     fisicoProduto.set(pid, totalFisico);

@@ -144,7 +144,12 @@ export async function localPadraoDaEmpresa(escopo: EscopoEmpresa, tx?: Tx): Prom
     throw new HttpError(409, 'A empresa ativa possui mais de um local padrão. Corrija a configuração antes de consultar o estoque.');
   }
   const padrao = padroes.rows[0];
-  if (padrao && padrao.ativo !== false) return { id: Number(padrao.id), nome: String(padrao.nome) };
+  if (padrao) {
+    if (padrao.ativo === false || padrao.ativo === 0 || padrao.ativo === 'false' || padrao.ativo === '0') {
+      throw new HttpError(409, 'O local padrão da empresa ativa está inativo. Escolha um local padrão ativo antes de consultar a disponibilidade.');
+    }
+    return { id: Number(padrao.id), nome: String(padrao.nome) };
+  }
   const ativos = await s.list(locais, {
     page: 1,
     pageSize: 2,
@@ -152,7 +157,9 @@ export async function localPadraoDaEmpresa(escopo: EscopoEmpresa, tx?: Tx): Prom
     dir: 'asc',
     filter: { empresa_id: escopo.empresaId, ativo: true },
   }, tx);
-  if (ativos.total > 1) return null;
+  if (ativos.total > 1) {
+    throw new HttpError(409, 'A empresa ativa não possui um local padrão único. Defina o local padrão antes de consultar a disponibilidade.');
+  }
   const unico = ativos.rows[0];
   return unico ? { id: Number(unico.id), nome: String(unico.nome) } : null;
 }
@@ -191,11 +198,16 @@ function chaveCelula(produtoId: number, tamanhoId: number | null, localId: numbe
   return `${produtoId}:${tamanhoId === null ? 'null' : tamanhoId}:${localId === null ? 'null' : localId}`;
 }
 
+export type TipoReservaEstoque = 'reserva' | 'empenho' | 'bloqueio';
+
 export type ReservasAtivas = {
   /** Total ativo por célula exata (produto + tamanho + local). */
   porCelula: Map<string, number>;
   /** Total ativo SEM local definido (produto + tamanho) — vale para qualquer local. */
   semLocal: Map<string, number>;
+  /** Quebra por tipo para relatórios e transferência; campos opcionais mantêm compatibilidade com fixtures antigas. */
+  porTipo?: Record<TipoReservaEstoque, Map<string, number>>;
+  semLocalPorTipo?: Record<TipoReservaEstoque, Map<string, number>>;
 };
 
 /**
@@ -216,21 +228,30 @@ export async function reservasAtivasPorCelula(
   const lista = await s.list(getResource('estoque_reservas')!, { page: 1, pageSize: 100_000, filter: where }, tx);
   const porCelula = new Map<string, number>();
   const semLocal = new Map<string, number>();
+  const tipos: TipoReservaEstoque[] = ['reserva', 'empenho', 'bloqueio'];
+  const porTipo = Object.fromEntries(tipos.map((tipo) => [tipo, new Map<string, number>()])) as Record<TipoReservaEstoque, Map<string, number>>;
+  const semLocalPorTipo = Object.fromEntries(tipos.map((tipo) => [tipo, new Map<string, number>()])) as Record<TipoReservaEstoque, Map<string, number>>;
   for (const r of lista.rows) {
     const qtd = quantidade(r.quantidade);
     if (!(qtd > 0)) continue;
     const produtoId = Number(r.produto_id);
     const tamanhoId = normalizarTamanho(r.tamanho_id);
     const localId = r.local_id === null || r.local_id === undefined || r.local_id === '' ? null : Number(r.local_id);
+    const tipoBruto = String(r.tipo ?? 'reserva');
+    const tipo: TipoReservaEstoque = tipos.includes(tipoBruto as TipoReservaEstoque)
+      ? tipoBruto as TipoReservaEstoque
+      : 'reserva';
     if (localId === null) {
       const chave = chaveCelula(produtoId, tamanhoId, null);
       semLocal.set(chave, (semLocal.get(chave) ?? 0) + qtd);
+      semLocalPorTipo[tipo].set(chave, (semLocalPorTipo[tipo].get(chave) ?? 0) + qtd);
     } else {
       const chave = chaveCelula(produtoId, tamanhoId, localId);
       porCelula.set(chave, (porCelula.get(chave) ?? 0) + qtd);
+      porTipo[tipo].set(chave, (porTipo[tipo].get(chave) ?? 0) + qtd);
     }
   }
-  return { porCelula, semLocal };
+  return { porCelula, semLocal, porTipo, semLocalPorTipo };
 }
 
 /**
@@ -264,6 +285,166 @@ export function reservadoDaCelula(
     (reservas.porCelula.get(chaveCelula(produtoId, tamanhoId, localId)) ?? 0) +
     (reservas.semLocal.get(chaveCelula(produtoId, tamanhoId, null)) ?? 0)
   );
+}
+
+/** Quebra dos compromissos ativos para uma célula física específica. */
+export function reservasDetalhadasDaCelula(
+  reservas: ReservasAtivas,
+  produtoId: number,
+  tamanhoId: number | null,
+  localId: number | null
+): { reservado: number; empenhado: number; bloqueado: number } {
+  const exata = chaveCelula(produtoId, tamanhoId, localId);
+  const global = chaveCelula(produtoId, tamanhoId, null);
+  const valor = (tipo: TipoReservaEstoque): number =>
+    localId === null
+      ? reservas.semLocalPorTipo?.[tipo].get(global) ?? 0
+      : (reservas.porTipo?.[tipo].get(exata) ?? 0) +
+        (reservas.semLocalPorTipo?.[tipo].get(global) ?? 0);
+  return {
+    reservado: valor('reserva'),
+    empenhado: valor('empenho'),
+    bloqueado: valor('bloqueio'),
+  };
+}
+
+/**
+ * Linha da grade comercial canônica. O físico considera todos os locais; o
+ * disponível usa os locais candidatos ao faturamento (saída e fallback padrão).
+ */
+export type SaldoVendavelGrade = {
+  produto_id: number;
+  tamanho_id: number | null;
+  fisico: number;
+  reservado: number;
+  disponivel: number;
+  local_id: number | null;
+  local: string | null;
+  por_local: { local_id: number; local: string; quantidade: number }[];
+  outros_locais: number;
+};
+
+function reservadoDoTamanho(reservas: ReservasAtivas, produtoId: number, tamanhoId: number | null): number {
+  const prefixo = String(produtoId) + ':' + (tamanhoId === null ? 'null' : String(tamanhoId)) + ':';
+  let total = 0;
+  for (const mapa of [reservas.porCelula, reservas.semLocal]) {
+    for (const [chave, qtd] of mapa) {
+      if (chave.startsWith(prefixo)) total += qtd;
+    }
+  }
+  return total;
+}
+
+/**
+ * Núcleo puro compartilhado pela leitura individual e pela grade em lote.
+ * Não soma disponibilidades de locais diferentes: escolhe o melhor local
+ * candidato por produto/tamanho, como a baixa atômica da venda.
+ */
+function montarGradeVendavel(
+  celulas: CelulaCanonica[],
+  reservas: ReservasAtivas,
+  candidatos: LocalEstoque[]
+): SaldoVendavelGrade[] {
+  type Grupo = {
+    produto_id: number;
+    tamanho_id: number | null;
+    fisico: number;
+    porLocal: Map<number, number>;
+  };
+  const grupos = new Map<string, Grupo>();
+  const chave = (produtoId: number, tamanhoId: number | null) =>
+    String(produtoId) + ':' + (tamanhoId === null ? 'null' : String(tamanhoId));
+  const garantir = (produtoId: number, tamanhoId: number | null): Grupo => {
+    const id = chave(produtoId, tamanhoId);
+    let grupo = grupos.get(id);
+    if (!grupo) {
+      grupo = { produto_id: produtoId, tamanho_id: tamanhoId, fisico: 0, porLocal: new Map() };
+      grupos.set(id, grupo);
+    }
+    return grupo;
+  };
+
+  for (const celula of celulas) {
+    const grupo = garantir(celula.produto_id, celula.tamanho_id);
+    grupo.fisico += celula.quantidade;
+    if (celula.local_id !== null) {
+      grupo.porLocal.set(celula.local_id, (grupo.porLocal.get(celula.local_id) ?? 0) + celula.quantidade);
+    }
+  }
+
+  // Uma reserva sem saldo físico também aparece com disponibilidade zero.
+  for (const mapa of [reservas.porCelula, reservas.semLocal]) {
+    for (const chaveReserva of mapa.keys()) {
+      const [produto, tamanho] = chaveReserva.split(':');
+      const produtoId = Number(produto);
+      const tamanhoId = tamanho === 'null' ? null : Number(tamanho);
+      if (Number.isInteger(produtoId) && produtoId > 0 && (tamanhoId === null || Number.isInteger(tamanhoId))) {
+        garantir(produtoId, tamanhoId);
+      }
+    }
+  }
+
+  return [...grupos.values()]
+    .map((grupo) => {
+      const porLocal = candidatos.map((local) => ({
+        local_id: local.id,
+        local: local.nome,
+        quantidade: Math.max(
+          0,
+          (grupo.porLocal.get(local.id) ?? 0) -
+            reservadoDaCelula(reservas, grupo.produto_id, grupo.tamanho_id, local.id)
+        ),
+      }));
+      let melhor = porLocal[0] ?? null;
+      for (const item of porLocal.slice(1)) {
+        if (item.quantidade > (melhor?.quantidade ?? 0)) melhor = item;
+      }
+      const fisicoCandidatos = candidatos.reduce(
+        (total, local) => total + (grupo.porLocal.get(local.id) ?? 0),
+        0
+      );
+      return {
+        produto_id: grupo.produto_id,
+        tamanho_id: grupo.tamanho_id,
+        fisico: grupo.fisico,
+        reservado: reservadoDoTamanho(reservas, grupo.produto_id, grupo.tamanho_id),
+        disponivel: melhor?.quantidade ?? 0,
+        local_id: melhor?.local_id ?? null,
+        local: melhor?.local ?? null,
+        por_local: porLocal,
+        outros_locais: Math.max(0, grupo.fisico - fisicoCandidatos),
+      };
+    })
+    .sort((a, b) => a.produto_id - b.produto_id || (a.tamanho_id ?? -1) - (b.tamanho_id ?? -1));
+}
+
+/**
+ * Grade vendável de toda a empresa para catálogo, checkout e sincronizadores.
+ * A tabela estoques continua sendo o único saldo físico persistido.
+ */
+export async function gradeVendavelDaEmpresa(escopo: EscopoEmpresa, tx?: Tx): Promise<SaldoVendavelGrade[]> {
+  const [celulas, reservas, padrao] = await Promise.all([
+    celulasDaEmpresa(escopo, tx),
+    reservasAtivasPorCelula(escopo, {}, tx),
+    localPadraoDaEmpresa(escopo, tx),
+  ]);
+
+  if (!padrao) {
+    const ativos = await getStore().list(getResource('locais')!, {
+      page: 1,
+      pageSize: 2,
+      filter: { empresa_id: escopo.empresaId, ativo: true },
+    }, tx);
+    if (ativos.total > 0) {
+      throw new HttpError(409, 'A empresa possui múltiplos locais ativos sem local padrão. Defina o local padrão antes de consultar disponibilidade comercial.');
+    }
+  }
+
+  // Leitura de catálogo/importação pode acontecer antes de haver local físico
+  // cadastrado: devolve físico com disponível zero. A venda/faturamento segue
+  // usando locaisDeSaida(), que exige um local ativo e falha fechado.
+  const candidatos = padrao ? [padrao] : [];
+  return montarGradeVendavel(celulas, reservas, candidatos);
 }
 
 /**
@@ -450,34 +631,32 @@ export async function saldoVendavel(
   tx?: Tx
 ): Promise<SaldoVendavel> {
   const alvo = normalizarTamanho(tamanhoId);
-  const { candidatos } = await locaisDeSaida(escopo, localPreferidoId, tx);
-  const celulas = await celulasDoProduto(escopo, produtoId, tx).then((todas) =>
-    todas.filter((celula) => chaveTamanho(celula.tamanho_id) === chaveTamanho(alvo))
-  );
-  // DISPONÍVEL = físico − reservado/empenhado/bloqueado, por local candidato.
-  // Sem isso a tela oferecia peça já comprometida (bloqueio de qualidade, OP
-  // empenhada) e o faturamento recusava depois — duas regras de disponibilidade.
+  const [{ candidatos }] = await Promise.all([locaisDeSaida(escopo, localPreferidoId, tx)]);
+  const celulas = await celulasDoProduto(escopo, produtoId, tx);
   const reservas = await reservasAtivasPorCelula(escopo, { produtoId }, tx);
-  const porLocal = candidatos.map((local) => ({
-    local_id: local.id,
-    local: local.nome,
-    quantidade: Math.max(
-      0,
-      celulas.filter((celula) => celula.local_id === local.id).reduce((soma, celula) => soma + celula.quantidade, 0) -
-        reservadoDaCelula(reservas, produtoId, alvo, local.id)
-    ),
-  }));
-  const fisico = celulas.reduce((soma, celula) => soma + celula.quantidade, 0);
-  let melhor = porLocal[0];
-  for (const item of porLocal.slice(1)) if (item.quantidade > melhor.quantidade) melhor = item;
-  const dosCandidatos = porLocal.reduce((soma, item) => soma + item.quantidade, 0);
+  const linha = montarGradeVendavel(
+    celulas.filter((celula) => chaveTamanho(celula.tamanho_id) === chaveTamanho(alvo)),
+    reservas,
+    candidatos
+  ).find((item) => item.produto_id === produtoId && chaveTamanho(item.tamanho_id) === chaveTamanho(alvo));
+  if (linha) {
+    return {
+      tamanho_id: alvo,
+      quantidade: linha.disponivel,
+      local_id: linha.local_id,
+      local: linha.local,
+      por_local: linha.por_local,
+      fisico: linha.fisico,
+      outros_locais: linha.outros_locais,
+    };
+  }
   return {
     tamanho_id: alvo,
-    quantidade: melhor?.quantidade ?? 0,
-    local_id: melhor?.local_id ?? null,
-    local: melhor?.local ?? null,
-    por_local: porLocal,
-    fisico,
-    outros_locais: Math.max(0, fisico - dosCandidatos),
+    quantidade: 0,
+    local_id: candidatos[0]?.id ?? null,
+    local: candidatos[0]?.nome ?? null,
+    por_local: candidatos.map((local) => ({ local_id: local.id, local: local.nome, quantidade: 0 })),
+    fisico: 0,
+    outros_locais: 0,
   };
 }
