@@ -1,6 +1,6 @@
 // ============================================================================
 // CARGA DA POLÍTICA COMERCIAL EM POSTGRESQL REAL — o preview NÃO grava e a
-// confirmação PERSISTE pai, variações, atributos e preços por condição.
+// confirmação PERSISTE pai, variações, atributos, preços e o snapshot físico.
 //
 // O teste de memória (`carga-politica-comercial.test.ts`) prova a regra; este
 // prova o que só o PostgreSQL mostra:
@@ -11,7 +11,8 @@
 //   • produto-pai × variação respeitam a FK composta por empresa;
 //   • a reimportação é IDEMPOTENTE (nenhum produto/preço duplicado);
 //   • a base do canal só é preenchida quando estava ZERADA;
-//   • NENHUMA quantidade física é criada em `estoques` (o Diretor lança depois).
+//   • o snapshot físico de todas as abas é gravado em um único local LOJA;
+//   • reimportação idêntica não duplica saldo nem movimentos de ajuste.
 //
 // Sem DATABASE_URL o arquivo se auto-pula (gate test:pg / job testes-postgres).
 // ============================================================================
@@ -44,6 +45,59 @@ async function xlsxBase64(linhas: Linha[]): Promise<string> {
     const row = ws.getRow(12 + i);
     CABECALHO.forEach((h, j) => { if (l[h] !== undefined) row.getCell(j + 1).value = l[h] as any; });
   });
+
+  // As abas abaixo representam o contrato mínimo do inventário físico real.
+  // O primeiro SKU declara uma unidade no saldo consolidado; os demais ficam
+  // explicitamente zerados. As demais fontes de contagem estão vazias.
+  const saida = wb.addWorksheet('CONTROLE ESTOQUE SAÍDA');
+  const cabSaida = [
+    'Codigo Cadastro', 'COLEÇÃO', 'CATEGORIA', 'SUBCATEGORIA',
+    'Código Internto Industria', 'Descrição', 'Nº', 'Estoque', 'Saída',
+    'Saldo', 'Estoque2', 'Saída2', 'Saldo2', 'Reservado',
+    'TT Est.', 'TT Saída', 'TT Saldo',
+  ];
+  cabSaida.forEach((h, i) => (saida.getRow(7).getCell(i + 1).value = h));
+  linhas.forEach((item, i) => {
+    const row = saida.getRow(8 + i);
+    const quantidade = i === 0 ? 1 : 0;
+    row.getCell(1).value = item.Item ?? String(i + 1);
+    row.getCell(5).value = item['Código Industria'] ?? '';
+    row.getCell(6).value = item['DESCRIÇÃO'] ?? '';
+    row.getCell(8).value = quantidade;
+    row.getCell(9).value = 0;
+    row.getCell(10).value = quantidade;
+    row.getCell(11).value = 0;
+    row.getCell(12).value = 0;
+    row.getCell(13).value = 0;
+    row.getCell(15).value = quantidade;
+    row.getCell(16).value = 0;
+    row.getCell(17).value = quantidade;
+  });
+
+  const baseControle = wb.addWorksheet('BASE CONTROLE DE ESTOQUE');
+  [
+    'Item', 'COLEÇÃO', 'CATEGORIA', 'SUBCATEGORIA',
+    'Descrição do produto/serviço2', 'Tamanho', 'Código Industria',
+  ].forEach((h, i) => (baseControle.getRow(11).getCell(i + 1).value = h));
+  linhas.forEach((item, i) => {
+    const row = baseControle.getRow(12 + i);
+    row.getCell(1).value = item.Item ?? String(i + 1);
+    row.getCell(5).value = item['DESCRIÇÃO'] ?? '';
+    row.getCell(6).value = item.Tamanho ?? '';
+    row.getCell(7).value = item['Código Industria'] ?? '';
+  });
+
+  const jefferson = wb.addWorksheet('Estoque Com Jefferson');
+  for (const cab of [4, 12]) {
+    ['DESCRIÇÃO', 'P', 'M', 'G', 'GG', 'XG', 'TOTAL'].forEach((h, i) => {
+      jefferson.getRow(cab).getCell(i + 1).value = h;
+    });
+  }
+
+  const roupas = wb.addWorksheet('Política Comercial Roupas (2)');
+  ['Item', 'Categoria', 'Descrição do produto/serviço2', 'Código Industria', 'Qtd. Estoque']
+    .forEach((h, i) => (roupas.getRow(4).getCell(i + 1).value = h));
+
   const buf = await wb.xlsx.writeBuffer();
   return Buffer.from(buf as ArrayBuffer).toString('base64');
 }
@@ -69,7 +123,7 @@ function linhas(sufixo: string): Linha[] {
   ];
 }
 
-test('carga em PG real: preview não grava, confirmação persiste cadastro + atributos + preços e zera estoque', { skip }, async (t) => {
+test('carga em PG real: preview não grava, confirmação persiste cadastro, preços e snapshot físico', { skip }, async (t) => {
   const { migrate, query } = await import('../../src/db');
   await migrate();
   const { RESOURCES: R } = await import('../../src/resources');
@@ -87,6 +141,10 @@ test('carga em PG real: preview não grava, confirmação persiste cadastro + at
 
   t.after(async () => {
     const apagar = async (sql: string) => query(sql, [empresaId]).catch(() => undefined);
+    await apagar(`DELETE FROM auditoria WHERE empresa_id = $1`);
+    await apagar(`DELETE FROM movimentacoes WHERE empresa_id = $1`);
+    await apagar(`DELETE FROM estoque_reservas WHERE empresa_id = $1`);
+    await apagar(`DELETE FROM estoques WHERE empresa_id = $1`);
     await apagar(`DELETE FROM produto_precos_condicao_historico WHERE empresa_id = $1`);
     await apagar(`DELETE FROM produto_precos_condicao WHERE empresa_id = $1`);
     await apagar(`DELETE FROM precificacao_memoria WHERE empresa_id = $1`);
@@ -117,7 +175,9 @@ test('carga em PG real: preview não grava, confirmação persiste cadastro + at
   assert.equal(conf.saida.status ?? 200, 200, JSON.stringify(conf.saida.json));
   assert.equal(conf.saida.json.produtos, 2, 'dois produtos-pai');
   assert.equal(conf.saida.json.variacoes, 2, 'duas variações da camiseta');
-  assert.equal(conf.saida.json.estoque_importado, false);
+  assert.equal(conf.saida.json.estoque_importado, true, 'a confirmação importa o saldo físico da planilha para LOJA');
+  assert.equal(conf.saida.json.estoque.unidades_importadas, 1);
+  assert.equal(conf.saida.json.estoque.celulas_importadas, 3);
 
   // 3) PERSISTÊNCIA conferida por SQL direto (não pela resposta HTTP).
   const pai = (await query(
@@ -163,11 +223,15 @@ test('carga em PG real: preview não grava, confirmação persiste cadastro + at
   assert.equal(oculos.ativo, false);
   assert.equal(oculos.produto_pai_id ?? null, null);
 
-  // 7) NENHUMA quantidade física foi importada.
-  const estoques = await store.countWhere(R.estoques, { empresa_id: empresaId });
-  assert.equal(estoques, 0, 'a carga não cria saldo de estoque');
+  // 7) O snapshot físico final fica no único local LOJA.
+  const estoques = await store.list(R.estoques, { page: 1, pageSize: 100, filter: { empresa_id: empresaId } });
+  assert.equal(estoques.rows.length, 3, 'uma célula canônica por SKU da planilha');
+  assert.equal(estoques.rows.reduce((total: number, row: any) => total + Number(row.quantidade), 0), 1);
+  assert.equal(estoques.rows.filter((row: any) => Number(row.quantidade) > 0).length, 1);
+  assert.ok(estoques.rows.every((row: any) => row.local === 'LOJA'));
+  const movimentosAntes = await store.countWhere(R.movimentacoes, { empresa_id: empresaId });
 
-  // 8) IDEMPOTÊNCIA: reimportar não duplica produto nem preço.
+  // 8) IDEMPOTÊNCIA: reimportar não duplica produto, preço, saldo ou movimento.
   const prodAntes = await store.countWhere(R.produtos, { empresa_id: empresaId });
   const precosAntes = await store.countWhere(R.produto_precos_condicao, { empresa_id: empresaId });
   const conf2 = resFake();
@@ -176,5 +240,9 @@ test('carga em PG real: preview não grava, confirmação persiste cadastro + at
   assert.equal(conf2.saida.json.variacoes, 0, 'nenhuma variação nova');
   assert.equal(await store.countWhere(R.produtos, { empresa_id: empresaId }), prodAntes);
   assert.equal(await store.countWhere(R.produto_precos_condicao, { empresa_id: empresaId }), precosAntes, 'preços não duplicam');
+  const estoquesDepois = await store.list(R.estoques, { page: 1, pageSize: 100, filter: { empresa_id: empresaId } });
+  assert.equal(estoquesDepois.rows.length, estoques.rows.length, 'reimportação idêntica mantém a mesma quantidade de células');
+  assert.equal(estoquesDepois.rows.reduce((total: number, row: any) => total + Number(row.quantidade), 0), 1);
+  assert.equal(await store.countWhere(R.movimentacoes, { empresa_id: empresaId }), movimentosAntes, 'reimportação sem delta não duplica movimentos');
   assert.ok(escopo.empresaId === empresaId);
 });
