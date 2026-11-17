@@ -230,8 +230,19 @@ async function resolverItensCarrinho(
       escopo: escopoDeSistema(empresaId),
       quantidade,
     });
-    const preco = precoCondicao.origem_preco === 'condicao' && precoCondicao.preco_aplicado !== null
-      ? { ...precoLista, preco: precoCondicao.preco_aplicado }
+    // O resolver central é a autoridade para TODO preço comercial: condição,
+    // lista vigente ou política por canal. Não restringir a aplicação à origem
+    // "condicao", pois isso descartava silenciosamente listas e políticas no
+    // checkout e fazia ERP/Commerce divergirem.
+    const preco = precoCondicao.preco_aplicado !== null
+      ? {
+          ...precoLista,
+          preco: precoCondicao.preco_aplicado,
+          preco_original: precoCondicao.preco_aplicado !== precoLista.preco
+            ? precoLista.preco
+            : precoLista.preco_original,
+          promocional: precoCondicao.preco_aplicado < precoLista.preco,
+        }
       : precoLista;
     if (!Number.isFinite(preco.preco) || preco.preco <= 0) {
       if (opcoes.tolerante) {
