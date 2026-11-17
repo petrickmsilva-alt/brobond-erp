@@ -1,6 +1,6 @@
 // ============================================================================
 // CARGA DA POLÍTICA COMERCIAL EM POSTGRESQL REAL — o preview NÃO grava e a
-// confirmação PERSISTE pai, variações, atributos, preços e o snapshot físico.
+// confirmação PERSISTE pai, variações, atributos e preços, mas NÃO importa saldo físico.
 //
 // O teste de memória (`carga-politica-comercial.test.ts`) prova a regra; este
 // prova o que só o PostgreSQL mostra:
@@ -11,8 +11,8 @@
 //   • produto-pai × variação respeitam a FK composta por empresa;
 //   • a reimportação é IDEMPOTENTE (nenhum produto/preço duplicado);
 //   • preco_venda/preco_atacado recebem a base calculada pelo motor de preço;
-//   • o snapshot físico de todas as abas é gravado em um único local LOJA;
-//   • reimportação idêntica não duplica saldo nem movimentos de ajuste.
+//   • quantidades físicas presentes nas abas são ignoradas na confirmação;
+//   • nenhum saldo, célula de estoque ou movimento de ajuste é criado.
 //
 // Sem DATABASE_URL o arquivo se auto-pula (gate test:pg / job testes-postgres).
 // ============================================================================
@@ -83,9 +83,9 @@ async function xlsxBase64(linhas: Linha[]): Promise<string> {
     });
   });
 
-  // As abas abaixo representam o contrato mínimo do inventário físico real.
-  // O primeiro SKU declara uma unidade no saldo consolidado; os demais ficam
-  // explicitamente zerados. As demais fontes de contagem estão vazias.
+  // A fixture inclui deliberadamente uma unidade física na planilha para provar
+  // que a carga comercial ignora quantidades. Estoque inicial será lançado
+  // posteriormente pelo administrador no local LOJA.
   const saida = wb.addWorksheet('CONTROLE ESTOQUE SAÍDA');
   const cabSaida = [
     'Codigo Cadastro', 'COLEÇÃO', 'CATEGORIA', 'SUBCATEGORIA',
@@ -156,7 +156,7 @@ function linhas(sufixo: string): Linha[] {
   ];
 }
 
-test('carga em PG real: preview não grava, confirmação persiste cadastro, preços e snapshot físico', { skip }, async (t) => {
+test('carga em PG real: preview não grava, confirmação persiste cadastro e preços sem importar estoque', { skip }, async (t) => {
   const { migrate, query } = await import('../../src/db');
   await migrate();
   const { RESOURCES: R } = await import('../../src/resources');
@@ -220,9 +220,9 @@ test('carga em PG real: preview não grava, confirmação persiste cadastro, pre
   assert.equal(conf.saida.status ?? 200, 200, JSON.stringify(conf.saida.json));
   assert.equal(conf.saida.json.produtos, 2, 'dois produtos-pai');
   assert.equal(conf.saida.json.variacoes, 2, 'duas variações da camiseta');
-  assert.equal(conf.saida.json.estoque_importado, true, 'a confirmação importa o saldo físico da planilha para LOJA');
-  assert.equal(conf.saida.json.estoque.unidades_importadas, 1);
-  assert.equal(conf.saida.json.estoque.celulas_importadas, 3);
+  assert.equal(conf.saida.json.estoque_importado, false, 'a confirmação comercial não importa saldo físico');
+  assert.equal(conf.saida.json.estoque.unidades_importadas, 0, 'quantidades da planilha não entram no estoque');
+  assert.equal(conf.saida.json.estoque.celulas_importadas, 0, 'a carga não cria células físicas');
 
   // 3) PERSISTÊNCIA conferida por SQL direto (não pela resposta HTTP).
   const pai = (await query(
@@ -268,13 +268,11 @@ test('carga em PG real: preview não grava, confirmação persiste cadastro, pre
   assert.equal(oculos.ativo, false);
   assert.equal(oculos.produto_pai_id ?? null, null);
 
-  // 7) O snapshot físico final fica no único local LOJA.
+  // 7) Nenhuma célula física nem movimento é criado pela carga comercial.
   const estoques = await store.list(R.estoques, { page: 1, pageSize: 100, filter: { empresa_id: empresaId } });
-  assert.equal(estoques.rows.length, 3, 'uma célula canônica por SKU da planilha');
-  assert.equal(estoques.rows.reduce((total: number, row: any) => total + Number(row.quantidade), 0), 1);
-  assert.equal(estoques.rows.filter((row: any) => Number(row.quantidade) > 0).length, 1);
-  assert.ok(estoques.rows.every((row: any) => row.local === 'LOJA'));
+  assert.equal(estoques.rows.length, 0, 'não cria células de estoque, nem mesmo zeradas');
   const movimentosAntes = await store.countWhere(R.movimentacoes, { empresa_id: empresaId });
+  assert.equal(movimentosAntes, 0, 'não cria movimentos físicos a partir da planilha');
 
   // 8) IDEMPOTÊNCIA: reimportar não duplica produto, preço, saldo ou movimento.
   const prodAntes = await store.countWhere(R.produtos, { empresa_id: empresaId });
@@ -286,8 +284,7 @@ test('carga em PG real: preview não grava, confirmação persiste cadastro, pre
   assert.equal(await store.countWhere(R.produtos, { empresa_id: empresaId }), prodAntes);
   assert.equal(await store.countWhere(R.produto_precos_condicao, { empresa_id: empresaId }), precosAntes, 'preços não duplicam');
   const estoquesDepois = await store.list(R.estoques, { page: 1, pageSize: 100, filter: { empresa_id: empresaId } });
-  assert.equal(estoquesDepois.rows.length, estoques.rows.length, 'reimportação idêntica mantém a mesma quantidade de células');
-  assert.equal(estoquesDepois.rows.reduce((total: number, row: any) => total + Number(row.quantidade), 0), 1);
-  assert.equal(await store.countWhere(R.movimentacoes, { empresa_id: empresaId }), movimentosAntes, 'reimportação sem delta não duplica movimentos');
+  assert.equal(estoquesDepois.rows.length, 0, 'reimportação também não cria células de estoque');
+  assert.equal(await store.countWhere(R.movimentacoes, { empresa_id: empresaId }), movimentosAntes, 'reimportação não cria movimentos físicos');
   assert.ok(escopo.empresaId === empresaId);
 });

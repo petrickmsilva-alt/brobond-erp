@@ -74,11 +74,14 @@ function createMemoryMigrationClient() {
         txSnapshots = null;
         return { rows: [] };
       }
-      if (/^SELECT 1$/i.test(trimmed) || /pg_advisory_(?:un)?lock/i.test(trimmed)) {
+      if (/^SELECT 1$/i.test(trimmed) || /pg_advisory_(?:xact_)?(?:un)?lock/i.test(trimmed)) {
         return { rows: [] };
       }
       if (/^CREATE TABLE IF NOT EXISTS schema_migrations/i.test(trimmed)) {
         return { rows: [] };
+      }
+      if (/^SELECT id FROM schema_migrations WHERE id = \$1$/i.test(trimmed)) {
+        return { rows: applied.has(String(params?.[0] ?? '')) ? [{ id: String(params?.[0]) }] : [] };
       }
       if (/^SELECT id FROM schema_migrations$/i.test(trimmed)) {
         return { rows: [...applied].sort().map((id) => ({ id })) };
@@ -259,10 +262,11 @@ describe('PostgreSQL startup resilience (10 cenarios)', () => {
     assert.equal(releasedDestroy, false);
     assert.deepEqual(queries, [
       'SELECT 1',
-      "SELECT pg_advisory_lock(hashtext('brobond_schema_bootstrap'))",
+      'BEGIN',
+      "SELECT pg_advisory_xact_lock(hashtext('brobond_schema_bootstrap'))",
       'BOOTSTRAP',
+      'COMMIT',
       'MIGRATIONS',
-      "SELECT pg_advisory_unlock(hashtext('brobond_schema_bootstrap'))",
     ]);
   });
 
@@ -327,7 +331,7 @@ describe('PostgreSQL startup resilience (10 cenarios)', () => {
     assert.equal(calcularBackoffMs(3, 500, 3000), 2000);
     assert.equal(calcularBackoffMs(4, 500, 3000), 3000);
 
-    // 3b. Drop durante SELECT 1 e tentativa lenta que excede connectTimeoutMs devem destruir o cliente e recuperar na tentativa 3
+    // 3b. Drop durante SELECT 1 e tentativa lenta que excede connectTimeoutMs destroem o cliente e recuperam na tentativa 3
     let attempt = 0;
     const destroyed: Array<boolean | Error | undefined> = [];
     const { logger } = createSilentLogger();
@@ -492,7 +496,9 @@ describe('PostgreSQL startup resilience (10 cenarios)', () => {
       const code = await new Promise<number | null>((resolve) => srv.child.once('exit', (c) => resolve(c)));
       const elapsed = Date.now() - t0;
       assert.equal(code, 1);
-      assert.ok(elapsed < 10_000, `encerramento limitado no tempo (${elapsed}ms)`);
+      // O Windows pode levar alguns segundos para carregar o processo tsx.
+      // O timeout de boot (700ms) é verificado pelo log/exit; este limite cobre o harness.
+      assert.ok(elapsed < 30_000, `encerramento limitado no tempo (${elapsed}ms)`);
       assert.match(srv.getStderr(), /fase=conexao tipo=timeout/);
       assert.equal(/fase=desconhecida|\(null\)/.test(srv.getStderr()), false);
     } finally {
