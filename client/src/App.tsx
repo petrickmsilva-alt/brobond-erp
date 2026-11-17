@@ -15,6 +15,7 @@ import { finalizarMedicaoTela, iniciarMedicaoTela } from './lib/perf';
 // quando a rota é realmente acessada.
 const ModulePage = lazy(() => import('./pages/ModulePage'));
 const OperacionalDetalhePage = lazy(() => import('./pages/OperacionalDetalhePage'));
+const CargaPoliticaComercialPage = lazy(() => import('./pages/CargaPoliticaComercialPage'));
 const FinanceiroPeriodosPage = lazy(() => import('./pages/FinanceiroPeriodosPage'));
 const FinanceiroExtratoPage = lazy(() => import('./pages/FinanceiroExtratoPage'));
 const FiscalObrigacaoDetalhePage = lazy(() => import('./pages/FiscalObrigacaoDetalhePage'));
@@ -673,6 +674,14 @@ export default function App() {
             {/* OPERATIONAL CONTROL PLANE — detalhe/aprovação em PÁGINA própria
                 (padrão LISTA → PÁGINA). A aprovação exige sessão do ERP com
                 confirmação humana; o agente MCP não aprova. */}
+            <Route
+              path="carga-politica-comercial"
+              element={
+                <AdminOnly>
+                  <CargaPoliticaComercialPage />
+                </AdminOnly>
+              }
+            />
             <Route
               path="operacional/:id"
               element={
