@@ -38,6 +38,8 @@ import { currentUser } from './auth';
 import { parseNumeroTexto } from './csv';
 import { isValidGtin } from './ean';
 import { round2 } from './utils';
+import { createHash, randomUUID } from 'node:crypto';
+import { query as queryDb } from './db';
 import { validatePayload } from './validate';
 import type { Payload, Row, Tx } from './store';
 
@@ -2110,7 +2112,7 @@ export async function confirmarCarga(req: Request, res: Response) {
 // ---------------------------------------------------------------------------
 // Execução (dentro de UMA transação; reexecutável sem duplicar).
 // ---------------------------------------------------------------------------
-async function executarCarga(plano: Plano, inventario: InventarioPlanilha, actor: { id?: number; name?: string }, escopo: Escopo, tx: Tx) {
+export async function executarCarga(plano: Plano, inventario: InventarioPlanilha, actor: { id?: number; name?: string }, escopo: Escopo, tx: Tx) {
   const s = getStore();
   // Autoria: só grava o id se o usuário existir de fato. Em banco novo (ou no
   // modo demonstração) o ator é sintético e uma FK inválida rejeitaria TODA a
@@ -2727,4 +2729,124 @@ function payloadVariacao(it: PlanoItem, extra: { categoria_id: number | null; co
     variacao_chave: it.variacao_chave,
     variacao_tamanho_id: extra.variacao_tamanho_id,
   };
+}
+
+/**
+ * Fila durável da carga comercial. A gravação do catálogo e a transição para
+ * succeeded pertencem à MESMA transação PostgreSQL. Se o processo cair, a
+ * transação reverte e o lease expirado pode ser retomado por outra instância.
+ */
+let cargaWorkerAtivo = false;
+
+function hashPedidoCarga(body: Record<string, unknown>): string {
+  return createHash('sha256').update(JSON.stringify(body)).digest('hex');
+}
+
+export async function iniciarJobCarga(req: Request, res: Response) {
+  const actor = currentUser(req);
+  exigirGestor(actor);
+  checkAccess(RESOURCES.produtos, actor, 'create');
+  const body = (req.body || {}) as Record<string, unknown>;
+  if (typeof body.conteudo !== 'string' || !body.conteudo || typeof body.nome !== 'string' || !body.nome) {
+    throw new HttpError(400, 'Envie a planilha oficial para iniciar o processamento.');
+  }
+  if (body.conteudo.length > 28 * 1024 * 1024) throw new HttpError(413, 'A planilha excede o limite de conteúdo permitido.');
+  const empresaId = escopoDe(actor).empresaId;
+  const hash = hashPedidoCarga(body);
+  const inserted = await queryDb(
+    `INSERT INTO carga_politica_comercial_jobs
+      (id, empresa_id, usuario_id, idempotency_hash, payload)
+     VALUES ($1,$2,$3,$4,$5::jsonb)
+     ON CONFLICT (empresa_id, usuario_id, idempotency_hash)
+     DO UPDATE SET idempotency_hash = EXCLUDED.idempotency_hash
+     RETURNING id, status, created_at`,
+    [randomUUID(), empresaId, actor.id, hash, JSON.stringify(body)]
+  );
+  res.status(202).json({ job_id: inserted.rows[0].id, status: inserted.rows[0].status, created_at: inserted.rows[0].created_at });
+}
+
+export async function statusJobCarga(req: Request, res: Response) {
+  const actor = currentUser(req);
+  const result = await queryDb(
+    `SELECT id, status, result, error, created_at, started_at, finished_at, attempts
+       FROM carga_politica_comercial_jobs
+      WHERE id = $1 AND empresa_id = $2 AND usuario_id = $3`,
+    [req.params.id, escopoDe(actor).empresaId, actor.id]
+  );
+  if (!result.rows[0]) throw new HttpError(404, 'Processamento não encontrado.');
+  res.json(result.rows[0]);
+}
+
+async function reivindicarJobCarga(): Promise<any | null> {
+  const result = await queryDb(
+    `WITH candidato AS (
+       SELECT j.id
+         FROM carga_politica_comercial_jobs j
+        WHERE j.status = 'queued'
+           OR (j.status = 'running' AND j.heartbeat_at < now() - interval '2 minutes')
+        ORDER BY j.created_at
+        FOR UPDATE SKIP LOCKED
+        LIMIT 1
+     )
+     UPDATE carga_politica_comercial_jobs j
+        SET status = 'running', started_at = COALESCE(j.started_at, now()),
+            heartbeat_at = now(), attempts = j.attempts + 1, error = NULL
+       FROM candidato c WHERE j.id = c.id
+       RETURNING j.*`
+  );
+  return result.rows[0] || null;
+}
+
+export async function processarFilaCargaComercial(): Promise<void> {
+  if (cargaWorkerAtivo) return;
+  cargaWorkerAtivo = true;
+  let heartbeat: ReturnType<typeof setInterval> | null = null;
+  let job: any = null;
+  try {
+    job = await reivindicarJobCarga();
+    if (!job) return;
+    const usuario = await getStore().get(RESOURCES.usuarios, Number(job.usuario_id));
+    if (!usuario || usuario.ativo === false || !['admin', 'gerente'].includes(String(usuario.perfil))) {
+      throw new HttpError(403, 'Usuário não está mais habilitado a executar a carga.');
+    }
+    const actor = usuario as any;
+    exigirGestor(actor);
+    checkAccess(RESOURCES.produtos, actor, 'create');
+    if (escopoDe(actor).empresaId !== Number(job.empresa_id)) {
+      throw new HttpError(403, 'A empresa ativa do usuário mudou; solicite uma nova prévia.');
+    }
+    const { plano, reconciliacao, inventario } = await lerPlano(job.payload as Record<string, unknown>);
+    if (plano.itens.length > LIMITE_CARGA) throw new HttpError(413, `A carga aceita no máximo ${LIMITE_CARGA} linhas por vez.`);
+    heartbeat = setInterval(() => {
+      void queryDb('UPDATE carga_politica_comercial_jobs SET heartbeat_at = now() WHERE id = $1 AND status = $2', [job.id, 'running']).catch(() => undefined);
+    }, 15_000);
+    heartbeat.unref?.();
+    await getStore().transaction(async (tx) => {
+      const dados = await executarCarga(plano, inventario, actor, escopoDe(actor), tx);
+      const resultado = {
+        ok: true, ...dados, abas_examinadas: reconciliacao.abas.length, reconciliacao,
+        estoque_importado: false, estoque_fisico_removido: true, saldo_inicial: 0,
+        precos_sobrescritos: true, formulas_planilha_importadas: true,
+        observacao: 'Política comercial gravada por SKU. Células físicas anteriores removidas; nenhuma quantidade da planilha importada. O estoque inicial será lançado posteriormente no local LOJA.'
+      };
+      await tx!.query(
+        `UPDATE carga_politica_comercial_jobs SET status = 'succeeded',
+           result = $2::jsonb, error = NULL, finished_at = now(), heartbeat_at = now()
+         WHERE id = $1 AND status = 'running'`,
+        [job.id, JSON.stringify(resultado)]
+      );
+    });
+  } catch (error) {
+    const message = error instanceof HttpError ? error.message : 'Falha ao executar a carga; a transação foi revertida. Consulte os logs operacionais.';
+    if (job?.id) {
+      await queryDb(
+        `UPDATE carga_politica_comercial_jobs SET status = 'failed', error = $2,
+           finished_at = now(), heartbeat_at = now() WHERE id = $1 AND status = 'running'`,
+        [job.id, message.slice(0, 1500)]
+      ).catch(() => undefined);
+    }
+  } finally {
+    if (heartbeat) clearInterval(heartbeat);
+    cargaWorkerAtivo = false;
+  }
 }

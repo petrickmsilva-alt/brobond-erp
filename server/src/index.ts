@@ -73,7 +73,7 @@ import { listarEventosTerceirizacao, registrarEventoTerceirizacao } from './terc
 import { relatorio } from './relatorios';
 import { exportarRecurso } from './export';
 import { confirmarImportacao, modeloImportacao, previewImportacao } from './importacao';
-import { confirmarCarga, previewCarga } from './cargaPoliticaComercial';
+import { previewCarga, iniciarJobCarga, statusJobCarga, processarFilaCargaComercial } from './cargaPoliticaComercial';
 import {
   aplicarPrecoFicha,
   cancelarOrdem,
@@ -1733,7 +1733,9 @@ app.get('/api/importar/modelo', wrap(modeloImportacao));
 // Carga oficial da política comercial (planilha-base do cadastro mestre).
 // Prévia antes de gravar; a confirmação RE-LÊ o arquivo e é idempotente.
 app.post('/api/carga/politica-comercial/preview', wrap(previewCarga));
-app.post('/api/carga/politica-comercial/confirmar', wrap(confirmarCarga));
+app.post('/api/carga/politica-comercial/confirmar', wrap(iniciarJobCarga));
+app.post('/api/carga/politica-comercial/jobs', wrap(iniciarJobCarga));
+app.get('/api/carga/politica-comercial/jobs/:id', wrap(statusJobCarga));
 app.get('/api/:resource/export', wrap(async (req, res) => exportarRecurso(req, res, req.params.resource)));
 
 // Fase 6 — backup (admin)
@@ -1983,6 +1985,11 @@ async function start() {
   // Fila do commerce com cadência própria (backstop além do cron externo):
   // só inicia após prontidão confirmada e pula caso o banco deixe de estar pronto.
   if (process.env.NODE_ENV !== 'test') {
+    const filaCargaComercial = setInterval(() => {
+      if (hasDatabaseUrl() && !isDbConnected()) return;
+      void processarFilaCargaComercial().catch(() => log.error('carga_politica_comercial_worker_error'));
+    }, 5_000);
+    filaCargaComercial.unref?.();
     const filaCommerce = setInterval(() => {
       if (hasDatabaseUrl() && !isDbConnected()) return;
       void processarComercioAgendado().then((result) => {

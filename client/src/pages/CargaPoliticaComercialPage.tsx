@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { AlertTriangle, CheckCircle2, FileSpreadsheet, RefreshCw, ShieldCheck, Upload } from 'lucide-react';
 import { Alert, PageHeader } from '../components/ui';
 import { Card, CardHeader, PageShell, StatCard } from '../components/ui-kit-negocios';
@@ -28,6 +28,7 @@ type Preview = {
   truncado: boolean;
   nao_gravado: string;
 };
+type JobStatus = { id: string; status: 'queued' | 'running' | 'succeeded' | 'failed'; result?: Resultado; error?: string; attempts: number };
 type Resultado = {
   ok: boolean;
   produtos: number;
@@ -53,6 +54,8 @@ export default function CargaPoliticaComercialPage() {
   const [carregando, setCarregando] = useState(false);
   const [executando, setExecutando] = useState(false);
   const [erro, setErro] = useState('');
+  const [jobId, setJobId] = useState<string>(() => localStorage.getItem('brobond_carga_politica_job') || '');
+  const [jobStatus, setJobStatus] = useState<JobStatus | null>(null);
 
   const bloqueios = Boolean(preview && (
     preview.truncado ||
@@ -112,16 +115,48 @@ export default function CargaPoliticaComercialPage() {
     }
   }
 
+  useEffect(() => {
+    if (!jobId) return;
+    let ativo = true;
+    const consultar = async () => {
+      try {
+        const status = await api.get<JobStatus>(`/carga/politica-comercial/jobs/${jobId}`);
+        if (!ativo) return;
+        setJobStatus(status);
+        if (status.status === 'succeeded' && status.result) {
+          setResultado(status.result);
+          setPreview(null);
+          localStorage.removeItem('brobond_carga_politica_job');
+          setJobId('');
+        } else if (status.status === 'failed') {
+          setErro(status.error || 'A carga falhou e a transação foi revertida.');
+          localStorage.removeItem('brobond_carga_politica_job');
+          setJobId('');
+        }
+      } catch (e) {
+        if (ativo && e instanceof ApiError && e.status === 404) {
+          setErro('O processamento salvo não foi encontrado para esta sessão. Gere uma nova prévia antes de tentar novamente.');
+          localStorage.removeItem('brobond_carga_politica_job');
+          setJobId('');
+        }
+      }
+    };
+    void consultar();
+    const timer = window.setInterval(() => void consultar(), 2500);
+    return () => { ativo = false; window.clearInterval(timer); };
+  }, [jobId]);
+
   async function confirmar() {
-    if (!podeConfirmar || !conteudo || !nome) return;
+    if (!podeConfirmar || !conteudo || !nome || jobId) return;
     setExecutando(true);
     setErro('');
     try {
-      const dados = await api.post<Resultado>('/carga/politica-comercial/confirmar', { conteudo, nome });
-      setResultado(dados);
-      setPreview(null);
+      const job = await api.post<{ job_id: string; status: JobStatus['status'] }>('/carga/politica-comercial/jobs', { conteudo, nome });
+      localStorage.setItem('brobond_carga_politica_job', job.job_id);
+      setJobStatus({ id: job.job_id, status: job.status, attempts: 0 });
+      setJobId(job.job_id);
     } catch (e) {
-      setErro(e instanceof ApiError ? e.message : 'Não foi possível confirmar. Verifique a auditoria antes de qualquer nova tentativa.');
+      setErro(e instanceof ApiError ? e.message : 'Não foi possível iniciar o processamento. Uma repetição idêntica não duplica a carga.');
     } finally {
       setExecutando(false);
     }
@@ -160,17 +195,27 @@ export default function CargaPoliticaComercialPage() {
                 accept=".xlsx,.xls"
                 className="block w-full rounded-lg border border-slate-300 bg-white p-3 text-sm"
                 onChange={(e) => void escolherArquivo(e.target.files?.[0])}
-                disabled={carregando || executando}
+                disabled={carregando || executando || Boolean(jobId)}
               />
               {arquivo && <p className="text-sm text-slate-600">Arquivo: <strong>{arquivo.name}</strong> · {(arquivo.size / 1024 / 1024).toFixed(2)} MB</p>}
-              <button type="button" className="btn-primary inline-flex items-center gap-2" onClick={() => void gerarPreview()} disabled={!conteudo || carregando || executando}>
+              <button type="button" className="btn-primary inline-flex items-center gap-2" onClick={() => void gerarPreview()} disabled={!conteudo || carregando || executando || Boolean(jobId)}>
                 {carregando ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
                 {carregando ? 'Validando...' : 'Gerar prévia e validar'}
               </button>
             </div>
           </Card>
 
-          {preview && (
+          {jobId && (
+            <Card>
+              <CardHeader title="4. Processamento em segundo plano" subtitle="O servidor mantém o trabalho registrado e atualiza o estado automaticamente." icon={RefreshCw} />
+              <div className="p-4 text-sm">
+                <p><strong>Identificador:</strong> <span className="font-mono">{jobId}</span></p>
+                <p><strong>Estado:</strong> {jobStatus?.status === 'running' ? 'Executando a transação' : 'Na fila para execução'}</p>
+                <p className="text-slate-600">Não feche esta página para acompanhar o resultado. Se a conexão cair, o estado será recuperado ao reabrir a tela.</p>
+              </div>
+            </Card>
+          )}
+          {preview && !jobId && (
             <>
               <Card>
                 <CardHeader title="2. Resultado da prévia" subtitle="Indicadores calculados pelo importador no servidor. Nada foi gravado." icon={ShieldCheck} />
@@ -207,7 +252,7 @@ export default function CargaPoliticaComercialPage() {
                     Digite exatamente <span className="font-mono">{CONFIRMACAO}</span> para liberar a confirmação.
                     <input className="input mt-2 w-full" value={frase} onChange={(e) => setFrase(e.target.value)} placeholder={CONFIRMACAO} autoComplete="off" />
                   </label>
-                  <button type="button" className="btn-danger inline-flex items-center gap-2" onClick={() => void confirmar()} disabled={!podeConfirmar}>
+                  <button type="button" className="btn-danger inline-flex items-center gap-2" onClick={() => void confirmar()} disabled={!podeConfirmar || Boolean(jobId)}>
                     {executando ? <RefreshCw className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
                     {executando ? 'Executando transação...' : 'Confirmar carga oficial'}
                   </button>
