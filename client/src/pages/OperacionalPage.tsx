@@ -123,9 +123,14 @@ export default function OperacionalPage() {
         title="Controle Operacional"
         description="Solicitações, aprovações e execuções de workflows autorizados. Aprovar não é executar: a execução depende de aprovação humana e da política."
         actions={
-          <button type="button" className="btn-ghost inline-flex items-center gap-2" onClick={() => void carregar()}>
-            <RefreshCw size={16} /> Atualizar
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <Link to="/carga-politica-comercial" className="btn-primary inline-flex items-center gap-2">
+              <ShieldCheck size={16} /> Carga da Política Comercial
+            </Link>
+            <button type="button" className="btn-ghost inline-flex items-center gap-2" onClick={() => void carregar()}>
+              <RefreshCw size={16} /> Atualizar
+            </button>
+          </div>
         }
       />
 
