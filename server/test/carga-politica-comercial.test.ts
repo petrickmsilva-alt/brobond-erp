@@ -278,6 +278,9 @@ test('a confirmação cria pais por cor, grava preços calculados e não importa
   const produtoLegado = await s.insert(RESOURCES.produtos, {
     empresa_id: 1, sku: 'LEGADO-TESTE-845', nome: 'Produto físico de teste', ativo: true, formato: 'simples',
   });
+  const localSecundario = await s.insert(RESOURCES.locais, {
+    empresa_id: 1, nome: 'DEPÓSITO TESTE', tipo: 'deposito', nivel_wms: 'local', ativo: true, padrao: false,
+  });
   await s.insert(RESOURCES.estoques, {
     empresa_id: 1, produto_id: Number(produtoLegado.id), local_id: Number(loja!.id),
     local: 'LOJA', quantidade: 845, estoque_min: 0,
@@ -292,6 +295,15 @@ test('a confirmação cria pais por cor, grava preços calculados e não importa
   assert.equal(resp.body.estoque.unidades_importadas, 0);
   assert.equal(resp.body.estoque.saldo_inicial, 0);
   assert.equal(resp.body.estoque.local, 'LOJA');
+  assert.ok(resp.body.estoque.locais_adicionais_inativados >= 1, 'locais ativos extras são inativados, sem exclusão');
+  const localSecundarioAtualizado = await s.get(RESOURCES.locais, Number(localSecundario.id));
+  assert.equal(localSecundarioAtualizado!.ativo, false, 'o local secundário é inativado');
+  assert.equal(localSecundarioAtualizado!.padrao, false, 'o local secundário não permanece padrão');
+  const locaisAtivosAposCarga = await s.list(RESOURCES.locais, {
+    page: 1, pageSize: 100, filter: { empresa_id: 1, ativo: true },
+  });
+  assert.equal(locaisAtivosAposCarga.total, 1, 'LOJA é o único local ativo após a carga');
+  assert.equal(String(locaisAtivosAposCarga.rows[0].nome).toUpperCase(), 'LOJA');
   assert.equal(resp.body.estoque.celulas_removidas, 1, 'a célula física antiga foi excluída');
   assert.equal(resp.body.estoque.unidades_fisicas_removidas, 845, 'as 845 unidades de teste foram removidas');
   assert.equal(resp.body.estoque.produtos_antigos_inativados, 1, 'o produto legado fica inativo, sem apagar histórico');
