@@ -466,9 +466,12 @@ export async function aplicarBootstrapEstrutural(client: PoolClient): Promise<vo
 }
 
 /**
- * Boot do banco: conexão com retry + backoff progressivo, lock de sessão,
- * bootstrap estrutural e cadeia versionada. Idempotente: reexecutar num banco
- * pronto não altera nada.
+ * Boot do banco: conexão com retry + backoff progressivo, bootstrap
+ * estrutural e cadeia versionada. A serialização usa advisory locks
+ * TRANSACIONAIS (pg_advisory_xact_lock), compatíveis com PgBouncer/Neon em
+ * transaction pooling. Nunca usar lock de sessão neste caminho: o pooler pode
+ * devolver outro backend entre lock/unlock e deixar um lock órfão.
+ * Idempotente: reexecutar num banco pronto não altera nada.
  *
  * Nunca lança por falha de conexão/bootstrap/migration: registra a FASE e a
  * causa em `bootFailure()` e deixa `ready = false` (degradado).
@@ -544,8 +547,11 @@ export async function migrate(opts: MigrateOptions = {}): Promise<void> {
       }
 
       await candidate.query('SELECT 1');
-      await candidate.query(`SELECT pg_advisory_lock(hashtext('brobond_schema_bootstrap'))`);
 
+      // Não adquirir advisory lock de sessão aqui. Em Neon/PgBouncer com
+      // transaction pooling, lock/unlock de sessão pode atingir backends
+      // diferentes e deixar o lock preso indefinidamente. Cada fase abaixo
+      // adquire pg_advisory_xact_lock dentro da própria transação.
       lockClient = candidate;
       connected = true;
       bootStage = 'migrating';
@@ -626,21 +632,24 @@ export async function migrate(opts: MigrateOptions = {}): Promise<void> {
   let erroDeMigracao: unknown = null;
   try {
     try {
+      await lockClient.query('BEGIN');
+      await lockClient.query(`SELECT pg_advisory_xact_lock(hashtext('brobond_schema_bootstrap'))`);
       await bootstrapFn(lockClient);
+      await lockClient.query('COMMIT');
     } catch (e) {
+      await lockClient.query('ROLLBACK').catch(() => undefined);
       erroDeBootstrap = e;
     }
     // A cadeia versionada roda MESMO com o bootstrap tendo falhado: ela é a
     // autoridade para bancos que já existem e não pode ser bloqueada por um
-    // defeito de bootstrap. (E, ao contrário, uma falha dela não é mascarada
-    // por um bootstrap bem-sucedido.)
+    // defeito de bootstrap. Cada migration adquire seu próprio lock
+    // transacional e revalida schema_migrations dentro da transação.
     try {
       await migrationsFn(lockClient);
     } catch (e) {
       erroDeMigracao = e;
     }
   } finally {
-    await lockClient.query(`SELECT pg_advisory_unlock(hashtext('brobond_schema_bootstrap'))`).catch(() => undefined);
     const dropConexao = Boolean(
       (erroDeMigracao && classificarErroConexao(erroDeMigracao).transitorio) ||
         (erroDeBootstrap && classificarErroConexao(erroDeBootstrap).transitorio)
@@ -728,19 +737,31 @@ export async function aplicarMigrationsVersionadas(
     .filter((f) => f.endsWith('.sql'))
     .sort();
   if (!nomes.length) return;
-  // O chamador (migrate) já segura o advisory lock de bootstrap — não há
-  // corrida aqui. ON CONFLICT é apenas cinto e suspensório.
-  await client.query(`CREATE TABLE IF NOT EXISTS schema_migrations (
-    id TEXT PRIMARY KEY,
-    aplicado_em TIMESTAMPTZ NOT NULL DEFAULT now()
-  )`);
-  const aplicadas = new Set(
-    (await client.query('SELECT id FROM schema_migrations')).rows.map((r: { id: string }) => r.id)
-  );
+  // PgBouncer/Neon pode trocar o backend entre transações. Por isso o lock
+  // precisa ser transacional e a leitura do ledger deve ocorrer DEPOIS dele.
+  // Assim duas instâncias que iniciem juntas não executam a mesma migration.
+  await client.query('BEGIN');
+  try {
+    await client.query(`SELECT pg_advisory_xact_lock(hashtext('brobond_schema_bootstrap'))`);
+    await client.query(`CREATE TABLE IF NOT EXISTS schema_migrations (
+      id TEXT PRIMARY KEY,
+      aplicado_em TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`);
+    await client.query('COMMIT');
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    throw e;
+  }
+
   for (const nome of nomes) {
-    if (aplicadas.has(nome)) continue;
     try {
       await client.query('BEGIN');
+      await client.query(`SELECT pg_advisory_xact_lock(hashtext('brobond_schema_bootstrap'))`);
+      const existente = await client.query('SELECT id FROM schema_migrations WHERE id = $1', [nome]);
+      if (existente.rows.length > 0) {
+        await client.query('COMMIT');
+        continue;
+      }
       await client.query(readFileSync(path.join(dir, nome), 'utf8'));
       await client.query('INSERT INTO schema_migrations (id) VALUES ($1) ON CONFLICT (id) DO NOTHING', [nome]);
       await client.query('COMMIT');
