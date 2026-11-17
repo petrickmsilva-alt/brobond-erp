@@ -10,7 +10,7 @@
 //   • o CHECK `jsonb_typeof = 'object'` aceita o mapa e recusa escalar;
 //   • produto-pai × variação respeitam a FK composta por empresa;
 //   • a reimportação é IDEMPOTENTE (nenhum produto/preço duplicado);
-//   • a base do canal só é preenchida quando estava ZERADA;
+//   • preco_venda/preco_atacado recebem a base calculada pelo motor de preço;
 //   • o snapshot físico de todas as abas é gravado em um único local LOJA;
 //   • reimportação idêntica não duplica saldo nem movimentos de ajuste.
 //
@@ -29,9 +29,14 @@ process.env.NODE_ENV = 'test';
 const CABECALHO = [
   'Item', 'Cód Categoria', 'MARCA', 'CATEGORIA MASTER', 'COLEÇÃO', 'VARIANTE COR', 'DESCRIÇÃO',
   'Tamanho', 'Código Industria', 'Tipo', 'STATUS', 'Peso KG', 'Altura CM', 'Largura CM',
-  'Comprimento ou profundidade CM', 'Custo Unitário Fabricação', 'Material Predominante', 'Fornecedor',
-  'Atacado À Vista', 'Atacado Boleto 30/60', 'Varejo À Vista', 'Vlr Cartão Parcelado',
-  'Margem MGB (%)', 'Preço Varejo',
+  'Comprimento ou profundidade CM', 'Custo Unitário Fabricação',
+  'Simples Nacional', 'ICMS', 'ICMS2', 'Mgb Atacado Vista', 'Mgb Vrj Vista',
+  'Mgb Vrj Vista 2 un', 'MGL VRJ CARTÃO À VISTA', 'VRJ =/> 2 PÇ CARTÃO até  3X',
+  'Material Predominante', 'Fornecedor',
+  'Atacado À Vista', 'Atacado Boleto 30', 'Atacado Boleto 30/60', 'Atacado Boleto 30/60/90',
+  'Atacado Cartão Débido', 'Atacado Cartão Crédito à vista', 'Atacado Cartão Crédito 30/60',
+  'Atacado Cartão Crédito 30/60/90', 'Varejo À Vista', 'VRJ 2 Un',
+  'Vlr Cartão à Vista', 'Vlr Cartão Parcelado', 'Margem MGB (%)', 'Preço Varejo', 'Preço Atacado',
 ];
 
 type Linha = Partial<Record<(typeof CABECALHO)[number], string | number>>;
@@ -41,9 +46,41 @@ async function xlsxBase64(linhas: Linha[]): Promise<string> {
   const ws = wb.addWorksheet('Política Comercial Completa');
   for (let r = 1; r <= 10; r++) ws.getRow(r).getCell(1).value = r === 1 ? 'TABELA DE PREÇO BASE' : '';
   CABECALHO.forEach((h, i) => (ws.getRow(11).getCell(i + 1).value = h));
+
+  // Mesmos fatores financeiros e parâmetros de formação usados pela suíte
+  // funcional. Os valores finais da planilha são conferências; o ERP calcula
+  // as condições a partir de custo, tributos, margens e ajustes da linha 10.
+  const fatoresFinanceiros: Record<string, number> = {
+    'Atacado À Vista': 0,
+    'Atacado Boleto 30': 0.04,
+    'Atacado Boleto 30/60': 0.08,
+    'Atacado Boleto 30/60/90': 0.10,
+    'Atacado Cartão Débido': 0.08,
+    'Atacado Cartão Crédito à vista': 0.08,
+    'Atacado Cartão Crédito 30/60': 0.12,
+    'Atacado Cartão Crédito 30/60/90': 0.15,
+    'VRJ 2 Un': 0.20,
+  };
+  for (const [rotulo, fator] of Object.entries(fatoresFinanceiros)) {
+    const coluna = CABECALHO.indexOf(rotulo);
+    if (coluna >= 0) ws.getRow(10).getCell(coluna + 1).value = fator;
+  }
+  const parametrosPadrao: Record<string, number> = {
+    'Simples Nacional': 0.06,
+    ICMS: 0.02,
+    ICMS2: 0.01,
+    'Mgb Atacado Vista': 0.45,
+    'Mgb Vrj Vista': 0.60,
+    'Mgb Vrj Vista 2 un': 0.55,
+    'MGL VRJ CARTÃO À VISTA': 0.65,
+    'VRJ =/> 2 PÇ CARTÃO até  3X': 0.60,
+  };
   linhas.forEach((l, i) => {
     const row = ws.getRow(12 + i);
-    CABECALHO.forEach((h, j) => { if (l[h] !== undefined) row.getCell(j + 1).value = l[h] as any; });
+    CABECALHO.forEach((h, j) => {
+      if (l[h] !== undefined) row.getCell(j + 1).value = l[h] as any;
+      else if (parametrosPadrao[h] !== undefined) row.getCell(j + 1).value = parametrosPadrao[h];
+    });
   });
 
   // As abas abaixo representam o contrato mínimo do inventário físico real.
@@ -201,8 +238,8 @@ test('carga em PG real: preview não grava, confirmação persiste cadastro, pre
   assert.equal(varP.codigo_industria, `CB2B${sufixo}010`, 'código da indústria preservado como texto');
   assert.equal(varP.cor, 'PRETA');
   assert.equal(varP.unidade, 'un', 'Tipo=UN → unidade un');
-  assert.equal(Number(varP.preco_venda), 99.9, 'base do varejo vem do à vista');
-  assert.equal(Number(varP.preco_atacado), 49.9, 'base do atacado vem do à vista');
+  assert.equal(Number(varP.preco_venda), 69.49, 'base varejo calculada com tributos e margem-alvo de 60%');
+  assert.equal(Number(varP.preco_atacado), 50.54, 'base atacado calculada com tributos e margem-alvo de 45%');
 
   // Atributos adicionais: JSONB de verdade, com o mapa esperado.
   assert.equal(typeof varP.atributos_adicionais, 'object');
@@ -210,14 +247,14 @@ test('carga em PG real: preview não grava, confirmação persiste cadastro, pre
   assert.equal(varP.atributos_adicionais['Material Predominante'], 'ALGODÃO');
   assert.equal(varP.atributos_adicionais['Margem MGB (%)'], undefined, 'coluna calculada NÃO entra como atributo');
 
-  // 4) Preços oficiais por condição (dados de entrada).
+  // 4) Preços calculados por condição, com vigência e origem rastreável.
   const boleto = (await query(
     `SELECT * FROM produto_precos_condicao WHERE empresa_id = $1 AND produto_id = $2 AND canal = 'atacado' AND condicao = 'boleto_30_60' AND vigencia_fim IS NULL`,
     [empresaId, Number(varP.id)]
   )).rows[0];
   assert.ok(boleto, 'preço de boleto 30/60 gravado como dado');
-  assert.equal(Number(boleto.preco), 54.9);
-  assert.equal(boleto.origem, 'planilha');
+  assert.equal(Number(boleto.preco), 54.93, 'margem atacado de 45% + fator financeiro de 8%');
+  assert.equal(boleto.origem, 'planilha_calculada');
 
   // 5) O CHECK recusa JSONB escalar em atributos_adicionais.
   await assert.rejects(
