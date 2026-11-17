@@ -134,6 +134,17 @@ test('carga em PG real: preview não grava, confirmação persiste cadastro, pre
   const empresaId = Number(empresa.id);
   const usuario = await store.insert(R.usuarios, { nome: `Gestor ${sufixo}`, email: `carga-${sufixo}@brobond.test`, perfil: 'gerente', empresa_id: empresaId, ativo: true });
   const ator = { id: Number(usuario.id), name: String(usuario.nome), perfil: 'gerente' as const, empresa_id: empresaId, empresas: [empresaId] };
+  // A carga exige exatamente um local físico ativo/padrão chamado LOJA.
+  // Cria-se a pré-condição operacional da empresa de teste, como no helper
+  // before() da suíte de memória, antes da prévia/confirmação.
+  await store.insert(R.locais, {
+    empresa_id: empresaId,
+    nome: 'LOJA',
+    tipo: 'loja',
+    nivel_wms: 'local',
+    ativo: true,
+    padrao: true,
+  });
 
   t.after(async () => {
     const apagar = async (sql: string) => query(sql, [empresaId]).catch(() => undefined);
