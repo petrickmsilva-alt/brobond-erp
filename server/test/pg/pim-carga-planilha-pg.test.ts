@@ -79,13 +79,9 @@ async function xlsxBase64(linhas: Linha[]): Promise<string> {
     'Item', 'COLEÇÃO', 'CATEGORIA', 'SUBCATEGORIA',
     'Descrição do produto/serviço2', 'Tamanho', 'Código Industria',
   ].forEach((h, i) => (baseControle.getRow(11).getCell(i + 1).value = h));
-  linhas.forEach((item, i) => {
-    const row = baseControle.getRow(12 + i);
-    row.getCell(1).value = item.Item ?? String(i + 1);
-    row.getCell(5).value = item['DESCRIÇÃO'] ?? '';
-    row.getCell(6).value = item.Tamanho ?? '';
-    row.getCell(7).value = item['Código Industria'] ?? '';
-  });
+  // Esta fixture não declara SKUs da fonte complementar controle_estoque.
+  // Os SKUs testados pertencem exclusivamente à aba principal; mantê-los aqui
+  // duplicaria a identidade em duas fontes diferentes e deve ser rejeitado.
 
   const jefferson = wb.addWorksheet('Estoque Com Jefferson');
   for (const cab of [4, 12]) {
@@ -145,6 +141,7 @@ test('carga em PG real: preview não grava, confirmação persiste cadastro, pre
     await apagar(`DELETE FROM movimentacoes WHERE empresa_id = $1`);
     await apagar(`DELETE FROM estoque_reservas WHERE empresa_id = $1`);
     await apagar(`DELETE FROM estoques WHERE empresa_id = $1`);
+    await apagar(`DELETE FROM locais WHERE empresa_id = $1`);
     await apagar(`DELETE FROM produto_precos_condicao_historico WHERE empresa_id = $1`);
     await apagar(`DELETE FROM produto_precos_condicao WHERE empresa_id = $1`);
     await apagar(`DELETE FROM precificacao_memoria WHERE empresa_id = $1`);
