@@ -2481,19 +2481,32 @@ async function executarCarga(plano: Plano, inventario: InventarioPlanilha, actor
     throw new HttpError(409, 'Carga cancelada: nem todos os SKUs foram vinculados ao catálogo.');
   }
 
-  // Mantém o local lógico único LOJA, sem criar saldos nem movimentações.
-  const locaisPadrao = await s.list(
+  // Mantém LOJA como ÚNICO local ativo e padrão. Locais legados adicionais
+  // são inativados (nunca excluídos), preservando referências de movimentos e
+  // documentos históricos. A listagem de locais ativos não pode continuar
+  // exibindo depósitos de teste após a substituição do estoque.
+  const locaisAtivos = await s.list(
     RESOURCES.locais,
-    { page: 1, pageSize: 100, filter: { empresa_id: escopo.empresaId, ativo: true, padrao: true } },
+    { page: 1, pageSize: 500, filter: { empresa_id: escopo.empresaId, ativo: true } },
     tx
   );
-  if (locaisPadrao.total !== 1 || locaisPadrao.rows.length !== 1) {
+  if (locaisAtivos.total !== locaisAtivos.rows.length) {
+    throw new HttpError(409, 'Carga cancelada: consulta de locais ativos truncada; a consolidação segura não pode continuar.');
+  }
+  const locaisPadrao = locaisAtivos.rows.filter((local) => local.padrao === true);
+  if (locaisPadrao.length !== 1) {
     throw new HttpError(409, 'Carga cancelada: a empresa precisa ter exatamente um local ativo/padrão para o estoque único.');
   }
-  const localPadrao = locaisPadrao.rows[0];
+  const localPadrao = locaisPadrao[0];
   const localId = Number(localPadrao.id);
   if (normalizarRotulo(String(localPadrao.nome || '')) !== 'loja') {
     await s.update(RESOURCES.locais, localId, { nome: 'LOJA' }, tx);
+  }
+  let locaisAdicionaisInativados = 0;
+  for (const local of locaisAtivos.rows) {
+    if (Number(local.id) === localId) continue;
+    await s.update(RESOURCES.locais, Number(local.id), { ativo: false, padrao: false }, tx);
+    locaisAdicionaisInativados++;
   }
 
   // Remove todas as células físicas de teste/legadas. Não cria células zeradas,
@@ -2558,6 +2571,7 @@ async function executarCarga(plano: Plano, inventario: InventarioPlanilha, actor
     unidades_importadas: 0,
     movimentacoes_geradas: 0,
     saldo_inicial: 0,
+    locais_adicionais_inativados: locaisAdicionaisInativados,
     produtos_antigos_inativados: produtosAntigosInativados,
   };
   await s.audit(
