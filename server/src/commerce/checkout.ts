@@ -24,6 +24,7 @@ import { getStore } from '../services';
 import { query } from '../db';
 import { listarTodos } from '../paginacaoCompleta';
 import { escopoDeSistema } from '../empresa';
+import { resolverPrecoComercial } from './motorPrecos';
 import { getResource } from '../resources';
 import { paymentEngine } from '../../../modules/payments/orchestration/payment-orchestrator';
 import { availableMethods, candidates } from '../../../modules/payments/application/configuration';
@@ -221,7 +222,17 @@ async function resolverItensCarrinho(
       }
       throw new HttpError(409, 'Um dos itens não está mais disponível na vitrine.');
     }
-    const preco = precoPublico(produto, precos);
+    const precoLista = precoPublico(produto, precos);
+    const precoCondicao = await resolverPrecoComercial({
+      produto,
+      canal: 'varejo',
+      condicao: 'varejo_vista',
+      escopo: escopoDeSistema(empresaId),
+      quantidade,
+    });
+    const preco = precoCondicao.origem_preco === 'condicao' && precoCondicao.preco_aplicado !== null
+      ? { ...precoLista, preco: precoCondicao.preco_aplicado }
+      : precoLista;
     if (!Number.isFinite(preco.preco) || preco.preco <= 0) {
       if (opcoes.tolerante) {
         out.push(linhaComProblema('Item sem preço válido na loja. Remova-o para continuar.', { nome: String(produto.nome || ''), sku: String(produto.sku || '') }));

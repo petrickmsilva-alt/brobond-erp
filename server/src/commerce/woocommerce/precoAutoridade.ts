@@ -17,6 +17,8 @@
 // ============================================================================
 import { getStore } from '../../services';
 import { getResource } from '../../resources';
+import { escopoDeSistema } from '../../empresa';
+import { resolverPrecoComercial } from '../motorPrecos';
 import type { Row, Tx } from '../../store';
 import { FONTE_PRECO, type StoreKey } from './registry';
 import { precoDaLoja } from './precos';
@@ -73,9 +75,26 @@ export async function precoOficialDoErp(
   empresaId: number,
   produto: Row,
   store: StoreKey,
-  tx?: Tx
+  tx?: Tx,
+  quantidade = 1
 ): Promise<{ preco: number; fonte: 'preco_venda' | 'preco_atacado'; promo: number | null }> {
   const fonte = FONTE_PRECO[store];
+  const canal = store === 'WHOLESALE' ? 'atacado' : 'varejo';
+  const condicao = store === 'WHOLESALE' ? 'atacado_vista' : 'varejo_vista';
+  const resolvidoCondicao = await resolverPrecoComercial({
+    produto,
+    canal,
+    condicao,
+    escopo: escopoDeSistema(empresaId),
+    tx,
+    quantidade,
+  });
+  // A faixa oficial da planilha prevalece sobre a base/override legado. Quando
+  // não houver condição aplicável à quantidade, conserva commerce_precos e a
+  // autoridade antiga da loja para não quebrar acordos por canal já existentes.
+  if (resolvidoCondicao.origem_preco === 'condicao' && resolvidoCondicao.preco_aplicado !== null) {
+    return { preco: resolvidoCondicao.preco_aplicado, fonte, promo: null };
+  }
   const linha = await linhaOverrideDaLoja(empresaId, Number(produto.id), 'WOOCOMMERCE', store, tx);
   const resolvido = precoDaLoja(produto, store, linha);
   return { preco: resolvido.preco, fonte, promo: resolvido.promo };

@@ -39,7 +39,7 @@ import { getResource } from './resources';
 import { checkAccess, getStore, lancarMovimentacaoDentro, toHttpError, type Actor } from './services';
 import { currentUser } from './auth';
 import { assertRegistroDaEmpresa, escopoDoAtor, type EscopoEmpresa } from './empresa';
-import { celulasDaEmpresa, reservasAtivasPorCelula, reservasDetalhadasDaCelula } from './estoqueCanonico';
+import { celulasDaEmpresa, celulasDoProduto, reservasAtivasPorCelula, reservasDetalhadasDaCelula } from './estoqueCanonico';
 import { parseId } from './validate';
 import type { Row, Store, Tx } from './store';
 
@@ -530,8 +530,23 @@ export async function criarReservaInterna(escopo: EscopoEmpresa, payload: Reserv
   if (!quantidade || quantidade <= 0) throw new HttpError(400, 'A quantidade deve ser maior que zero.', { quantidade: 'Maior que zero' });
   if (!['reserva', 'empenho', 'bloqueio'].includes(tipo)) throw new HttpError(400, 'Tipo de reserva inválido.', { tipo: 'reserva, empenho ou bloqueio' });
   const localId = n(payload.local_id ?? null);
-  const tamanhoId = n(payload.tamanho_id ?? null);
+  let tamanhoId = n(payload.tamanho_id ?? null);
   const s = getStore();
+
+  // Reserva de produto sem tamanho explícito: só inferimos quando existe UMA
+  // única célula de tamanho cadastrada para o produto. Em uma grade com vários
+  // tamanhos, escolher um automaticamente poderia bloquear uma peça errada;
+  // nesse caso exigimos que o chamador informe o tamanho.
+  if (tamanhoId === null) {
+    const celulas = await celulasDoProduto(escopo, produtoId, tx);
+    const tamanhos = [...new Set(celulas.map((celula) => celula.tamanho_id))];
+    if (tamanhos.length === 1) {
+      tamanhoId = tamanhos[0];
+    } else if (tamanhos.length > 1) {
+      throw new HttpError(409, 'Informe o tamanho para reservar este produto: ele possui mais de um tamanho com estoque cadastrado.');
+    }
+  }
+
   const disponibilidade = await calcularDisponibilidade(s, escopo, { produto_id: produtoId, tamanho_id: tamanhoId, local_id: localId }, tx);
   const disponivel = disponibilidade.reduce((t, l) => t + l.disponivel, 0);
   if (disponivel < quantidade) {

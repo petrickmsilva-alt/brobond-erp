@@ -444,7 +444,7 @@ export async function importarPedidosLoja(req: Request, res: Response) {
             ? Math.round((totalLinha / quantidade) * 100) / 100
             : null;
       const fonte = canal === 'site_atacado' ? 'preco_atacado' : 'preco_venda';
-      const { preco: precoErp } = await precoOficialDoErp(escopo.empresaId, produto, canal === 'site_atacado' ? 'WHOLESALE' : 'RETAIL');
+      const { preco: precoErp } = await precoOficialDoErp(escopo.empresaId, produto, canal === 'site_atacado' ? 'WHOLESALE' : 'RETAIL', undefined, quantidade);
       const desfecho = decidirPrecoItem({ precoErp, fonte, precoRemoto });
       if (desfecho.preco <= 0) {
         itensPendentes.push(`${rotuloLinha(linha)} (produto sem ${fonte} válido no ERP)`);

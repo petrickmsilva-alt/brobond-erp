@@ -28,6 +28,7 @@ import { criarAcessoPortal } from './portal';
 import { urlBasePublicaAsync } from './urlPublica';
 import { urlLoja } from './loja';
 import { precoComPolitica, resolverPoliticaComercial } from './politicasComerciais';
+import { resolverPrecoComercial } from './commerce/motorPrecos';
 
 const require = createRequire(import.meta.url);
 
@@ -260,7 +261,7 @@ export async function catalogoPublico(req: Request, res: Response) {
   // Preço exibido no catálogo: varejo, atacado, ambos ou automático conforme canal.
   function precoDoProduto(p: Row): { preco: number | null; preco_tipo: 'varejo' | 'atacado' | null; preco_venda: number | null; preco_atacado: number | null } {
     const varejo = Number(p.preco_venda || 0);
-    const atacado = Number(p.preco_atacado || p.preco_venda || 0);
+    const atacado = Number(p.preco_atacado || 0);
     if (!mostrarPreco) return { preco: null, preco_tipo: null, preco_venda: null, preco_atacado: null };
     let tipo: 'varejo' | 'atacado';
     if (tabelaPreco === 'ambos') tipo = 'varejo';
@@ -469,8 +470,24 @@ export async function criarPedidoCatalogo(req: Request, res: Response) {
         if (produto.exibir_site === false || produto.ativo === false) {
           throw new HttpError(400, `O produto "${labelOf(RESOURCES.produtos, produto)}" não está disponível para pedido pelo site.`);
         }
-        const precoBase = Number(canal === 'atacado' ? (produto.preco_atacado || produto.preco_venda || 0) : produto.preco_venda || 0);
-        const preco = precoComPolitica(precoBase, politica);
+        const minimoAtacado = Math.max(0, Math.trunc(Number(produto.atacado_min_qtd ?? 0)));
+        if (canal === 'atacado' && minimoAtacado > 0 && quantidade < minimoAtacado) {
+          throw new HttpError(400, `O SKU ${String(produto.sku)} exige pedido mínimo de ${minimoAtacado} peças no atacado.`);
+        }
+        const precoResolvido = await resolverPrecoComercial({
+          produto,
+          canal,
+          condicao: canal === 'atacado' ? 'atacado_vista' : 'varejo_vista',
+          escopo: escopoDeSistema(empresaId),
+          catalogo,
+          clienteId: Number(cliente.id),
+          tx,
+          quantidade,
+        });
+        if (precoResolvido.preco_aplicado === null || !Number.isFinite(precoResolvido.preco_aplicado) || precoResolvido.preco_aplicado <= 0) {
+          throw new HttpError(409, `O SKU ${String(produto.sku)} não possui preço válido para ${canal} na quantidade ${quantidade}.`);
+        }
+        const preco = precoResolvido.preco_aplicado;
         const sub = Math.round(quantidade * preco * 100) / 100;
         subtotal += sub;
         await s.insert(itensR, {
@@ -851,7 +868,7 @@ export async function catalogoEmbed(req: Request, res: Response) {
           saldo: linha.disponivel,
         }));
       const varejo = Number(p.preco_venda || 0);
-      const atacado = Number(p.preco_atacado || p.preco_venda || 0);
+      const atacado = Number(p.preco_atacado || 0);
       const preco = precoComPolitica(canalEfetivo === 'atacado' ? atacado : varejo, politica);
       const sku = String(p.sku || '').trim();
       const foto = String(p.foto_url || (Array.isArray(p.fotos) ? p.fotos[0]?.url : '') || '');

@@ -68,6 +68,10 @@ export function precoBaseDoCanal(produto: Row, canal: Canal): number | null {
 export type PrecoCondicaoDetalhe = {
   preco: number;
   id: number;
+  quantidade_minima: number;
+  margem_pct: number | null;
+  ajuste_pct: number;
+  regra_calculo: Record<string, unknown>;
   vigencia_inicio: string | null;
   vigencia_fim: string | null;
 };
@@ -85,7 +89,8 @@ export async function precoCondicaoDetalhe(
   condicao: string | null | undefined,
   escopo: EscopoEmpresa,
   tx?: Tx,
-  referencia?: string
+  referencia?: string,
+  quantidade = 1
 ): Promise<PrecoCondicaoDetalhe | null> {
   if (!condicao) return null;
   const { rows } = await getStore().list(
@@ -97,18 +102,27 @@ export async function precoCondicaoDetalhe(
   const validos = rows.filter((r) => {
     const ini = dia(r.vigencia_inicio);
     const fim = dia(r.vigencia_fim);
+    const quantidadeMinima = Math.max(1, Math.trunc(num(r.quantidade_minima, 1)));
+    if (quantidadeMinima > Math.max(1, Math.trunc(quantidade))) return false;
     if (ref) return (ini === null || ini <= ref) && (fim === null || fim >= ref);
     return fim === null;
   });
   // Preço vigente mais recente (maior `vigencia_inicio`; desempate por id).
   validos.sort(
-    (a, b) => String(dia(b.vigencia_inicio) ?? '').localeCompare(String(dia(a.vigencia_inicio) ?? '')) || Number(b.id) - Number(a.id)
+    (a, b) =>
+      num(b.quantidade_minima, 1) - num(a.quantidade_minima, 1) ||
+      String(dia(b.vigencia_inicio) ?? '').localeCompare(String(dia(a.vigencia_inicio) ?? '')) ||
+      Number(b.id) - Number(a.id)
   );
   const linha = validos[0];
   if (!linha) return null;
   return {
     preco: round2(num(linha.preco)),
     id: Number(linha.id),
+    quantidade_minima: Math.max(1, Math.trunc(num(linha.quantidade_minima, 1))),
+    margem_pct: linha.margem_pct === null || linha.margem_pct === undefined ? null : num(linha.margem_pct),
+    ajuste_pct: num(linha.ajuste_pct),
+    regra_calculo: (linha.regra_calculo && typeof linha.regra_calculo === 'object' ? linha.regra_calculo : {}) as Record<string, unknown>,
     vigencia_inicio: dia(linha.vigencia_inicio),
     vigencia_fim: dia(linha.vigencia_fim),
   };
@@ -121,9 +135,10 @@ export async function precoCondicao(
   condicao: string | null | undefined,
   escopo: EscopoEmpresa,
   tx?: Tx,
-  referencia?: string
+  referencia?: string,
+  quantidade = 1
 ): Promise<number | null> {
-  const d = await precoCondicaoDetalhe(produtoId, canal, condicao, escopo, tx, referencia);
+  const d = await precoCondicaoDetalhe(produtoId, canal, condicao, escopo, tx, referencia, quantidade);
   return d ? d.preco : null;
 }
 
@@ -212,6 +227,7 @@ export async function resolverPrecoComercial(opts: {
   clienteId?: number | null;
   tx?: Tx;
   referencia?: string;
+  quantidade?: number;
 }): Promise<PrecoComercial> {
   const { produto, canal, escopo, tx } = opts;
   const produtoId = Number(produto.id);
@@ -233,7 +249,7 @@ export async function resolverPrecoComercial(opts: {
   });
 
   // Condição de pagamento (preço oficial). Ausente → mantém o de lista.
-  const condDet = await precoCondicaoDetalhe(produtoId, canal, opts.condicao, escopo, tx, opts.referencia);
+  const condDet = await precoCondicaoDetalhe(produtoId, canal, opts.condicao, escopo, tx, opts.referencia, opts.quantidade ?? 1);
 
   let precoAplicado: number | null;
   let origem: string;

@@ -1,7 +1,7 @@
 import type { Request, Response } from 'express';
 import { createHash, randomBytes } from 'node:crypto';
 import { HttpError } from './errors';
-import { assertRegistroDaEmpresaParaEscrita, buscarRegistroDaEmpresa, clienteNaCarteira, clienteNaCarteiraVigente, empresaDoRegistroAudit, idCarteiraDoEscopo } from './empresa';
+import { assertRegistroDaEmpresaParaEscrita, buscarRegistroDaEmpresa, clienteNaCarteira, clienteNaCarteiraVigente, empresaDoRegistroAudit, escopoDeSistema, idCarteiraDoEscopo } from './empresa';
 import { RESOURCES } from './resources';
 import { escopoDe, getStore } from './services';
 import { labelOf, type Row } from './store';
@@ -9,6 +9,7 @@ import { attachImages } from './uploads';
 import { normalizarOrigem, urlBasePublicaAsync } from './urlPublica';
 import { diaISO } from './utils';
 import { registrarTransicaoStatus, validarTransicao } from './omsEstado';
+import { resolverPrecoComercial } from './commerce/motorPrecos';
 
 const RATE_LIMIT = 60;
 const JANELA_MS = 10 * 60 * 1000;
@@ -211,7 +212,24 @@ export async function recomprarPedido(req: Request, res: Response) {
     const venda = await s.insert(RESOURCES.vendas, { cliente_id: Number(cliente.id), data: new Date().toISOString().slice(0, 10), status: 'cotacao', canal_venda: original.canal_venda || 'site_varejo', condicao_pagamento: original.condicao_pagamento || 'Pendente', fin_status: 'a_receber', observacoes: `Recompra solicitada pelo portal a partir do pedido #${originalId}` }, tx);
     for (const item of itens.rows) {
       const p = porId.get(Number(item.produto_id)); if (!p || p.ativo === false || p.exibir_site === false) continue;
-      const atacado = original.canal_venda === 'site_atacado'; const preco = Number(atacado ? (p.preco_atacado || p.preco_venda || 0) : p.preco_venda || 0); const quantidade = Number(item.quantidade || 0);
+      const atacado = original.canal_venda === 'site_atacado';
+      const quantidade = Number(item.quantidade || 0);
+      const precoResolvido = await resolverPrecoComercial({
+        produto: p,
+        canal: atacado ? 'atacado' : 'varejo',
+        condicao: atacado ? 'atacado_vista' : 'varejo_vista',
+        escopo: escopoDeSistema(Number(p.empresa_id ?? original.empresa_id ?? cliente.empresa_id)),
+        clienteId: Number(cliente.id),
+        tx,
+        quantidade,
+      });
+      if (precoResolvido.preco_aplicado === null || precoResolvido.preco_aplicado <= 0) {
+        throw new HttpError(409, `O SKU ${String(p.sku)} não possui preço válido para recompra no canal ${atacado ? 'atacado' : 'varejo'}.`);
+      }
+      if (atacado && Number(p.atacado_min_qtd ?? 0) > quantidade) {
+        throw new HttpError(400, `O SKU ${String(p.sku)} exige mínimo de ${Number(p.atacado_min_qtd)} peças no atacado.`);
+      }
+      const preco = precoResolvido.preco_aplicado;
       await s.insert(RESOURCES.itens_venda, { venda_id: Number(venda.id), produto_id: Number(item.produto_id), tamanho_id: Number(item.tamanho_id), quantidade, preco_unitario: preco, desconto_pct: 0, subtotal: Math.round(preco * quantidade * 100) / 100 }, tx);
     }
     const { recalcularTotal } = await import('./itens'); const total = await recalcularTotal('venda', Number(venda.id), tx);

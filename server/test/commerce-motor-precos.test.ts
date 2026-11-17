@@ -70,6 +70,29 @@ describe('motor de preços — condição de pagamento (dado de entrada)', () =>
     assert.equal(await precoCondicao(Number(p.id), 'atacado', null, escopo), null);
   });
 
+  test('faixa por quantidade escolhe a maior quantidade mínima aplicável, sem trocar a condição', async () => {
+    const s = getStore();
+    const p = await produtoNovo();
+    await s.insert(RESOURCES.produto_precos_condicao, {
+      empresa_id: 1, produto_id: Number(p.id), canal: 'varejo', condicao: 'varejo_vista',
+      quantidade_minima: 1, preco: 99.9, margem_pct: 65, ajuste_pct: 0,
+      regra_calculo: { origem: 'teste', quantidade_minima: 1 },
+    });
+    await s.insert(RESOURCES.produto_precos_condicao, {
+      empresa_id: 1, produto_id: Number(p.id), canal: 'varejo', condicao: 'varejo_vista',
+      quantidade_minima: 2, preco: 79.9, margem_pct: 60, ajuste_pct: -20,
+      regra_calculo: { origem: 'teste', quantidade_minima: 2 },
+    });
+    assert.equal(await precoCondicao(Number(p.id), 'varejo', 'varejo_vista', escopo, undefined, undefined, 1), 99.9);
+    assert.equal(await precoCondicao(Number(p.id), 'varejo', 'varejo_vista', escopo, undefined, undefined, 2), 79.9);
+    assert.equal(await precoCondicao(Number(p.id), 'varejo', 'varejo_vista', escopo, undefined, undefined, 6), 79.9);
+    const detalhe = await precoCondicaoDetalhe(Number(p.id), 'varejo', 'varejo_vista', escopo, undefined, undefined, 2);
+    assert.equal(detalhe?.quantidade_minima, 2);
+    assert.equal(detalhe?.margem_pct, 60);
+    assert.equal(detalhe?.ajuste_pct, -20);
+    assert.equal(detalhe?.regra_calculo.origem, 'teste');
+  });
+
   test('a vigência responde "quanto valia nesta data" sem apagar o preço anterior', async () => {
     const s = getStore();
     const p = await produtoNovo();

@@ -48,6 +48,7 @@ import { round2 } from './utils';
 import { aplicarRegrasPedido } from './itens';
 import { syncLancamentoVenda } from './financeiro';
 import { precoDe } from './listasPreco';
+import { precoCondicao, type Canal as CanalPreco } from './commerce/motorPrecos';
 import { chaveTamanho, localDaEmpresa, localPadraoDaEmpresa, locaisDeSaida, saldoPorTamanho, saldoVendavel } from './estoqueCanonico';
 import type { Row, Tx } from './store';
 
@@ -447,7 +448,10 @@ export async function resolverProduto(
    * ESTOQUE VENDÁVEL naquele local (com o mesmo fallback para o Local padrão
    * que o faturamento usa) — nunca a soma de todos os locais.
    */
-  localSaidaId?: number | null
+  localSaidaId?: number | null,
+  canalPreco: CanalPreco = 'varejo',
+  condicaoPreco?: string | null,
+  quantidade = 1
 ): Promise<LinhaResolvida> {
   const s = getStore();
   const limpo = String(codigo ?? '').trim();
@@ -462,10 +466,19 @@ export async function resolverProduto(
   }
   if (!lido) throw new HttpError(404, `Nenhum produto encontrado para "${limpo}" nesta empresa.`);
   if (lido.ativo === false) throw new HttpError(409, `O produto ${lido.sku} está inativo e não pode ser vendido.`);
+  const minimoAtacado = Math.max(0, Math.trunc(Number(lido.atacado_min_qtd ?? 0)));
+  if (canalPreco === 'atacado' && minimoAtacado > 0 && quantidade < minimoAtacado) {
+    throw new HttpError(400, `O SKU ${String(lido.sku)} exige pedido mínimo de ${minimoAtacado} peças no atacado.`);
+  }
 
-  // O preço é SEMPRE o do que foi lido: a variação tem preço próprio e a lista
-  // de preço pode cobri-lo.
+  // O preço parte da lista/ficha e depois consulta a política oficial por
+  // canal, condição e quantidade. Ausência de condição vigente aplicável mantém
+  // o preço-base; o servidor nunca aceita preço calculado pelo navegador.
   const resolvido = await precoDe(lido, escopo, tx);
+  const precoCondicional = condicaoPreco
+    ? await precoCondicao(Number(lido.id), canalPreco, condicaoPreco, escopo, tx, undefined, quantidade)
+    : null;
+  const precoEfetivo = precoCondicional ?? resolvido.preco;
 
   let produto = lido;
   // Variações geradas pelo cadastro usam `variacao_tamanho_id` (migration
@@ -528,7 +541,7 @@ export async function resolverProduto(
     tamanho_codigo: tam ? String(tam.codigo ?? tam.nome ?? tam.id) : null,
     sku: String(lido.sku ?? ''),
     eh_variacao: ehVariacao,
-    preco: resolvido.preco,
+    preco: precoEfetivo,
     preco_tabela: resolvido.preco_tabela,
     lista_preco_id: resolvido.lista_id,
     lista_nome: resolvido.lista_nome,
@@ -667,6 +680,52 @@ function normalizarLinhas(bruto: unknown): LinhaPdv[] {
 }
 
 type PagamentoEntrada = { forma: string; valor: number; valor_informado?: number; parcelas: number; nsu?: string | null; bandeira?: string | null };
+
+const CONDICOES_PRECO_VALIDAS = new Set([
+  'atacado_vista', 'boleto_30', 'boleto_30_60', 'boleto_30_60_90',
+  'cartao_debito', 'cartao_credito_vista', 'cartao_credito_30_60', 'cartao_credito_30_60_90',
+  'varejo_vista', 'cartao_vista', 'cartao_parcelado',
+]);
+
+function resolverCondicaoPdv(
+  canal: CanalPreco,
+  pagamentos: PagamentoEntrada[],
+  informada?: unknown,
+): string | null {
+  if (informada !== undefined && informada !== null && informada !== '') {
+    const codigo = String(informada).trim().toLowerCase();
+    if (!CONDICOES_PRECO_VALIDAS.has(codigo)) {
+      throw new HttpError(400, 'Condição de pagamento não reconhecida pela política comercial.', { condicao_pagamento: 'Condição inválida' });
+    }
+    const atacado = codigo.startsWith('atacado_') || codigo.startsWith('boleto_30') || codigo.startsWith('cartao_credito_') || codigo === 'cartao_debito';
+    if ((canal === 'atacado') !== atacado) {
+      throw new HttpError(400, 'A condição de pagamento informada não pertence ao canal selecionado.', { condicao_pagamento: 'Canal incompatível' });
+    }
+    return codigo;
+  }
+  if (!pagamentos.length) return canal === 'atacado' ? 'atacado_vista' : 'varejo_vista';
+  const formas = [...new Set(pagamentos.map((p) => p.forma))];
+  if (formas.length > 1) {
+    // Pagamento dividido entre meios distintos não representa uma condição
+    // única da planilha; preserva preço-base em vez de escolher uma condição.
+    return null;
+  }
+  const [forma] = formas;
+  const parcelas = Math.max(1, ...pagamentos.map((p) => p.parcelas));
+  if (canal === 'varejo') {
+    if (forma === 'cartao_debito') return 'cartao_vista';
+    if (forma === 'cartao_credito') return parcelas > 1 ? 'cartao_parcelado' : 'cartao_vista';
+    return 'varejo_vista';
+  }
+  if (forma === 'cartao_debito') return 'cartao_debito';
+  if (forma === 'cartao_credito') {
+    return parcelas >= 3 ? 'cartao_credito_30_60_90' : parcelas === 2 ? 'cartao_credito_30_60' : 'cartao_credito_vista';
+  }
+  if (forma === 'boleto') {
+    return parcelas >= 3 ? 'boleto_30_60_90' : parcelas === 2 ? 'boleto_30_60' : 'boleto_30';
+  }
+  return 'atacado_vista';
+}
 
 function normalizarPagamentos(bruto: unknown): PagamentoEntrada[] {
   if (!Array.isArray(bruto)) throw new HttpError(400, 'pagamentos deve ser uma lista.', { pagamentos: 'Lista obrigatória' });
@@ -808,14 +867,16 @@ export async function venderPdv(req: Request, res: Response) {
       const localSaidaId = Number(localSaidaData.local_id);
 
       // ---- 2) resolve cada linha: produto, TAMANHO, preço de lista, subtotal ----
+      const canalPreco: CanalPreco = String(body.canal_preco ?? body.canal_venda ?? '').toLowerCase().includes('atacado') ? 'atacado' : 'varejo';
+      const condicaoPreco = resolverCondicaoPdv(canalPreco, pagamentos, body.condicao_pagamento);
       const resolvidas: { linha: LinhaPdv; info: LinhaResolvida; preco: number; subtotal: number }[] = [];
       let subtotalItens = 0;
       const divergencias: { linha: number; enviado: number | null; servidor: number }[] = [];
       for (let i = 0; i < linhas.length; i++) {
         const linha = linhas[i];
         const info = linha.codigo
-          ? await resolverProduto(linha.codigo, escopo, tx, linha.tamanho_id, localSaidaId)
-          : await resolverProduto(String(linha.produto_id), escopo, tx, linha.tamanho_id, localSaidaId);
+          ? await resolverProduto(linha.codigo, escopo, tx, linha.tamanho_id, localSaidaId, canalPreco, condicaoPreco, linha.quantidade)
+          : await resolverProduto(String(linha.produto_id), escopo, tx, linha.tamanho_id, localSaidaId, canalPreco, condicaoPreco, linha.quantidade);
         // O código lido tem que apontar para o produto informado. Aceitamos o
         // pai OU a própria variação: as duas formas de referir a mesma peça.
         if (linha.produto_id && Number(info.produto.id) !== linha.produto_id && Number(info.produto.produto_pai_id ?? 0) !== linha.produto_id) {

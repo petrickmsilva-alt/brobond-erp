@@ -336,7 +336,7 @@ async function resolverItensDoPedido(cfg: ConfigStore, ctx: ContextoImportacao, 
         : Number.isFinite(totalLinha) && totalLinha > 0
           ? Math.round((totalLinha / quantidade) * 100) / 100
           : null;
-    const { preco: precoErp, fonte } = await precoOficialDoErp(empresaId, produto, cfg.store_key);
+    const { preco: precoErp, fonte } = await precoOficialDoErp(empresaId, produto, cfg.store_key, undefined, quantidade);
     const desfecho = decidirPrecoItem({ precoErp, fonte, precoRemoto });
     if (desfecho.preco <= 0) {
       pendentes.push(`${rotuloLinha(linha)} (produto sem ${fonte} válido no ERP)`);
