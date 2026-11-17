@@ -497,7 +497,7 @@ export class MemStore implements Store {
     const t = this.table(r.table);
     const id = ++t.seq;
     const row: Row = { id };
-    for (const f of columnsOf(r)) row[f.name] = data[f.name] ?? (f.type === 'boolean' ? f.default ?? null : f.default ?? null);
+    for (const f of columnsOf(r)) row[f.name] = data[f.name] !== undefined ? data[f.name] : (f.type === 'boolean' ? f.default ?? null : f.default ?? null);
     // Colunas internas de autenticação (hash/segredos/tokens) graváveis pela API interna.
     for (const k of COLUNAS_AUTENTICACAO) if (k in data) row[k] = data[k];
     if (r.fields.some((f) => f.name === 'criado_em')) row.criado_em = new Date().toISOString();
