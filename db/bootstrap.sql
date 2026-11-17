@@ -224,6 +224,24 @@ CREATE TABLE IF NOT EXISTS produtos (
   ncm TEXT,                                  -- classificação fiscal (NF-e futura)
   peso_g INTEGER,                            -- peso da peça em gramas
   custo NUMERIC(12,2) DEFAULT 0,             -- custo unitário (valoriza o estoque)
+  custo_unitario_fabricacao NUMERIC(12,6),
+  custo_aquisicao_unitario NUMERIC(12,6),
+  simples_nacional_pct NUMERIC(8,6),
+  simples_nacional_valor NUMERIC(12,6),
+  icms_planilha_pct NUMERIC(8,6),
+  icms2_planilha_pct NUMERIC(8,6),
+  icms_planilha_valor NUMERIC(12,6),
+  icms2_planilha_valor NUMERIC(12,6),
+  total_imposto_pct NUMERIC(8,6),
+  total_imposto_valor NUMERIC(12,6),
+  custo_total_imposto NUMERIC(12,6),
+  margem_atacado_pct NUMERIC(8,6),
+  margem_varejo_pct NUMERIC(8,6),
+  margem_varejo_2un_pct NUMERIC(8,6),
+  margem_varejo_cartao_pct NUMERIC(8,6),
+  margem_varejo_combo_cartao_pct NUMERIC(8,6),
+  memoria_formacao_preco JSONB NOT NULL DEFAULT '{}'::jsonb
+    CHECK (jsonb_typeof(memoria_formacao_preco) = 'object'),
   preco_venda NUMERIC(12,2) DEFAULT 0,
   ativo BOOLEAN DEFAULT TRUE,
   criado_em TIMESTAMPTZ DEFAULT now(),
