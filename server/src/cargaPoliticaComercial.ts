@@ -2,20 +2,21 @@
 // CARGA OFICIAL DA POLÍTICA COMERCIAL — importação da planilha-base do ERP.
 //
 // A planilha ("TABELA DE PREÇO BASE PARA ERP.xlsx") é a fonte canônica do
-// catálogo, identificadores, atributos, custos, política comercial e saldo
-// físico inicial. O servidor recalcula preço, margem e tributos; a memória do
-// cálculo fica associada ao SKU e às faixas de quantidade.
+// catálogo, identificadores, atributos, custos e política comercial. O servidor
+// recalcula preço, margem e tributos; a memória do cálculo fica associada ao SKU
+// e às faixas de quantidade. O saldo físico NÃO é importado: o administrador
+// fará a entrada inicial no único local LOJA após a carga.
 //
 // Princípios:
 //   • importa três fontes: Política Comercial Completa, BASE CONTROLE DE ESTOQUE
 //     e Política Comercial Roupas (2);
 //   • preserva Item/IDs da planilha e Código Industria como SKU (texto);
-//   • consolida o estoque inicial das abas de saldo/contagem em um único local
-//     LOJA; não cria saldos para varejo, atacado ou representantes;
-//   • saídas históricas já abatidas no saldo da planilha não são reaplicadas;
+//   • remove todas as células físicas antigas e NÃO importa quantidades da
+//     planilha; o administrador fará a entrada inicial no único local LOJA;
+//   • varejo, atacado, representantes e e-commerce usam o mesmo catálogo/base;
 //   • fórmulas externas não são executadas no servidor: o cálculo é reproduzido
 //     com os parâmetros de entrada da própria planilha, com conferências;
-//   • idempotente por SKU, faixa de quantidade e célula física canônica.
+//   • idempotente por SKU e faixa de quantidade; não cria células físicas.
 //
 // Endpoints:
 //   POST /api/carga/politica-comercial/preview   { conteudo, nome }  → prévia
@@ -2049,7 +2050,7 @@ export async function previewCarga(req: Request, res: Response) {
       })),
       limite: LIMITE_CARGA,
       truncado: plano.itens.length > LIMITE_CARGA,
-      nao_gravado: 'Prévia apenas: nenhum produto, variação, preço ou estoque foi gravado. O saldo físico previsto será importado integralmente para um único local padrão LOJA.'
+      nao_gravado: 'Prévia apenas: nenhum produto, variação, preço ou estoque foi gravado. Na confirmação, o estoque físico anterior será removido e nenhum saldo será importado; o administrador lançará as quantidades posteriormente no local único LOJA.'
     });
   } catch (e) {
     throw toHttpError(e, RESOURCES.produtos);
@@ -2073,11 +2074,12 @@ export async function confirmarCarga(req: Request, res: Response) {
       ...resultado,
       abas_examinadas: reconciliacao.abas.length,
       reconciliacao,
-      estoque_importado: true,
-      inventario_planilha: { local: inventario.local_nome, skus: inventario.total_skus, celulas: inventario.total_celulas, unidades: inventario.total_unidades, por_fonte: inventario.por_fonte, saldos_negativos_limitados_a_zero: inventario.saldos_negativos },
-      precos_sobrescritos: false,
-      formulas_planilha_importadas: false,
-      observacao: 'Todas as abas de CADASTRO foram processadas; custos, tributos, margens e preços foram calculados no servidor e registrados com memória por SKU. O estoque físico anterior da empresa foi substituído pelo saldo final da planilha em um único local LOJA; movimentos históricos não foram apagados nem recalculados.'
+      estoque_importado: false,
+      estoque_fisico_removido: true,
+      saldo_inicial: 0,
+      precos_sobrescritos: true,
+      formulas_planilha_importadas: true,
+      observacao: 'Todas as abas de CADASTRO foram processadas; a política comercial e a memória de cálculo foram gravadas por SKU. Todas as células de estoque físico anteriores foram removidas. Nenhuma quantidade da planilha foi importada: o administrador fará os lançamentos no estoque único LOJA, compartilhado por varejo, atacado, representantes e e-commerce.'
     });
   } catch (e) {
     throw toHttpError(e, RESOURCES.produtos);
@@ -2472,73 +2474,30 @@ async function executarCarga(plano: Plano, inventario: InventarioPlanilha, actor
     throw new HttpError(409, 'Carga cancelada: inventário físico e catálogo não têm a mesma quantidade de SKUs.');
   }
 
-  // Resolve exatamente um local ativo e padrão chamado LOJA. Nenhum estoque
-  // separado para varejo, atacado ou representantes é permitido.
+  // O catálogo e a política comercial usam um único cadastro/base para
+  // varejo, atacado, representantes e e-commerce. A carga NÃO define saldos:
+  // o administrador fará a entrada física depois da importação.
+  if (produtoEstoquePorSku.size !== plano.itens.length) {
+    throw new HttpError(409, 'Carga cancelada: nem todos os SKUs foram vinculados ao catálogo.');
+  }
+
+  // Mantém o local lógico único LOJA, sem criar saldos nem movimentações.
   const locaisPadrao = await s.list(
     RESOURCES.locais,
     { page: 1, pageSize: 100, filter: { empresa_id: escopo.empresaId, ativo: true, padrao: true } },
     tx
   );
-  if (locaisPadrao.total !== 1 || locaisPadrao.rows.length !== 1 ||
-      normalizarRotulo(String(locaisPadrao.rows[0].nome ?? '')) !== normalizarRotulo(inventario.local_nome)) {
-    throw new HttpError(409,
-      'Carga cancelada: é obrigatório existir exatamente um local ativo/padrão "' + inventario.local_nome +
-      '" para a empresa. Encontrados: ' + locaisPadrao.rows.map((l) => String(l.nome) + ' (#' + l.id + ')').join(', ') + '.');
+  if (locaisPadrao.total !== 1 || locaisPadrao.rows.length !== 1) {
+    throw new HttpError(409, 'Carga cancelada: a empresa precisa ter exatamente um local ativo/padrão para o estoque único.');
   }
   const localPadrao = locaisPadrao.rows[0];
   const localId = Number(localPadrao.id);
-  if (String(localPadrao.nome) !== inventario.local_nome) {
-    await s.update(RESOURCES.locais, localId, { nome: inventario.local_nome }, tx);
-  }
-  const localNome = inventario.local_nome;
-
-  // Prepara e valida TODOS os saldos antes de apagar qualquer célula antiga.
-  // A chave física é produto-pai + tamanho + LOJA. Cor já foi isolada no pai.
-  const estoqueRows: Payload[] = [];
-  const movimentosAjusteRows: Payload[] = [];
-  const celulasFisicas = new Set<string>();
-  const skuPorCodigo = new Map(plano.itens.map((it) => [it.codigo_industria, it] as const));
-  let unidadesFisicasPreparadas = 0;
-  let skusComSaldo = 0;
-  for (const itemEstoque of inventario.itens) {
-    const destino = produtoEstoquePorSku.get(itemEstoque.sku);
-    const itemPlano = skuPorCodigo.get(itemEstoque.sku);
-    if (!destino || !itemPlano) {
-      throw new HttpError(409, 'Carga cancelada: não existe vínculo de estoque para o SKU ' + itemEstoque.sku + '.');
-    }
-    if (!Number.isInteger(itemEstoque.quantidade) || itemEstoque.quantidade < 0) {
-      throw new HttpError(422, 'Quantidade física inválida no SKU ' + itemEstoque.sku + '.');
-    }
-    const chaveCelula = String(destino.produto_id) + '|' + String(destino.tamanho_id ?? 0) + '|' + String(localId);
-    if (celulasFisicas.has(chaveCelula)) {
-      throw new HttpError(409,
-        'Carga cancelada: dois SKUs seriam gravados na mesma célula física de produto/tamanho/local. SKU conflitante: ' +
-        itemEstoque.sku + ', chave ' + chaveCelula + '.');
-    }
-    celulasFisicas.add(chaveCelula);
-    unidadesFisicasPreparadas += itemEstoque.quantidade;
-    if (itemEstoque.quantidade > 0) skusComSaldo++;
-    estoqueRows.push({
-      empresa_id: escopo.empresaId,
-      produto_id: destino.produto_id,
-      tamanho_id: destino.tamanho_id,
-      local_id: localId,
-      local: localNome,
-      quantidade: itemEstoque.quantidade,
-      estoque_min: 0,
-    });
-    // O movimento será calculado como delta contra a célula anterior logo
-    // após a fotografia atual ser lida. Reimportação idêntica gera delta zero.
-  }
-  if (celulasFisicas.size !== inventario.total_celulas || unidadesFisicasPreparadas !== inventario.total_unidades) {
-    throw new HttpError(409,
-      'Carga cancelada: a soma das células preparadas não confere com a prévia. Células ' +
-      celulasFisicas.size + '/' + inventario.total_celulas + '; unidades ' +
-      unidadesFisicasPreparadas + '/' + inventario.total_unidades + '.');
+  if (normalizarRotulo(String(localPadrao.nome || '')) !== 'loja') {
+    await s.update(RESOURCES.locais, localId, { nome: 'LOJA' }, tx);
   }
 
-  // Só agora, com catálogo/preços/saldos todos reconciliados, substitui as
-  // 101 células de teste (ou o snapshot anterior) pelo snapshot da planilha.
+  // Remove todas as células físicas de teste/legadas. Não cria células zeradas,
+  // não importa as 447 unidades da planilha e não gera movimentos artificiais.
   const estoquesAnteriores = await s.list(
     RESOURCES.estoques,
     { page: 1, pageSize: 5_000, filter: { empresa_id: escopo.empresaId } },
@@ -2546,9 +2505,15 @@ async function executarCarga(plano: Plano, inventario: InventarioPlanilha, actor
   );
   if (estoquesAnteriores.total !== estoquesAnteriores.rows.length) {
     throw new HttpError(409,
-      'Carga cancelada: a consulta de estoque anterior foi truncada (' +
+      'Carga cancelada: consulta de estoque truncada (' +
       estoquesAnteriores.rows.length + '/' + estoquesAnteriores.total + ').');
   }
+  for (const saldoAntigo of estoquesAnteriores.rows) {
+    await s.remove(RESOURCES.estoques, Number(saldoAntigo.id), tx);
+  }
+  const unidadesFisicasRemovidas = estoquesAnteriores.rows.reduce(
+    (total, row) => total + Number(row.quantidade ?? 0), 0
+  );
 
   const produtosAtuais = await s.list(
     RESOURCES.produtos,
@@ -2557,72 +2522,6 @@ async function executarCarga(plano: Plano, inventario: InventarioPlanilha, actor
   );
   if (produtosAtuais.total !== produtosAtuais.rows.length) {
     throw new HttpError(409, 'Carga cancelada: catálogo existente truncado; a substituição segura não pode continuar.');
-  }
-  const produtoPorId = new Map(produtosAtuais.rows.map((p) => [Number(p.id), p] as const));
-  const saldoNovoPorCelula = new Map<string, number>();
-  for (const row of estoqueRows) {
-    const chave = String(row.produto_id) + '|' + String(row.tamanho_id ?? 0) + '|' + String(row.local_id ?? 0);
-    if (saldoNovoPorCelula.has(chave)) {
-      throw new HttpError(409, 'Carga cancelada: colisão de célula física ' + chave + '.');
-    }
-    saldoNovoPorCelula.set(chave, Number(row.quantidade));
-  }
-  const chavesAntigas = new Set<string>();
-  for (const saldoAntigo of estoquesAnteriores.rows) {
-    const produtoAntigo = produtoPorId.get(Number(saldoAntigo.produto_id));
-    if (!produtoAntigo) {
-      throw new HttpError(409, 'Carga cancelada: a célula antiga #' + saldoAntigo.id + ' aponta para produto inexistente.');
-    }
-    const chave = String(saldoAntigo.produto_id) + '|' + String(saldoAntigo.tamanho_id ?? 0) + '|' + String(saldoAntigo.local_id ?? 0);
-    chavesAntigas.add(chave);
-    const anterior = Number(saldoAntigo.quantidade ?? 0);
-    const novo = saldoNovoPorCelula.get(chave) ?? 0;
-    const delta = novo - anterior;
-    if (delta !== 0) {
-      movimentosAjusteRows.push({
-        empresa_id: escopo.empresaId,
-        tipo: 'ajuste',
-        produto_id: Number(saldoAntigo.produto_id),
-        tamanho_id: saldoAntigo.tamanho_id == null ? null : Number(saldoAntigo.tamanho_id),
-        local_id: saldoAntigo.local_id == null ? null : Number(saldoAntigo.local_id),
-        local: String(saldoAntigo.local ?? localNome),
-        quantidade: delta,
-        usuario_id: autorId,
-        motivo: ('Substituição do saldo físico pela planilha-base | SKU ' + String(produtoAntigo.sku) +
-          ' | anterior ' + anterior + ' | novo ' + novo + ' | delta ' + delta).slice(0, 200),
-      });
-    }
-  }
-  for (const row of estoqueRows) {
-    const chave = String(row.produto_id) + '|' + String(row.tamanho_id ?? 0) + '|' + String(row.local_id ?? 0);
-    if (chavesAntigas.has(chave)) continue;
-    const delta = Number(row.quantidade ?? 0);
-    if (delta === 0) continue;
-    const produtoNovo = produtoPorId.get(Number(row.produto_id));
-    if (!produtoNovo) throw new HttpError(409, 'Carga cancelada: produto pai não encontrado na nova célula ' + chave + '.');
-    movimentosAjusteRows.push({
-      empresa_id: escopo.empresaId,
-      tipo: 'ajuste',
-      produto_id: Number(row.produto_id),
-      tamanho_id: row.tamanho_id == null ? null : Number(row.tamanho_id),
-      local_id: Number(row.local_id),
-      local: localNome,
-      quantidade: delta,
-      custo_unitario: produtoNovo.custo == null ? null : Number(produtoNovo.custo),
-      usuario_id: autorId,
-      motivo: ('Saldo físico inicial importado da planilha-base | SKU pai ' + String(produtoNovo.sku) +
-        ' | saldo ' + delta).slice(0, 200),
-    });
-  }
-
-  // O snapshot é substituído atomicamente. O razão recebe apenas o DELTA entre
-  // a fotografia anterior e a nova; reimportação idêntica não cria movimentos.
-  for (const saldoAntigo of estoquesAnteriores.rows) {
-    await s.remove(RESOURCES.estoques, Number(saldoAntigo.id), tx);
-  }
-  await s.insertMany(RESOURCES.estoques, estoqueRows, tx);
-  if (movimentosAjusteRows.length) {
-    await s.insertMany(RESOURCES.movimentacoes, movimentosAjusteRows, tx);
   }
 
   // Produtos de teste fora do catálogo-base deixam de ser comercializados.
@@ -2652,14 +2551,14 @@ async function executarCarga(plano: Plano, inventario: InventarioPlanilha, actor
 
   const resumoEstoque = {
     local_id: localId,
-    local: localNome,
-    celulas_importadas: estoqueRows.length,
-    unidades_importadas: unidadesFisicasPreparadas,
-    skus_com_saldo: skusComSaldo,
-    movimentacoes_ajuste: movimentosAjusteRows.length,
-    celulas_teste_substituidas: estoquesAnteriores.rows.length,
+    local: 'LOJA',
+    celulas_removidas: estoquesAnteriores.rows.length,
+    unidades_fisicas_removidas: unidadesFisicasRemovidas,
+    celulas_importadas: 0,
+    unidades_importadas: 0,
+    movimentacoes_geradas: 0,
+    saldo_inicial: 0,
     produtos_antigos_inativados: produtosAntigosInativados,
-    saldos_negativos_limitados_a_zero: inventario.saldos_negativos.length,
   };
   await s.audit(
     {
@@ -2668,7 +2567,7 @@ async function executarCarga(plano: Plano, inventario: InventarioPlanilha, actor
       acao: 'importar',
       recurso: 'produtos',
       registro_id: null,
-      descricao: `Carga canônica da planilha: ${produtos} produto(s)-pai, ${variacoes} variação(ões), ${precosGravados} preços gravados, ${precosVersionados} preços versionados; estoque LOJA substituído: ${estoquesAnteriores.rows.length} célula(s) anterior(es) → ${estoqueRows.length} célula(s), ${unidadesFisicasPreparadas} unidade(s); ${produtosAntigosInativados} produto(s) de teste inativado(s).`,
+      descricao: `Carga canônica da planilha: ${produtos} produto(s)-pai, ${variacoes} variação(ões), ${precosGravados} preços gravados, ${precosVersionados} preços versionados; estoque físico removido: ${estoquesAnteriores.rows.length} célula(s), ${unidadesFisicasRemovidas} unidade(s); nenhum saldo foi importado; ${produtosAntigosInativados} produto(s) de teste inativado(s).`,
       dados: {
         produtos, variacoes, ignorados,
         precos_gravados: precosGravados, precos_ignorados: precosIgnorados,
@@ -2676,7 +2575,7 @@ async function executarCarga(plano: Plano, inventario: InventarioPlanilha, actor
         fontes: fontesPresentes, conflitos_preco: conflitosPreco.slice(0, 100),
         rejeitados: rejeitados.slice(0, 100), ids: ids.slice(0, 100),
         estoque: resumoEstoque,
-        inventario_planilha: inventario.por_fonte,
+        estoque_fisico: { local: 'LOJA', celulas_removidas: estoquesAnteriores.rows.length, unidades_removidas: unidadesFisicasRemovidas, saldo_inicial_importado: 0 },
       },
       empresa_id: empresaDoAtorAudit(actor),
     },
@@ -2693,7 +2592,6 @@ async function executarCarga(plano: Plano, inventario: InventarioPlanilha, actor
     precos_versionados: precosVersionados,
     base_preco_definida: basePrecoDefinida,
     estoque: resumoEstoque,
-    inventario_planilha: inventario.por_fonte,
     conflitos_preco: conflitosPreco,
     rejeitados,
     total_identificadores: plano.validacoes.skus_distintos,

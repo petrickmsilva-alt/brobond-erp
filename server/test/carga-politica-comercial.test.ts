@@ -1,13 +1,13 @@
 // ============================================================================
 // CARGA DA POLÍTICA COMERCIAL — planilha-base como FONTE DE CADASTRO.
 //
-// O que precisa ser verdade (adendo operacional):
-//   • só a aba "Política Comercial Completa" é lida, com cabeçalho na linha 11;
+// Contrato operacional:
+//   • as três abas de cadastro são lidas; abas de movimentação servem só à conferência;
 //   • prévia NÃO grava nada;
 //   • a confirmação cria o produto-pai e as variações (cor × tamanho);
 //   • reimportar o mesmo arquivo NÃO duplica produto nem variação;
-//   • NENHUMA quantidade física/estoque é importada;
-//   • NENHUM preço/margem da planilha sobrescreve a regra do ERP;
+//   • estoque físico antigo é removido e nenhuma quantidade é importada;
+//   • política comercial, preços por condição e memória dos cálculos são gravados;
 //   • identificadores preservados como texto (zeros à esquerda intactos);
 //   • códigos de barras concatenados NÃO entram como código de barras.
 // ============================================================================
@@ -267,22 +267,36 @@ test('a prévia não grava nada e reporta as validações', async () => {
   assert.equal(depois, antes, 'a prévia não cria produtos');
 });
 
-test('a confirmação cria pais por cor, recalcula preços e substitui o estoque pelo saldo da planilha', async () => {
+test('a confirmação cria pais por cor, grava preços calculados e não importa quantidade física', async () => {
   const conteudo = await xlsxBase64(LINHAS_BASE, [
     { industria: 'CB2B010', codigo: 'DTF ORIGINALPRETAP' }, // concatenação: NÃO é GTIN
     { industria: 'CB2B011', codigo: '7891234567895' }, // EAN-13 com dígito verificador VÁLIDO
   ]);
   const s = getStore();
+  const loja = await s.findOneWhere(RESOURCES.locais, { empresa_id: 1, nome: 'LOJA' });
+  assert.ok(loja, 'local único LOJA já existe');
+  const produtoLegado = await s.insert(RESOURCES.produtos, {
+    empresa_id: 1, sku: 'LEGADO-TESTE-845', nome: 'Produto físico de teste', ativo: true, formato: 'simples',
+  });
+  await s.insert(RESOURCES.estoques, {
+    empresa_id: 1, produto_id: Number(produtoLegado.id), local_id: Number(loja!.id),
+    local: 'LOJA', quantidade: 845, estoque_min: 0,
+  });
   const resp = await request(app()).post('/api/carga/politica-comercial/confirmar').send({ conteudo, nome: 'x.xlsx' });
   assert.equal(resp.status, 200, JSON.stringify(resp.body));
   assert.equal(resp.body.produtos, 3, 'pais independentes para CAMISETA PRETA, CAMISETA BRANCA e ÓCULOS');
   assert.equal(resp.body.variacoes, 4, 'quatro variações da camiseta');
-  assert.equal(resp.body.estoque_importado, true);
-  assert.equal(resp.body.estoque.celulas_importadas, 5);
-  assert.equal(resp.body.estoque.unidades_importadas, 1, 'a planilha sintética declara uma unidade física na linha principal');
+  assert.equal(resp.body.estoque_importado, false);
+  assert.equal(resp.body.estoque_fisico_removido, true);
+  assert.equal(resp.body.estoque.celulas_importadas, 0);
+  assert.equal(resp.body.estoque.unidades_importadas, 0);
+  assert.equal(resp.body.estoque.saldo_inicial, 0);
   assert.equal(resp.body.estoque.local, 'LOJA');
-  assert.equal(resp.body.precos_sobrescritos, false);
-  assert.equal(resp.body.formulas_planilha_importadas, false);
+  assert.equal(resp.body.estoque.celulas_removidas, 1, 'a célula física antiga foi excluída');
+  assert.equal(resp.body.estoque.unidades_fisicas_removidas, 845, 'as 845 unidades de teste foram removidas');
+  assert.equal(resp.body.estoque.produtos_antigos_inativados, 1, 'o produto legado fica inativo, sem apagar histórico');
+  assert.equal(resp.body.precos_sobrescritos, true);
+  assert.equal(resp.body.formulas_planilha_importadas, true);
 
   const pai = await s.findOneWhere(RESOURCES.produtos, { sku: 'CAMISETA-BORDADO-B-PRETA', empresa_id: 1 });
   assert.ok(pai, 'o produto-pai foi criado');
@@ -337,11 +351,10 @@ test('a confirmação cria pais por cor, recalcula preços e substitui o estoque
   assert.equal(oculos!.ativo, false, 'STATUS INATIVO desativa o produto');
   assert.equal(oculos!.produto_pai_id ?? null, null, 'produto simples não tem pai');
 
-  // Uma única célula física foi criada em LOJA, com o saldo da planilha.
+  // A carga cadastra produtos e preços, mas não cria células nem movimentos físicos.
   const estoques = await s.list(RESOURCES.estoques, { page: 1, pageSize: 50, filter: { empresa_id: 1, local: 'LOJA' } });
-  assert.equal(estoques.rows.length, 5);
-  assert.equal(estoques.rows.reduce((total: number, row: any) => total + Number(row.quantidade), 0), 1);
-  assert.ok(await s.countWhere(RESOURCES.movimentacoes, { empresa_id: 1 }) > 0, 'ajuste do saldo fica auditado');
+  assert.equal(estoques.rows.length, 0);
+  assert.equal(await s.countWhere(RESOURCES.movimentacoes, { empresa_id: 1 }), 0);
 });
 
 test('reimportar o mesmo arquivo não duplica nada (idempotência)', async () => {
@@ -450,14 +463,16 @@ test('a prévia examina TODAS as abas e separa cadastro de movimentação', asyn
   assert.deepEqual(rec.codigos_aba_ausentes_na_principal['Política Comercial Roupas (2)'].sort(), ['93882-40', '93882-42']);
 });
 
-test('a confirmação cria produtos das TRÊS abas e substitui o saldo físico pelo inventário da planilha', async () => {
+test('a confirmação cria produtos das TRÊS abas e deixa o estoque físico zerado para lançamento administrativo', async () => {
   const conteudo = await xlsxBase64(LINHAS_BASE, [], { ...EXTRAS, movimentacao: true });
   const s = getStore();
   const resp = await request(app()).post('/api/carga/politica-comercial/confirmar').send({ conteudo, nome: 'x.xlsx' });
   assert.equal(resp.status, 200, JSON.stringify(resp.body));
-  assert.equal(resp.body.estoque_importado, true);
-  assert.equal(resp.body.estoque.celulas_importadas, 9);
-  assert.equal(resp.body.estoque.unidades_importadas, 3);
+  assert.equal(resp.body.estoque_importado, false);
+  assert.equal(resp.body.estoque_fisico_removido, true);
+  assert.equal(resp.body.estoque.celulas_importadas, 0);
+  assert.equal(resp.body.estoque.unidades_importadas, 0);
+  assert.equal(resp.body.estoque.saldo_inicial, 0);
   assert.equal(resp.body.estoque.local, 'LOJA');
 
   // Produto da aba de CONTROLE: cadastro próprio, custo e preço-base preservados.
@@ -475,14 +490,10 @@ test('a confirmação cria produtos das TRÊS abas e substitui o saldo físico p
   assert.ok(condCartao, 'o preço de venda no cartão entra como preço por condição');
   assert.equal(Number(condCartao!.preco), 142.7);
 
-  // O saldo explícito da linha principal e as quantidades da aba de roupas
-  // foram importados; os SKUs de controle sem contagem física ficam em zero.
-  const saldoControle = await s.findOneWhere(RESOURCES.estoques, { empresa_id: 1, produto_id: Number(controle!.id), local: 'LOJA' });
-  assert.equal(Number(saldoControle?.quantidade ?? 0), 0);
+  // Qtd. Estoque e controles físicos são ignorados na carga; o administrador lançará depois.
   const saldosLoja = await s.list(RESOURCES.estoques, { page: 1, pageSize: 100, filter: { empresa_id: 1, local: 'LOJA' } });
-  assert.equal(saldosLoja.rows.length, 9, 'todos os SKUs têm uma única célula física em LOJA');
-  assert.equal(saldosLoja.rows.reduce((total: number, row: any) => total + Number(row.quantidade), 0), 3, 'uma unidade principal mais duas unidades da aba de roupas');
-  assert.ok(await s.countWhere(RESOURCES.movimentacoes, { empresa_id: 1 }) > 0, 'o delta físico fica registrado no razão');
+  assert.equal(saldosLoja.rows.length, 0, 'a importação não cria células de estoque');
+  assert.equal(await s.countWhere(RESOURCES.movimentacoes, { empresa_id: 1 }), 0, 'a importação não cria movimentos físicos');
 });
 
 test('reimportar com as abas extras não duplica (idempotência entre fontes)', async () => {
@@ -621,7 +632,7 @@ test('unidadeDoTipo traduz só o conhecido e nunca inventa unidade', async () =>
   assert.equal(unidadeDoTipo('CAIXA DE PAPELÃO'), null, 'desconhecido não é inventado');
 });
 
-test('a confirmação grava unidade, fornecedor, atributos adicionais e saldo único da planilha', async () => {
+test('a confirmação grava unidade, fornecedor e atributos adicionais sem importar saldo', async () => {
   const { atributosAdicionais } = await import('../src/cargaPoliticaComercial');
   const conteudo = await xlsxBase64(LINHAS_BASE, [], {
     roupas: [
@@ -642,13 +653,10 @@ test('a confirmação grava unidade, fornecedor, atributos adicionais e saldo ú
   assert.ok(!('Preço de Venda Cartão' in attrs), 'preço oficial NÃO vira atributo (tem tabela própria)');
   assert.ok(!('Valor unitário Custo' in attrs), 'custo não vira atributo livre');
 
-  // A quantidade física vem da coluna Qtd. Estoque e entra no mesmo local LOJA.
-  const saldoRoupas = await s.list(RESOURCES.estoques, { page: 1, pageSize: 20, filter: { empresa_id: 1, produto_id: Number(roupas!.id), local: 'LOJA' } });
-  assert.equal(saldoRoupas.rows.reduce((total: number, row: any) => total + Number(row.quantidade), 0), 3);
+  // A quantidade da planilha é deliberadamente ignorada; o admin lançará o físico.
   const saldos = await s.list(RESOURCES.estoques, { page: 1, pageSize: 50, filter: { empresa_id: 1, local: 'LOJA' } });
-  assert.equal(saldos.rows.length, 6, 'cinco SKUs principais mais um SKU de roupas, em um só local');
-  assert.equal(saldos.rows.reduce((total: number, row: any) => total + Number(row.quantidade), 0), 4, 'uma unidade principal mais três unidades de roupas');
-  assert.ok(await s.countWhere(RESOURCES.movimentacoes, { empresa_id: 1 }) > 0, 'a alteração de saldo fica auditada no razão');
+  assert.equal(saldos.rows.length, 0, 'nenhuma célula física é criada');
+  assert.equal(await s.countWhere(RESOURCES.movimentacoes, { empresa_id: 1 }), 0, 'nenhum movimento físico é gerado');
 });
 
 test('atributos adicionais ignoram preço, cálculo e movimento — só cadastro livre', async () => {
