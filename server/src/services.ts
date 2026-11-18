@@ -280,7 +280,12 @@ const RECURSOS_COM_REFERENCIAS_ESTOQUE = new Set([
 ]);
 
 /** Antes de devolver labels/joined refs, confirma que cada relação pertence ao mesmo tenant do registro raiz. */
-export async function validarReferenciasDeSaida(r: Resource, rows: Row[], escopo: EscopoOuAtor): Promise<void> {
+export async function validarReferenciasDeSaida(
+  r: Resource,
+  rows: Row[],
+  escopo: EscopoOuAtor,
+  referenciasPrecarregadas?: Map<string, Set<number>>
+): Promise<void> {
   if (!rows.length || !RECURSOS_COM_REFERENCIAS_ESTOQUE.has(r.key)) return;
   const s = getStore();
   const escopoNormalizado = comoEscopo(escopo);
@@ -289,6 +294,15 @@ export async function validarReferenciasDeSaida(r: Resource, rows: Row[], escopo
     const empresaId = temEscopoEmpresa(alvo) ? dono : 0;
     const chave = `${alvo.key}:${empresaId}:${id}`;
     if (cache.has(chave)) return cache.get(chave)!;
+    // Uma rota que já leu a tabela inteira do mesmo tenant pode fornecer
+    // IDs previamente validados. Isso preserva o isolamento por empresa e
+    // elimina N+1 de referências pai (ex.: centenas de variações de produto).
+    const idsPrecarregados = referenciasPrecarregadas?.get(`${alvo.key}:${empresaId}`);
+    if (idsPrecarregados) {
+      const row = idsPrecarregados.has(id) ? ({ id } as Row) : null;
+      cache.set(chave, row);
+      return row;
+    }
     const filtro = empresaId ? { id, empresa_id: empresaId } : { id };
     const row = await s.findOneWhere(alvo, filtro);
     cache.set(chave, row);

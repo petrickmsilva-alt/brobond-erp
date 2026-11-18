@@ -84,10 +84,17 @@ export async function estoqueGrade(req: Request, res: Response) {
   // regra compartilhada com o PDV permanece a mesma; eliminamos apenas a
   // segunda listagem de locais da mesma empresa.
   const celulasCanonicas = await celulasDaEmpresa(escopo, undefined, locais.rows);
+
   if ([produtos, tamanhos, categorias, grades, gradeTamanhos, locais, colecoes].some((result) => result.total > result.rows.length)) {
     throw new HttpError(409, 'A grade do estoque excede o limite seguro de leitura. Nenhum resultado parcial foi retornado.');
   }
-  await Promise.all([validarReferenciasDeSaida(RESOURCES.produtos, produtos.rows, escopo)]);
+  // A lista completa de produtos já foi carregada e filtrada pelo tenant.
+  // Reutilizá-la na validação das referências pai evita uma consulta sequencial
+  // por variação (N+1) sem relaxar a validação de empresa.
+  const referenciasPrecarregadas = new Map<string, Set<number>>([
+    [`produtos:${escopo.empresaId}`, new Set(produtos.rows.map((produto) => Number(produto.id)))],
+  ]);
+  await validarReferenciasDeSaida(RESOURCES.produtos, produtos.rows, escopo, referenciasPrecarregadas);
   const nomesLocais = new Set<string>();
   for (const local of locais.rows) {
     const nome = String(local.nome || '');
