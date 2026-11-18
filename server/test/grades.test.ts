@@ -131,6 +131,27 @@ test('GET /estoques/grade expõe colunasPorGrade para a tela agrupar por grade',
   }
 });
 
+test('GET /estoques/grade filtra pelo local ativo e não oferece locais inativos', async () => {
+  const { estoqueGrade } = await import('../src/estoque');
+  const sufixo = Date.now();
+  const localAtivo = await s.insert(RESOURCES.locais, {
+    empresa_id: 1, nome: `LOJA-GRADE-${sufixo}`, ativo: true, padrao: false,
+  });
+  const localInativo = await s.insert(RESOURCES.locais, {
+    empresa_id: 1, nome: `LOCAL-INATIVO-GRADE-${sufixo}`, ativo: false, padrao: false,
+  });
+  try {
+    const res = fakeRes();
+    await estoqueGrade(fakeReq({}, { local: String(localAtivo.nome) }), res);
+    assert.equal(Number(res.body.local_id), Number(localAtivo.id));
+    assert.ok(res.body.locaisDisponiveis.includes(String(localAtivo.nome)));
+    assert.ok(!res.body.locaisDisponiveis.includes(String(localInativo.nome)));
+  } finally {
+    await s.remove(RESOURCES.locais, Number(localInativo.id));
+    await s.remove(RESOURCES.locais, Number(localAtivo.id));
+  }
+});
+
 test('contagem do inventário recebe a grade do produto para agrupar por grade', async () => {
   const { listItensInventario } = await import('../src/estoque');
   const inv = Number(await (async () => {
