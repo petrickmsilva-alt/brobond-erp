@@ -170,7 +170,10 @@ test('carga em PG real: preview não grava, confirmação persiste cadastro e pr
   const empresa = await createRecord(R.empresas, { nome: `CARGA ${sufixo}` }, admin);
   const empresaId = Number(empresa.id);
   const usuario = await store.insert(R.usuarios, { nome: `Gestor ${sufixo}`, email: `carga-${sufixo}@brobond.test`, perfil: 'gerente', empresa_id: empresaId, ativo: true });
-  const ator = { id: Number(usuario.id), name: String(usuario.nome), perfil: 'gerente' as const, empresa_id: empresaId, empresas: [empresaId] };
+  const usuarioId = Number(usuario.id);
+  const vinculoEmpresa = await store.findOneWhere(R.usuario_empresas, { usuario_id: usuarioId, empresa_id: empresaId });
+  if (!vinculoEmpresa) await store.insert(R.usuario_empresas, { usuario_id: usuarioId, empresa_id: empresaId });
+  const ator = { id: usuarioId, name: String(usuario.nome), perfil: 'gerente' as const, empresa_id: empresaId, empresa_sessao: empresaId, empresas: [empresaId] };
   // A carga exige exatamente um local físico ativo/padrão chamado LOJA.
   // Cria-se a pré-condição operacional da empresa de teste, como no helper
   // before() da suíte de memória, antes da prévia/confirmação.
@@ -185,6 +188,7 @@ test('carga em PG real: preview não grava, confirmação persiste cadastro e pr
 
   t.after(async () => {
     const apagar = async (sql: string) => query(sql, [empresaId]).catch(() => undefined);
+    await apagar(`DELETE FROM carga_politica_comercial_jobs WHERE empresa_id = $1`);
     await apagar(`DELETE FROM auditoria WHERE empresa_id = $1`);
     await apagar(`DELETE FROM movimentacoes WHERE empresa_id = $1`);
     await apagar(`DELETE FROM estoque_reservas WHERE empresa_id = $1`);
@@ -197,7 +201,8 @@ test('carga em PG real: preview não grava, confirmação persiste cadastro e pr
     await apagar(`DELETE FROM produtos WHERE empresa_id = $1`);
     await apagar(`DELETE FROM grade_tamanhos WHERE grade_id IN (SELECT id FROM grades WHERE nome LIKE $1)`);
     await apagar(`DELETE FROM grades WHERE nome LIKE $1`).catch(() => undefined);
-    await apagar(`DELETE FROM usuarios WHERE empresa_id = $1`);
+    await query(`DELETE FROM usuario_empresas WHERE usuario_id = $1`, [usuarioId]).catch(() => undefined);
+    await query(`DELETE FROM usuarios WHERE id = $1`, [usuarioId]).catch(() => undefined);
     await apagar(`DELETE FROM empresas WHERE id = $1`);
   });
 
@@ -287,4 +292,100 @@ test('carga em PG real: preview não grava, confirmação persiste cadastro e pr
   assert.equal(estoquesDepois.rows.length, 0, 'reimportação também não cria células de estoque');
   assert.equal(await store.countWhere(R.movimentacoes, { empresa_id: empresaId }), movimentosAntes, 'reimportação não cria movimentos físicos');
   assert.ok(escopo.empresaId === empresaId);
+
+  // 9) WORKER DURÁVEL: o mesmo importador roda em background e o status é consultável.
+  const {
+    iniciarJobCarga,
+    processarFilaCargaComercial,
+    statusJobCarga,
+    reivindicarJobCarga,
+  } = await import('../../src/cargaPoliticaComercial');
+
+  const jobCriado = resFake();
+  await iniciarJobCarga(reqDe(corpo, { user: ator }) as never, jobCriado.res);
+  assert.equal(jobCriado.saida.status, 202);
+  const jobId = String(jobCriado.saida.json.job_id);
+  await processarFilaCargaComercial();
+
+  const jobConsultado = resFake();
+  await statusJobCarga(reqDe({}, { user: ator, params: { id: jobId } }) as never, jobConsultado.res);
+  assert.equal(jobConsultado.saida.json.status, 'succeeded', `erro do worker: ${jobConsultado.saida.json.error ?? 'sem detalhe persistido'}`);
+  assert.equal(jobConsultado.saida.json.result.ok, true);
+  assert.equal(jobConsultado.saida.json.result.produtos, 0, 'worker reimporta sem duplicar os produtos existentes');
+  assert.equal(jobConsultado.saida.json.result.estoque_importado, false);
+  assert.equal(await store.countWhere(R.produtos, { empresa_id: empresaId }), prodAntes);
+
+  // 10) FALHA RECUPERÁVEL: erro de leitura não grava catálogo e permite retry idempotente.
+  const corpoInvalido = { conteudo: 'bm90LWEtcmVhbC14bHN4', nome: 'arquivo-invalido.xlsx' };
+  const falhaCriada = resFake();
+  await iniciarJobCarga(reqDe(corpoInvalido, { user: ator }) as never, falhaCriada.res);
+  const falhaId = String(falhaCriada.saida.json.job_id);
+  await processarFilaCargaComercial();
+  const falhaAntesRetry = (await query(
+    `SELECT status, attempts, lease_token FROM carga_politica_comercial_jobs WHERE id = $1`,
+    [falhaId]
+  )).rows[0];
+  assert.equal(falhaAntesRetry.status, 'failed');
+  assert.equal(falhaAntesRetry.attempts, 1);
+  assert.equal(falhaAntesRetry.lease_token, null);
+
+  const retry = resFake();
+  await iniciarJobCarga(reqDe(corpoInvalido, { user: ator }) as never, retry.res);
+  assert.equal(String(retry.saida.json.job_id), falhaId, 'retry reutiliza a mesma operação idempotente');
+  assert.equal(retry.saida.json.status, 'queued', 'falha terminal pode ser re-enfileirada');
+  await processarFilaCargaComercial();
+  const falhaDepoisRetry = (await query(
+    `SELECT status, attempts FROM carga_politica_comercial_jobs WHERE id = $1`,
+    [falhaId]
+  )).rows[0];
+  assert.equal(falhaDepoisRetry.status, 'failed');
+  assert.equal(falhaDepoisRetry.attempts, 1, 'contador reinicia para a nova tentativa');
+
+  // 11) CONCORRÊNCIA E RECUPERAÇÃO: uma empresa só tem um worker ativo;
+  // lease vencido pode ser retomado, e a conclusão perdida faz rollback.
+  const corpoFilaA = { conteudo: 'cXVldWUtaW50ZW50LWE=', nome: 'fila-a.xlsx' };
+  const corpoFilaB = { conteudo: 'cXVldWUtaW50ZW50LWI=', nome: 'fila-b.xlsx' };
+  const filaA = resFake();
+  const filaB = resFake();
+  await iniciarJobCarga(reqDe(corpoFilaA, { user: ator }) as never, filaA.res);
+  await iniciarJobCarga(reqDe(corpoFilaB, { user: ator }) as never, filaB.res);
+  const tokenA = randomUUID();
+  const tokenB = randomUUID();
+  const claimA = await reivindicarJobCarga(tokenA);
+  assert.equal(String(claimA.id), String(filaA.saida.json.job_id));
+  const claimB = await reivindicarJobCarga(tokenB);
+  assert.equal(claimB, null, 'não reivindica outro job enquanto a empresa já tem um em execução');
+
+  await query(
+    `UPDATE carga_politica_comercial_jobs SET heartbeat_at = now() - interval '3 minutes' WHERE id = $1`,
+    [claimA.id]
+  );
+  const retomado = await reivindicarJobCarga(tokenB);
+  assert.equal(String(retomado.id), String(claimA.id));
+  assert.equal(String(retomado.lease_token), tokenB, 'novo worker assume um lease novo');
+
+  await assert.rejects(
+    store.transaction(async (tx) => {
+      await tx!.query(
+        `UPDATE carga_politica_comercial_jobs
+            SET status = 'succeeded', lease_token = NULL
+          WHERE id = $1 AND status = 'running' AND lease_token = $2`,
+        [claimA.id, tokenB]
+      );
+      throw new Error('rollback intencional do teste');
+    }),
+    /rollback intencional/
+  );
+  const aposRollback = (await query(
+    `SELECT status, lease_token FROM carga_politica_comercial_jobs WHERE id = $1`,
+    [claimA.id]
+  )).rows[0];
+  assert.equal(aposRollback.status, 'running', 'a transição terminal foi revertida');
+  assert.equal(String(aposRollback.lease_token), tokenB, 'o lease permanece recuperável após rollback');
+  await query(
+    `UPDATE carga_politica_comercial_jobs
+        SET status = 'failed', lease_token = NULL, finished_at = now()
+      WHERE id = $1 AND lease_token = $2`,
+    [claimA.id, tokenB]
+  );
 });

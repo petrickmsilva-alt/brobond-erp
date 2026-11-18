@@ -1,19 +1,19 @@
 {
-  "gerado_em": "2026-11-15T17:53:32.304Z",
+  "gerado_em": "2026-11-18T00:22:40.928Z",
   "fonte_de_verdade_do_schema": "db/schema.sql + db/migrations/*.sql (PostgreSQL); Prisma = bounded context do commerce",
   "migrations": {
-    "sql": 123,
-    "sql_com_conteudo": 123,
+    "sql": 127,
+    "sql_com_conteudo": 127,
     "prisma": 7
   },
   "tabelas": {
-    "total": 237,
-    "com_empresa_id": 215,
+    "total": 238,
+    "com_empresa_id": 216,
     "sem_empresa_id": 22,
-    "fora_do_prisma": 226
+    "fora_do_prisma": 227
   },
-  "indices": 663,
-  "constraints": 464,
+  "indices": 667,
+  "constraints": 474,
   "recursos": {
     "total": 199,
     "com_tabela": 199,
@@ -93,10 +93,10 @@
     "com_recurso": 112
   },
   "rotas": {
-    "total": 513,
+    "total": 516,
     "por_metodo": {
-      "GET": 227,
-      "POST": 247,
+      "GET": 229,
+      "POST": 248,
       "PUT": 22,
       "DELETE": 14,
       "PATCH": 3
@@ -106,6 +106,10 @@
       {
         "base": "/api/operational-control",
         "router": "operationalControlRouter"
+      },
+      {
+        "base": "/api",
+        "router": "restringirAcessoPortalRepresentante"
       },
       {
         "base": "/api",
@@ -140,7 +144,7 @@
       {
         "modelo": "Produto",
         "tabela": "produtos",
-        "campos": 24,
+        "campos": 41,
         "temEmpresa": false,
         "temUsuarioTenancy": false
       },
@@ -211,20 +215,25 @@
   },
   "testes": {
     "server": {
-      "arquivos": 353,
-      "casos": 2891
+      "arquivos": 357,
+      "casos": 2918
     },
     "client": {
       "arquivos": 133,
       "casos": 1121
     },
-    "total": 4012
+    "total": 4039
   },
   "integracoes": {
     "arquivos_modules": 129,
     "arquivos_server_modules": 1
   },
   "achados": [
+    {
+      "nivel": "AVISO",
+      "regra": "TABELA_SEM_RECURSO",
+      "mensagem": "A tabela \"carga_politica_comercial_jobs\" tem empresa_id, mas nenhum recurso a expõe no CRUD genérico (escopo aplicado por endpoint próprio)."
+    },
     {
       "nivel": "AVISO",
       "regra": "TABELA_SEM_RECURSO",
@@ -427,6 +436,7 @@
     "arquivos",
     "auditoria",
     "bi_read_models",
+    "carga_politica_comercial_jobs",
     "catalogo_compartilhamentos",
     "catalogo_eventos",
     "catalogos",
