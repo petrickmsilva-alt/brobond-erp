@@ -362,10 +362,11 @@ test('a confirmação cria pais por cor, grava preços calculados e importa inve
   assert.equal(oculos!.ativo, false, 'STATUS INATIVO desativa o produto');
   assert.equal(oculos!.produto_pai_id ?? null, null, 'produto simples não tem pai');
 
-  // A carga cadastra produtos e preços, mas não cria células nem movimentos físicos.
+  // A aba CONTROLE ESTOQUE SAÍDA declara saldo final de uma unidade para CB2B010.
   const estoques = await s.list(RESOURCES.estoques, { page: 1, pageSize: 50, filter: { empresa_id: 1, local: 'LOJA' } });
-  assert.equal(estoques.rows.length, 0);
-  assert.equal(await s.countWhere(RESOURCES.movimentacoes, { empresa_id: 1 }), 0);
+  assert.equal(estoques.rows.length, 1, 'uma célula é criada para o único SKU com saldo positivo');
+  assert.equal(estoques.rows.reduce((soma: number, row: any) => soma + Number(row.quantidade), 0), 1);
+  assert.equal(await s.countWhere(RESOURCES.movimentacoes, { empresa_id: 1 }), 0, 'saldo inicial não cria movimento artificial');
 });
 
 test('reimportar o mesmo arquivo não duplica nada (idempotência)', async () => {
@@ -477,6 +478,8 @@ test('a prévia examina TODAS as abas e separa cadastro de movimentação', asyn
 test('a confirmação cria produtos das TRÊS abas e importa quantidades físicas', async () => {
   const conteudo = await xlsxBase64(LINHAS_BASE, [], { ...EXTRAS, movimentacao: true });
   const s = getStore();
+  const previa = await request(app()).post('/api/carga/politica-comercial/preview').send({ conteudo, nome: 'x.xlsx' });
+  assert.equal(previa.status, 200, JSON.stringify(previa.body));
   const resp = await request(app()).post('/api/carga/politica-comercial/confirmar').send({ conteudo, nome: 'x.xlsx' });
   assert.equal(resp.status, 200, JSON.stringify(resp.body));
   assert.equal(resp.body.estoque_importado, true);
@@ -500,10 +503,14 @@ test('a confirmação cria produtos das TRÊS abas e importa quantidades física
   assert.ok(condCartao, 'o preço de venda no cartão entra como preço por condição');
   assert.equal(Number(condCartao!.preco), 142.7);
 
-  // Qtd. Estoque e controles físicos são ignorados na carga; o administrador lançará depois.
+  // Os saldos físicos reconciliados são a fonte oficial da substituição em LOJA.
   const saldosLoja = await s.list(RESOURCES.estoques, { page: 1, pageSize: 100, filter: { empresa_id: 1, local: 'LOJA' } });
-  assert.equal(saldosLoja.rows.length, 0, 'a importação não cria células de estoque');
-  assert.equal(await s.countWhere(RESOURCES.movimentacoes, { empresa_id: 1 }), 0, 'a importação não cria movimentos físicos');
+  const unidadesGravadas = saldosLoja.rows.reduce((soma: number, row: any) => soma + Number(row.quantidade), 0);
+  assert.equal(unidadesGravadas, previa.body.inventario.total_unidades, 'a soma persistida coincide com a prévia oficial');
+  assert.equal(resp.body.estoque.unidades_importadas, previa.body.inventario.total_unidades);
+  assert.equal(resp.body.estoque.celulas_importadas, saldosLoja.rows.length);
+  assert.ok(saldosLoja.rows.length > 0, 'SKUs com saldo positivo criam células em LOJA');
+  assert.equal(await s.countWhere(RESOURCES.movimentacoes, { empresa_id: 1 }), 0, 'saldo inicial não gera movimentos artificiais');
 });
 
 test('reimportar com as abas extras não duplica (idempotência entre fontes)', async () => {
@@ -665,9 +672,9 @@ test('a confirmação grava unidade, fornecedor, atributos e saldo físico', asy
 
   // A quantidade reconciliada da planilha é gravada na célula do SKU em LOJA.
   const saldos = await s.list(RESOURCES.estoques, { page: 1, pageSize: 50, filter: { empresa_id: 1, local: 'LOJA' } });
-  assert.equal(saldos.rows.length, 2, 'as duas células físicas reconciliadas são criadas para os SKUs com saldo positivo');
-  assert.equal(Number(saldos.rows[0].quantidade), 3, 'as três unidades da planilha são importadas');
-  assert.equal(Number(resp.body.estoque.unidades_importadas), 3, 'o total importado fecha com a fonte');
+  assert.equal(saldos.rows.length, 2, 'uma célula para CB2B010 e outra para 93882-40');
+  assert.equal(saldos.rows.reduce((soma: number, row: any) => soma + Number(row.quantidade), 0), 4, 'uma unidade da aba de saldo + três unidades de Roupas');
+  assert.equal(Number(resp.body.estoque.unidades_importadas), 4, 'o total importado fecha com as duas fontes');
   assert.equal(await s.countWhere(RESOURCES.movimentacoes, { empresa_id: 1 }), 0, 'saldo inicial não gera movimento artificial');
 });
 
