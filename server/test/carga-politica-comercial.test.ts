@@ -461,6 +461,10 @@ test('a prévia examina TODAS as abas e separa cadastro de movimentação', asyn
   const conteudo = await xlsxBase64(LINHAS_BASE, [], { ...EXTRAS, movimentacao: true });
   const resp = await request(app()).post('/api/carga/politica-comercial/preview').send({ conteudo, nome: 'x.xlsx' });
   assert.equal(resp.status, 200, JSON.stringify(resp.body));
+  const inv = resp.body.inventario;
+  assert.equal(inv.total_celulas + inv.skus_sem_saldo, inv.total_skus, 'SKUs são separados entre saldo positivo e saldo zero');
+  assert.equal(Object.values(inv.por_fonte).reduce((soma: number, fonte: any) => soma + fonte.celulas, 0), inv.total_celulas, 'células físicas por fonte fecham com o total');
+  assert.equal(Object.values(inv.por_fonte).reduce((soma: number, fonte: any) => soma + fonte.unidades, 0), inv.total_unidades, 'unidades por fonte fecham com o total');
   const rec = resp.body.reconciliacao;
   assert.ok(rec, 'a prévia traz a reconciliação das abas');
   const porAba = Object.fromEntries(rec.abas.map((a: any) => [a.aba, a]));
