@@ -250,3 +250,17 @@ credencial ao agente e sem execução arbitrária. Módulo: `modules/operational
   confirmação textual e reautenticação (`ReauthModal`) — o agente MCP não aprova. Não
   criar painel/modal para esse fluxo: o gate `audit:ux` reprova (`TETO_PAINEIS_INLINE` é
   imutável).
+
+## Carga da Política Comercial — fila durável (migration 0126)
+
+A confirmação da carga não pode depender de uma requisição HTTP aberta durante a importação. A rota de confirmação enfileira uma operação e a tela acompanha o resultado pelo identificador persistido.
+
+- **Rotas:** POST /api/carga/politica-comercial/confirmar e POST /api/carga/politica-comercial/jobs enfileiram; GET /api/carga/politica-comercial/jobs/:id consulta. A consulta é restrita ao usuário e à empresa autenticados; empresa/usuário nunca vêm do payload.
+- **Persistência:** carga_politica_comercial_jobs existe na migration 0126_carga_politica_comercial_jobs.sql e no espelho db/schema.sql. Não registrar essa tabela no CRUD genérico: é infraestrutura interna da fila.
+- **Worker:** só inicia depois de banco/migrações prontos; varre a fila a cada 5 segundos. A claim usa FOR UPDATE SKIP LOCKED, um índice parcial limita a uma carga ativa por empresa e cada execução recebe um lease_token UUID.
+- **Recuperação:** heartbeat começa imediatamente após a claim e renova a cada 15 segundos. Lease sem heartbeat por 2 minutos pode ser retomado. Toda renovação e conclusão compara o token; worker antigo não consegue confirmar depois que outra instância assumiu o lease.
+- **Atomicidade:** gravações do catálogo e transição para succeeded ficam na mesma transação. Se o lease for perdido ou qualquer gravação falhar, o resultado não é confirmado e a transação reverte.
+- **Validação:** worker e confirmação síncrona usam a mesma validação de plano: limite de linhas, status inválidos e conflitos de preço. Estoque físico da planilha não é importado; a política comercial não altera usuários/acessos.
+- **Idempotência:** mesmo conteúdo do mesmo usuário/empresa retorna o mesmo job. Job ainda ativo não é duplicado; job concluído não é repetido; job falho pode ser reenfileirado com o mesmo identificador e contador reiniciado.
+- **Testes PostgreSQL:** server/test/pg/pim-carga-planilha-pg.test.ts cobre worker bem-sucedido, status, reimportação sem duplicidade, falha/retry, concorrência por empresa, retomada de lease e rollback da conclusão. Executar no gate npm --workspace server run test:pg com DATABASE_URL de teste.
+- **Produção:** nunca disparar a carga oficial como parte do deploy. Depois da correção publicada, conferir a migração e o estado real do job; só então executar a carga mediante autorização explícita do Diretor.

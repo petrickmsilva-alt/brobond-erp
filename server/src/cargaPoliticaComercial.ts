@@ -2044,6 +2044,18 @@ export async function lerPlano(body: Record<string, unknown>): Promise<{ leitura
   return { leitura: principal, plano, reconciliacao, inventario, barcodes: { validos: mapa.size, concat, invalidos } };
 }
 
+export function validarPlanoParaCarga(plano: Plano): void {
+  if (plano.itens.length > LIMITE_CARGA) {
+    throw new HttpError(413, `A carga aceita no máximo ${LIMITE_CARGA} linhas por vez. Divida a planilha.`);
+  }
+  if (plano.validacoes.status_invalidos.length) {
+    throw new HttpError(409, `A planilha contém ${plano.validacoes.status_invalidos.length} status inválido(s). Corrija a origem e gere uma nova prévia.`);
+  }
+  if (plano.validacoes.precos_conflitantes_arquivo.length) {
+    throw new HttpError(409, `A planilha contém ${plano.validacoes.precos_conflitantes_arquivo.length} conflito(s) de preço. Corrija a origem e gere uma nova prévia.`);
+  }
+}
+
 export async function previewCarga(req: Request, res: Response) {
   const actor = currentUser(req);
   exigirGestor(actor);
@@ -2088,9 +2100,7 @@ export async function confirmarCarga(req: Request, res: Response) {
   const s = getStore();
   try {
     const { plano, reconciliacao, inventario } = await lerPlano((req.body || {}) as Record<string, unknown>);
-    if (plano.itens.length > LIMITE_CARGA) {
-      throw new HttpError(413, `A carga aceita no máximo ${LIMITE_CARGA} linhas por vez. Divida a planilha.`);
-    }
+    validarPlanoParaCarga(plano);
     const resultado = await s.transaction(async (tx) => executarCarga(plano, inventario, actor, escopo, tx));
     res.json({
       ok: true,
@@ -2758,7 +2768,17 @@ export async function iniciarJobCarga(req: Request, res: Response) {
       (id, empresa_id, usuario_id, idempotency_hash, payload)
      VALUES ($1,$2,$3,$4,$5::jsonb)
      ON CONFLICT (empresa_id, usuario_id, idempotency_hash)
-     DO UPDATE SET idempotency_hash = EXCLUDED.idempotency_hash
+     DO UPDATE SET
+       payload = CASE WHEN carga_politica_comercial_jobs.status = 'failed' THEN EXCLUDED.payload ELSE carga_politica_comercial_jobs.payload END,
+       status = CASE WHEN carga_politica_comercial_jobs.status = 'failed' THEN 'queued' ELSE carga_politica_comercial_jobs.status END,
+       result = CASE WHEN carga_politica_comercial_jobs.status = 'failed' THEN NULL ELSE carga_politica_comercial_jobs.result END,
+       error = CASE WHEN carga_politica_comercial_jobs.status = 'failed' THEN NULL ELSE carga_politica_comercial_jobs.error END,
+       created_at = CASE WHEN carga_politica_comercial_jobs.status = 'failed' THEN now() ELSE carga_politica_comercial_jobs.created_at END,
+       started_at = CASE WHEN carga_politica_comercial_jobs.status = 'failed' THEN NULL ELSE carga_politica_comercial_jobs.started_at END,
+       heartbeat_at = CASE WHEN carga_politica_comercial_jobs.status = 'failed' THEN NULL ELSE carga_politica_comercial_jobs.heartbeat_at END,
+       finished_at = CASE WHEN carga_politica_comercial_jobs.status = 'failed' THEN NULL ELSE carga_politica_comercial_jobs.finished_at END,
+       attempts = CASE WHEN carga_politica_comercial_jobs.status = 'failed' THEN 0 ELSE carga_politica_comercial_jobs.attempts END,
+       lease_token = CASE WHEN carga_politica_comercial_jobs.status = 'failed' THEN NULL ELSE carga_politica_comercial_jobs.lease_token END
      RETURNING id, status, created_at`,
     [randomUUID(), empresaId, actor.id, hash, JSON.stringify(body)]
   );
@@ -2777,22 +2797,34 @@ export async function statusJobCarga(req: Request, res: Response) {
   res.json(result.rows[0]);
 }
 
-async function reivindicarJobCarga(): Promise<any | null> {
+export async function reivindicarJobCarga(workerToken = randomUUID()): Promise<any | null> {
   const result = await queryDb(
     `WITH candidato AS (
        SELECT j.id
          FROM carga_politica_comercial_jobs j
-        WHERE j.status = 'queued'
-           OR (j.status = 'running' AND j.heartbeat_at < now() - interval '2 minutes')
+        WHERE (
+          j.status = 'queued'
+          AND NOT EXISTS (
+            SELECT 1
+              FROM carga_politica_comercial_jobs ativo
+             WHERE ativo.empresa_id = j.empresa_id
+               AND ativo.status = 'running'
+          )
+        ) OR (
+          j.status = 'running'
+          AND j.heartbeat_at < now() - interval '2 minutes'
+        )
         ORDER BY j.created_at
         FOR UPDATE SKIP LOCKED
         LIMIT 1
      )
      UPDATE carga_politica_comercial_jobs j
-        SET status = 'running', started_at = COALESCE(j.started_at, now()),
+        SET status = 'running', lease_token = $1,
+            started_at = COALESCE(j.started_at, now()),
             heartbeat_at = now(), attempts = j.attempts + 1, error = NULL
        FROM candidato c WHERE j.id = c.id
-       RETURNING j.*`
+       RETURNING j.*`,
+    [workerToken]
   );
   return result.rows[0] || null;
 }
@@ -2802,9 +2834,27 @@ export async function processarFilaCargaComercial(): Promise<void> {
   cargaWorkerAtivo = true;
   let heartbeat: ReturnType<typeof setInterval> | null = null;
   let job: any = null;
+  let leaseLost = false;
+  const workerToken = randomUUID();
   try {
-    job = await reivindicarJobCarga();
+    job = await reivindicarJobCarga(workerToken);
     if (!job) return;
+
+    // O lease é renovado desde o claim, inclusive durante a leitura do XLSX.
+    heartbeat = setInterval(() => {
+      void queryDb(
+        `UPDATE carga_politica_comercial_jobs
+            SET heartbeat_at = now()
+          WHERE id = $1 AND status = 'running' AND lease_token = $2`,
+        [job.id, workerToken]
+      ).then((r) => {
+        if (r.rowCount !== 1) leaseLost = true;
+      }).catch(() => {
+        leaseLost = true;
+      });
+    }, 15_000);
+    heartbeat.unref?.();
+
     const usuario = await getStore().get(RESOURCES.usuarios, Number(job.usuario_id));
     if (!usuario || usuario.ativo === false || !['admin', 'gerente'].includes(String(usuario.perfil))) {
       throw new HttpError(403, 'Usuário não está mais habilitado a executar a carga.');
@@ -2812,37 +2862,44 @@ export async function processarFilaCargaComercial(): Promise<void> {
     const actor = usuario as any;
     exigirGestor(actor);
     checkAccess(RESOURCES.produtos, actor, 'create');
-    if (escopoDe(actor).empresaId !== Number(job.empresa_id)) {
+    const escopo = escopoDe(actor);
+    if (escopo.empresaId !== Number(job.empresa_id)) {
       throw new HttpError(403, 'A empresa ativa do usuário mudou; solicite uma nova prévia.');
     }
+
     const { plano, reconciliacao, inventario } = await lerPlano(job.payload as Record<string, unknown>);
-    if (plano.itens.length > LIMITE_CARGA) throw new HttpError(413, `A carga aceita no máximo ${LIMITE_CARGA} linhas por vez.`);
-    heartbeat = setInterval(() => {
-      void queryDb('UPDATE carga_politica_comercial_jobs SET heartbeat_at = now() WHERE id = $1 AND status = $2', [job.id, 'running']).catch(() => undefined);
-    }, 15_000);
-    heartbeat.unref?.();
+    validarPlanoParaCarga(plano);
+    if (leaseLost) throw new HttpError(409, 'O processamento perdeu a reserva de execução e será recuperado pela fila.');
+
     await getStore().transaction(async (tx) => {
-      const dados = await executarCarga(plano, inventario, actor, escopoDe(actor), tx);
+      const dados = await executarCarga(plano, inventario, actor, escopo, tx);
       const resultado = {
         ok: true, ...dados, abas_examinadas: reconciliacao.abas.length, reconciliacao,
         estoque_importado: false, estoque_fisico_removido: true, saldo_inicial: 0,
         precos_sobrescritos: true, formulas_planilha_importadas: true,
         observacao: 'Política comercial gravada por SKU. Células físicas anteriores removidas; nenhuma quantidade da planilha importada. O estoque inicial será lançado posteriormente no local LOJA.'
       };
-      await tx!.query(
+      const concluido = await tx!.query(
         `UPDATE carga_politica_comercial_jobs SET status = 'succeeded',
-           result = $2::jsonb, error = NULL, finished_at = now(), heartbeat_at = now()
-         WHERE id = $1 AND status = 'running'`,
-        [job.id, JSON.stringify(resultado)]
+           result = $2::jsonb, error = NULL, finished_at = now(),
+           heartbeat_at = now(), lease_token = NULL
+         WHERE id = $1 AND status = 'running' AND lease_token = $3`,
+        [job.id, JSON.stringify(resultado), workerToken]
       );
+      if (concluido.rowCount !== 1) {
+        throw new Error('A reserva da carga foi perdida antes da confirmação; a transação será revertida.');
+      }
     });
   } catch (error) {
-    const message = error instanceof HttpError ? error.message : 'Falha ao executar a carga; a transação foi revertida. Consulte os logs operacionais.';
+    const message = error instanceof HttpError
+      ? error.message
+      : 'Falha ao executar a carga; a transação foi revertida. Consulte os logs operacionais.';
     if (job?.id) {
       await queryDb(
         `UPDATE carga_politica_comercial_jobs SET status = 'failed', error = $2,
-           finished_at = now(), heartbeat_at = now() WHERE id = $1 AND status = 'running'`,
-        [job.id, message.slice(0, 1500)]
+           finished_at = now(), heartbeat_at = now(), lease_token = NULL
+         WHERE id = $1 AND status = 'running' AND lease_token = $3`,
+        [job.id, message.slice(0, 1500), workerToken]
       ).catch(() => undefined);
     }
   } finally {
