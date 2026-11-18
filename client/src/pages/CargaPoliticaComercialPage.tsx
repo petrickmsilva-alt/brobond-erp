@@ -23,7 +23,7 @@ type Preview = {
   total: number;
   validacoes: Validacoes;
   reconciliacao: { abas: Array<{ nome: string }> };
-  inventario: { local_nome: string; total_skus: number; total_unidades: number; total_celulas: number };
+  inventario: { local_nome: string; total_skus: number; total_unidades: number; total_celulas: number; por_fonte: Record<string, { skus: number; unidades: number }> };
   limite: number;
   truncado: boolean;
   nao_gravado: string;
@@ -230,8 +230,9 @@ export default function CargaPoliticaComercialPage() {
                   <StatCard label="Linhas examinadas" value={formatar(preview.validacoes.registros)} />
                 </div>
                 <div className="space-y-2 border-t border-slate-100 p-4 text-sm">
-                  <p><strong>Estoque na planilha:</strong> {formatar(preview.inventario.total_celulas)} células, {formatar(preview.inventario.total_skus)} SKUs e {formatar(preview.inventario.total_unidades)} unidades identificadas. Nenhuma quantidade será importada; saldo inicial zero no local LOJA.</p>
-                  <p><strong>Status inválidos:</strong> {formatar(preview.validacoes.status_invalidos.length)} · <strong>Conflitos de preço:</strong> {formatar(preview.validacoes.precos_conflitantes_arquivo.length)} · <strong>SKUs-pai desempatados:</strong> {formatar(preview.validacoes.skus_pai_colididos.length)}</p>
+                  <p><strong>Estoque a importar em {preview.inventario.local_nome}:</strong> {formatar(preview.inventario.total_celulas)} células previstas, {formatar(preview.inventario.total_skus)} SKUs e {formatar(preview.inventario.total_unidades)} unidades. Na confirmação, o saldo físico anterior será substituído por estas quantidades reconciliadas.</p>
+                  <p className="text-slate-600"><strong>Conferência por fonte:</strong> {Object.entries(preview.inventario.por_fonte || {}).map(([fonte, totais]) => fonte + ': ' + formatar(totais.skus) + ' SKUs / ' + formatar(totais.unidades) + ' unidades').join(' · ') || 'Sem discriminação disponível.'}</p>
+                  <p><strong>Status inválidos:</strong> {formatar(preview.validacoes.status_invalidos.length)} · <strong>Conflitos de preço:</strong> {formatar(preview.validacoes.precos_conflitantes_arquivo.length)} · <strong>Colisões de SKU-pai resolvidas automaticamente:</strong> {formatar(preview.validacoes.skus_pai_colididos.length)}</p>
                   <p><strong>Códigos de barras:</strong> {formatar(preview.validacoes.codigos_barras_validos)} válidos; {formatar(preview.validacoes.codigos_barras_concat)} concatenações e {formatar(preview.validacoes.codigos_barras_invalidos)} inválidos não serão tratados como GTIN.</p>
                   <p className="text-slate-600">{preview.nao_gravado}</p>
                   {bloqueios && <Alert tone="red">A confirmação está bloqueada: a prévia contém linhas truncadas, status inválidos ou conflitos de preço. Corrija a origem antes de prosseguir.</Alert>}
@@ -242,7 +243,7 @@ export default function CargaPoliticaComercialPage() {
                 <CardHeader title="3. Confirmar importação" subtitle="A confirmação executa a rotina transacional existente do ERP." icon={AlertTriangle} />
                 <div className="space-y-3 p-4">
                   <Alert tone="red">
-                    A operação substitui os dados do catálogo/preços da empresa BROBOND, inativa produtos antigos fora da planilha e remove as células de estoque físico anteriores. Não importa saldo da planilha. Empresa, usuários, acessos e histórico de movimentações são preservados. Custos com #REF! permanecem nulos, sem custo ou margem inventados.
+                    A operação substitui os dados do catálogo/preços da empresa BROBOND, inativa produtos antigos fora da planilha, remove as células de estoque físico anteriores e importa o inventário reconciliado exibido na prévia para o local único LOJA. Empresa, usuários, acessos e histórico de movimentações são preservados; o saldo inicial não gera movimentos artificiais. Custos com #REF! permanecem nulos, sem custo ou margem inventados.
                   </Alert>
                   <label className="flex items-start gap-2 text-sm">
                     <input type="checkbox" className="mt-1" checked={aceite} onChange={(e) => setAceite(e.target.checked)} />
