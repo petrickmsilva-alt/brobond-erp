@@ -411,26 +411,31 @@ export class PgStore implements Store {
     const from = `FROM ${r.table} t ${joins.join(' ')} ${where}`;
 
     const offset = (p.page - 1) * p.pageSize;
-    // PERF-05 — UMA ida ao banco, não duas.
+    // PERF-06 — uma única consulta entrega página + total.
     //
-    // A contagem e a página foram separadas por histórico (uma falha de COUNT
-    // não deveria custar a página). Elas são independentes e somente-leitura:
-    // disparando juntas, a tela paga o MAIOR tempo (não a soma). Com banco
-    // gerenciado fora da região da API, cada round-trip custa dezenas de ms e
-    // isso aparecia em TODA listagem.
+    // COUNT(*) OVER() calcula o total antes do LIMIT/OFFSET, evitando abrir
+    // duas consultas simultâneas por listagem. A rota da grade chama várias
+    // listagens em paralelo; reduzir cada uma a uma ida diminui a pressão no
+    // pool e no compute do Neon sem alterar filtros, ordenação ou paginação.
     //
-    // Em transação, o cliente `pg` enfileira as duas consultas no mesmo
-    // backend — a semântica é a mesma da execução em série (mesmo snapshot).
-    const [totalRes, rowsRes] = await Promise.all([
-      q(`SELECT COUNT(*)::int AS total ${from}`, params, tx),
-      q(
-        `SELECT ${selectList} ${from} ${orderClause(r, p)} LIMIT ${p.pageSize} OFFSET ${offset}`,
-        params,
-        tx
-      ),
-    ]);
-    const total = totalRes.rows[0]?.total ?? 0;
-    return { rows: rowsRes.rows, total, page: p.page, pageSize: p.pageSize };
+    // Página fora do intervalo: como não há linha para carregar o total da
+    // janela, faz-se COUNT separado somente nesse caso. As listagens da grade
+    // usam page=1 e nunca precisam desse fallback.
+    const rowsRes = await q(
+      `SELECT ${selectList}, COUNT(*) OVER() AS "__total" ${from} ${orderClause(r, p)} LIMIT ${p.pageSize} OFFSET ${offset}`,
+      params,
+      tx
+    );
+    let total = Number(rowsRes.rows[0]?.__total ?? 0);
+    const rows = rowsRes.rows.map((row) => {
+      const { __total: _total, ...data } = row;
+      return data;
+    });
+    if (rowsRes.rows.length === 0 && offset > 0) {
+      const totalRes = await q(`SELECT COUNT(*)::int AS total ${from}`, params, tx);
+      total = Number(totalRes.rows[0]?.total ?? 0);
+    }
+    return { rows, total, page: p.page, pageSize: p.pageSize };
   }
 
   async get(r: Resource, id: number, tx?: Tx): Promise<Row | null> {
