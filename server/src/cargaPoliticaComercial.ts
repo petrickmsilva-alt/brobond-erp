@@ -31,7 +31,7 @@ import type { Request, Response } from 'express';
 import ExcelJS from 'exceljs';
 import JSZip from 'jszip';
 import { HttpError } from './errors';
-import { empresaDoAtorAudit } from './empresa';
+import { EMPRESA_PADRAO, empresaDoAtorAudit } from './empresa';
 import { RESOURCES } from './resources';
 import { checkAccess, escopoDe, getStore, toHttpError } from './services';
 import { currentUser } from './auth';
@@ -2859,12 +2859,34 @@ export async function processarFilaCargaComercial(): Promise<void> {
     if (!usuario || usuario.ativo === false || !['admin', 'gerente'].includes(String(usuario.perfil))) {
       throw new HttpError(403, 'Usuário não está mais habilitado a executar a carga.');
     }
-    const actor = usuario as any;
+    const empresaJob = Number(job.empresa_id);
+    const empresaPadrao = Number(usuario.empresa_id) > 0
+      ? Number(usuario.empresa_id)
+      : EMPRESA_PADRAO;
+    const concessao = empresaJob === empresaPadrao
+      ? { rowCount: 1 }
+      : await queryDb(
+          `SELECT 1 FROM usuario_empresas WHERE usuario_id = $1 AND empresa_id = $2 LIMIT 1`,
+          [Number(usuario.id), empresaJob]
+        );
+    if (concessao.rowCount !== 1) {
+      throw new HttpError(403, 'O usuário não possui mais acesso à empresa desta carga.');
+    }
+
+    // A empresa ativa é um claim da sessão e não fica gravada na linha do
+    // usuário. O job persiste o escopo que foi autenticado no enqueue; aqui
+    // revalidamos a concessão e reconstruímos o ator para aquela empresa.
+    const actor = {
+      ...(usuario as any),
+      empresa_sessao: empresaJob,
+      empresas: [...new Set([empresaPadrao, empresaJob])],
+      consolidar: false,
+    } as any;
     exigirGestor(actor);
     checkAccess(RESOURCES.produtos, actor, 'create');
     const escopo = escopoDe(actor);
-    if (escopo.empresaId !== Number(job.empresa_id)) {
-      throw new HttpError(403, 'A empresa ativa do usuário mudou; solicite uma nova prévia.');
+    if (escopo.empresaId !== empresaJob) {
+      throw new HttpError(403, 'Não foi possível revalidar o escopo da empresa desta carga.');
     }
 
     const { plano, reconciliacao, inventario } = await lerPlano(job.payload as Record<string, unknown>);

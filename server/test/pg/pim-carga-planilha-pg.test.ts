@@ -170,7 +170,10 @@ test('carga em PG real: preview não grava, confirmação persiste cadastro e pr
   const empresa = await createRecord(R.empresas, { nome: `CARGA ${sufixo}` }, admin);
   const empresaId = Number(empresa.id);
   const usuario = await store.insert(R.usuarios, { nome: `Gestor ${sufixo}`, email: `carga-${sufixo}@brobond.test`, perfil: 'gerente', empresa_id: empresaId, ativo: true });
-  const ator = { id: Number(usuario.id), name: String(usuario.nome), perfil: 'gerente' as const, empresa_id: empresaId, empresas: [empresaId] };
+  const usuarioId = Number(usuario.id);
+  const vinculoEmpresa = await store.findOneWhere(R.usuario_empresas, { usuario_id: usuarioId, empresa_id: empresaId });
+  if (!vinculoEmpresa) await store.insert(R.usuario_empresas, { usuario_id: usuarioId, empresa_id: empresaId });
+  const ator = { id: usuarioId, name: String(usuario.nome), perfil: 'gerente' as const, empresa_id: empresaId, empresa_sessao: empresaId, empresas: [empresaId] };
   // A carga exige exatamente um local físico ativo/padrão chamado LOJA.
   // Cria-se a pré-condição operacional da empresa de teste, como no helper
   // before() da suíte de memória, antes da prévia/confirmação.
@@ -198,7 +201,8 @@ test('carga em PG real: preview não grava, confirmação persiste cadastro e pr
     await apagar(`DELETE FROM produtos WHERE empresa_id = $1`);
     await apagar(`DELETE FROM grade_tamanhos WHERE grade_id IN (SELECT id FROM grades WHERE nome LIKE $1)`);
     await apagar(`DELETE FROM grades WHERE nome LIKE $1`).catch(() => undefined);
-    await apagar(`DELETE FROM usuarios WHERE empresa_id = $1`);
+    await query(`DELETE FROM usuario_empresas WHERE usuario_id = $1`, [usuarioId]).catch(() => undefined);
+    await query(`DELETE FROM usuarios WHERE id = $1`, [usuarioId]).catch(() => undefined);
     await apagar(`DELETE FROM empresas WHERE id = $1`);
   });
 
