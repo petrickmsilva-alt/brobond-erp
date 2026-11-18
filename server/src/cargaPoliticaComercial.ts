@@ -1758,7 +1758,8 @@ export type InventarioPlanilha = {
   total_skus: number;
   total_unidades: number;
   total_celulas: number;
-  por_fonte: Record<string, { skus: number; unidades: number }>;
+  skus_sem_saldo: number;
+  por_fonte: Record<string, { skus: number; celulas: number; unidades: number }>;
   saldos_negativos: { sku: string; linha: number; saldo_calculado: number; estoque_petrick: number; saida_petrick: number; estoque_jefferson: number; saida_jefferson: number }[];
   contagens_sem_correspondencia: { descricao: string; tamanho: string; quantidade: number; linha: number; candidatos: string[] }[];
 };
@@ -1995,8 +1996,9 @@ export function extrairInventarioPlanilha(wb: ExcelJS.Workbook, plano: Plano): I
   });
   const porFonte: InventarioPlanilha['por_fonte'] = {};
   for (const item of itens) {
-    const grupo = porFonte[item.fonte] ?? { skus: 0, unidades: 0 };
+    const grupo = porFonte[item.fonte] ?? { skus: 0, celulas: 0, unidades: 0 };
     grupo.skus++;
+    if (item.quantidade > 0) grupo.celulas++;
     grupo.unidades += item.quantidade;
     porFonte[item.fonte] = grupo;
   }
@@ -2005,7 +2007,8 @@ export function extrairInventarioPlanilha(wb: ExcelJS.Workbook, plano: Plano): I
     itens,
     total_skus: itens.length,
     total_unidades: itens.reduce((total, item) => total + item.quantidade, 0),
-    total_celulas: itens.length,
+    total_celulas: itens.filter((item) => item.quantidade > 0).length,
+    skus_sem_saldo: itens.filter((item) => item.quantidade === 0).length,
     por_fonte: porFonte,
     saldos_negativos: saldosNegativos,
     contagens_sem_correspondencia: contagensSemCorrespondencia,
@@ -2072,6 +2075,7 @@ export async function previewCarga(req: Request, res: Response) {
         total_skus: inventario.total_skus,
         total_unidades: inventario.total_unidades,
         total_celulas: inventario.total_celulas,
+        skus_sem_saldo: inventario.skus_sem_saldo,
         por_fonte: inventario.por_fonte,
         saldos_negativos_limitados_a_zero: inventario.saldos_negativos,
       },
