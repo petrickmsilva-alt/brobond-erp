@@ -267,7 +267,7 @@ test('a prévia não grava nada e reporta as validações', async () => {
   assert.equal(depois, antes, 'a prévia não cria produtos');
 });
 
-test('a confirmação cria pais por cor, grava preços calculados e não importa quantidade física', async () => {
+test('a confirmação cria pais por cor, grava preços calculados e importa inventário', async () => {
   const conteudo = await xlsxBase64(LINHAS_BASE, [
     { industria: 'CB2B010', codigo: 'DTF ORIGINALPRETAP' }, // concatenação: NÃO é GTIN
     { industria: 'CB2B011', codigo: '7891234567895' }, // EAN-13 com dígito verificador VÁLIDO
@@ -289,11 +289,10 @@ test('a confirmação cria pais por cor, grava preços calculados e não importa
   assert.equal(resp.status, 200, JSON.stringify(resp.body));
   assert.equal(resp.body.produtos, 3, 'pais independentes para CAMISETA PRETA, CAMISETA BRANCA e ÓCULOS');
   assert.equal(resp.body.variacoes, 4, 'quatro variações da camiseta');
-  assert.equal(resp.body.estoque_importado, false);
+  assert.equal(resp.body.estoque_importado, true);
   assert.equal(resp.body.estoque_fisico_removido, true);
-  assert.equal(resp.body.estoque.celulas_importadas, 0);
-  assert.equal(resp.body.estoque.unidades_importadas, 0);
-  assert.equal(resp.body.estoque.saldo_inicial, 0);
+  assert.equal(resp.body.estoque.unidades_importadas, resp.body.estoque.saldo_inicial);
+  assert.ok(resp.body.estoque.celulas_importadas >= 0);
   assert.equal(resp.body.estoque.local, 'LOJA');
   assert.ok(resp.body.estoque.locais_adicionais_inativados >= 1, 'locais ativos extras são inativados, sem exclusão');
   const localSecundarioAtualizado = await s.get(RESOURCES.locais, Number(localSecundario.id));
@@ -475,16 +474,15 @@ test('a prévia examina TODAS as abas e separa cadastro de movimentação', asyn
   assert.deepEqual(rec.codigos_aba_ausentes_na_principal['Política Comercial Roupas (2)'].sort(), ['93882-40', '93882-42']);
 });
 
-test('a confirmação cria produtos das TRÊS abas e deixa o estoque físico zerado para lançamento administrativo', async () => {
+test('a confirmação cria produtos das TRÊS abas e importa quantidades físicas', async () => {
   const conteudo = await xlsxBase64(LINHAS_BASE, [], { ...EXTRAS, movimentacao: true });
   const s = getStore();
   const resp = await request(app()).post('/api/carga/politica-comercial/confirmar').send({ conteudo, nome: 'x.xlsx' });
   assert.equal(resp.status, 200, JSON.stringify(resp.body));
-  assert.equal(resp.body.estoque_importado, false);
+  assert.equal(resp.body.estoque_importado, true);
   assert.equal(resp.body.estoque_fisico_removido, true);
-  assert.equal(resp.body.estoque.celulas_importadas, 0);
-  assert.equal(resp.body.estoque.unidades_importadas, 0);
-  assert.equal(resp.body.estoque.saldo_inicial, 0);
+  assert.equal(resp.body.estoque.unidades_importadas, resp.body.estoque.saldo_inicial);
+  assert.ok(resp.body.estoque.celulas_importadas >= 0);
   assert.equal(resp.body.estoque.local, 'LOJA');
 
   // Produto da aba de CONTROLE: cadastro próprio, custo e preço-base preservados.
@@ -644,7 +642,7 @@ test('unidadeDoTipo traduz só o conhecido e nunca inventa unidade', async () =>
   assert.equal(unidadeDoTipo('CAIXA DE PAPELÃO'), null, 'desconhecido não é inventado');
 });
 
-test('a confirmação grava unidade, fornecedor e atributos adicionais sem importar saldo', async () => {
+test('a confirmação grava unidade, fornecedor, atributos e saldo físico', async () => {
   const { atributosAdicionais } = await import('../src/cargaPoliticaComercial');
   const conteudo = await xlsxBase64(LINHAS_BASE, [], {
     roupas: [
@@ -665,10 +663,12 @@ test('a confirmação grava unidade, fornecedor e atributos adicionais sem impor
   assert.ok(!('Preço de Venda Cartão' in attrs), 'preço oficial NÃO vira atributo (tem tabela própria)');
   assert.ok(!('Valor unitário Custo' in attrs), 'custo não vira atributo livre');
 
-  // A quantidade da planilha é deliberadamente ignorada; o admin lançará o físico.
+  // A quantidade reconciliada da planilha é gravada na célula do SKU em LOJA.
   const saldos = await s.list(RESOURCES.estoques, { page: 1, pageSize: 50, filter: { empresa_id: 1, local: 'LOJA' } });
-  assert.equal(saldos.rows.length, 0, 'nenhuma célula física é criada');
-  assert.equal(await s.countWhere(RESOURCES.movimentacoes, { empresa_id: 1 }), 0, 'nenhum movimento físico é gerado');
+  assert.equal(saldos.rows.length, 1, 'uma célula física é criada para o SKU com saldo positivo');
+  assert.equal(Number(saldos.rows[0].quantidade), 3, 'as três unidades da planilha são importadas');
+  assert.equal(Number(resp.body.estoque.unidades_importadas), 3, 'o total importado fecha com a fonte');
+  assert.equal(await s.countWhere(RESOURCES.movimentacoes, { empresa_id: 1 }), 0, 'saldo inicial não gera movimento artificial');
 });
 
 test('atributos adicionais ignoram preço, cálculo e movimento — só cadastro livre', async () => {
