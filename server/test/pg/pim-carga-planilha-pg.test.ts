@@ -305,7 +305,7 @@ test('carga em PG real: preview não grava, confirmação persiste cadastro e pr
 
   const jobConsultado = resFake();
   await statusJobCarga(reqDe({}, { user: ator, params: { id: jobId } }) as never, jobConsultado.res);
-  assert.equal(jobConsultado.saida.json.status, 'succeeded');
+  assert.equal(jobConsultado.saida.json.status, 'succeeded', `erro do worker: ${jobConsultado.saida.json.error ?? 'sem detalhe persistido'}`);
   assert.equal(jobConsultado.saida.json.result.ok, true);
   assert.equal(jobConsultado.saida.json.result.produtos, 0, 'worker reimporta sem duplicar os produtos existentes');
   assert.equal(jobConsultado.saida.json.result.estoque_importado, false);

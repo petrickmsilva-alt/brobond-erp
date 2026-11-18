@@ -2891,6 +2891,11 @@ export async function processarFilaCargaComercial(): Promise<void> {
       }
     });
   } catch (error) {
+    const detalhe = error instanceof Error ? error.message : String(error);
+    console.error('[carga-politica-comercial] falha no worker', {
+      jobId: job?.id ?? null,
+      detalhe: detalhe.slice(0, 1500),
+    });
     const message = error instanceof HttpError
       ? error.message
       : 'Falha ao executar a carga; a transação foi revertida. Consulte os logs operacionais.';
