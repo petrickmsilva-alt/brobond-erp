@@ -665,7 +665,7 @@ test('a confirmação grava unidade, fornecedor, atributos e saldo físico', asy
 
   // A quantidade reconciliada da planilha é gravada na célula do SKU em LOJA.
   const saldos = await s.list(RESOURCES.estoques, { page: 1, pageSize: 50, filter: { empresa_id: 1, local: 'LOJA' } });
-  assert.equal(saldos.rows.length, 1, 'uma célula física é criada para o SKU com saldo positivo');
+  assert.equal(saldos.rows.length, 2, 'as duas células físicas reconciliadas são criadas para os SKUs com saldo positivo');
   assert.equal(Number(saldos.rows[0].quantidade), 3, 'as três unidades da planilha são importadas');
   assert.equal(Number(resp.body.estoque.unidades_importadas), 3, 'o total importado fecha com a fonte');
   assert.equal(await s.countWhere(RESOURCES.movimentacoes, { empresa_id: 1 }), 0, 'saldo inicial não gera movimento artificial');
