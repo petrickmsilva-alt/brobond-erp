@@ -196,7 +196,7 @@ export async function estoqueGrade(req: Request, res: Response) {
         ? `Estoque físico do local "${String(localSelecionado.nome)}" (empresa + produto + tamanho + local).`
         : 'Estoque físico somado de todos os locais da empresa (empresa + produto + tamanho). O PDV/Venda mostra o disponível no local de saída.',
     },
-    locaisDisponiveis: locais.rows.map((l) => String(l.nome)).sort(),
+    locaisDisponiveis: locais.rows.filter((l) => l.ativo !== false && l.ativo !== 0).map((l) => String(l.nome)).sort(),
     totalPecas: linhas.reduce((a, l) => a + l.total, 0),
     busca: encontrados ? { q: termo, total: encontrados.total, exibidos: encontrados.rows.length, hasMore: encontrados.hasMore } : null,
     linhas,
