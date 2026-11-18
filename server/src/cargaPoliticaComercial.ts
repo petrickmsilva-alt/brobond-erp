@@ -2124,6 +2124,13 @@ export async function confirmarCarga(req: Request, res: Response) {
 // ---------------------------------------------------------------------------
 export async function executarCarga(plano: Plano, inventario: InventarioPlanilha, actor: { id?: number; name?: string }, escopo: Escopo, tx: Tx) {
   const s = getStore();
+
+  // Adquire o lock antes de alterar catálogo/preços para manter a ordem de locks
+  // consistente com operações concorrentes de estoque. O lock é mantido até o
+  // commit/rollback da transação inteira e bloqueia qualquer DML em estoques.
+  if (tx && typeof (tx as any).query === 'function') {
+    await (tx as any).query('LOCK TABLE estoques IN SHARE ROW EXCLUSIVE MODE');
+  }
   // Autoria: só grava o id se o usuário existir de fato. Em banco novo (ou no
   // modo demonstração) o ator é sintético e uma FK inválida rejeitaria TODA a
   // gravação de preço — preferimos a autoria ausente à carga inteira perdida.
@@ -2553,11 +2560,6 @@ export async function executarCarga(plano: Plano, inventario: InventarioPlanilha
     locaisAdicionaisInativados++;
   }
 
-  // Bloqueia DML concorrente em estoques até o commit. O lock espera escritores
-  // já ativos e impede que novos INSERT/UPDATE/DELETE escapem da substituição.
-  if (tx && typeof (tx as any).query === 'function') {
-    await (tx as any).query('LOCK TABLE estoques IN SHARE ROW EXCLUSIVE MODE');
-  }
   // Remove todas as células físicas antigas e reconstrói o saldo da planilha.
   const estoquesAnteriores = await s.list(
     RESOURCES.estoques,
