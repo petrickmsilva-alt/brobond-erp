@@ -23,7 +23,7 @@ type Preview = {
   total: number;
   validacoes: Validacoes;
   reconciliacao: { abas: Array<{ nome: string }> };
-  inventario: { local_nome: string; total_skus: number; total_unidades: number; total_celulas: number; por_fonte: Record<string, { skus: number; unidades: number }> };
+  inventario: { local_nome: string; total_skus: number; total_unidades: number; total_celulas: number; skus_sem_saldo: number; por_fonte: Record<string, { skus: number; celulas: number; unidades: number }> };
   limite: number;
   truncado: boolean;
   nao_gravado: string;
@@ -230,8 +230,8 @@ export default function CargaPoliticaComercialPage() {
                   <StatCard label="Linhas examinadas" value={formatar(preview.validacoes.registros)} />
                 </div>
                 <div className="space-y-2 border-t border-slate-100 p-4 text-sm">
-                  <p><strong>Estoque a importar em {preview.inventario.local_nome}:</strong> {formatar(preview.inventario.total_celulas)} células previstas, {formatar(preview.inventario.total_skus)} SKUs e {formatar(preview.inventario.total_unidades)} unidades. Na confirmação, o saldo físico anterior será substituído por estas quantidades reconciliadas.</p>
-                  <p className="text-slate-600"><strong>Conferência por fonte:</strong> {Object.entries(preview.inventario.por_fonte || {}).map(([fonte, totais]) => fonte + ': ' + formatar(totais.skus) + ' SKUs / ' + formatar(totais.unidades) + ' unidades').join(' · ') || 'Sem discriminação disponível.'}</p>
+                  <p><strong>Estoque a importar em {preview.inventario.local_nome}:</strong> {formatar(preview.inventario.total_celulas)} células físicas (SKUs com saldo positivo), {formatar(preview.inventario.total_skus)} SKUs no catálogo e {formatar(preview.inventario.total_unidades)} unidades. {formatar(preview.inventario.skus_sem_saldo)} SKUs ficarão sem célula física por terem saldo zero. Na confirmação, o saldo anterior será substituído por estas quantidades reconciliadas.</p>
+                  <p className="text-slate-600"><strong>Conferência por fonte:</strong> {Object.entries(preview.inventario.por_fonte || {}).map(([fonte, totais]) => fonte + ': ' + formatar(totais.skus) + ' SKUs / ' + formatar(totais.celulas) + ' células / ' + formatar(totais.unidades) + ' unidades').join(' · ') || 'Sem discriminação disponível.'}</p>
                   <p><strong>Status inválidos:</strong> {formatar(preview.validacoes.status_invalidos.length)} · <strong>Conflitos de preço:</strong> {formatar(preview.validacoes.precos_conflitantes_arquivo.length)} · <strong>Colisões de SKU-pai resolvidas automaticamente:</strong> {formatar(preview.validacoes.skus_pai_colididos.length)}</p>
                   <p><strong>Códigos de barras:</strong> {formatar(preview.validacoes.codigos_barras_validos)} válidos; {formatar(preview.validacoes.codigos_barras_concat)} concatenações e {formatar(preview.validacoes.codigos_barras_invalidos)} inválidos não serão tratados como GTIN.</p>
                   <p className="text-slate-600">{preview.nao_gravado}</p>
