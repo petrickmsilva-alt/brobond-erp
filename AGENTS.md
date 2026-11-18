@@ -264,3 +264,12 @@ A confirmação da carga não pode depender de uma requisição HTTP aberta dura
 - **Idempotência:** mesmo conteúdo do mesmo usuário/empresa retorna o mesmo job. Job ainda ativo não é duplicado; job concluído não é repetido; job falho pode ser reenfileirado com o mesmo identificador e contador reiniciado.
 - **Testes PostgreSQL:** server/test/pg/pim-carga-planilha-pg.test.ts cobre worker bem-sucedido, status, reimportação sem duplicidade, falha/retry, concorrência por empresa, retomada de lease e rollback da conclusão. Executar no gate npm --workspace server run test:pg com DATABASE_URL de teste.
 - **Produção:** nunca disparar a carga oficial como parte do deploy. Depois da correção publicada, conferir a migração e o estado real do job; só então executar a carga mediante autorização explícita do Diretor.
+
+## Correção de paridade da fila em produção — migration 0127
+
+A migration 0126 já existia em bancos de produção antes da inclusão do lease fencing. Não editar migrations aplicadas para tentar alterar bancos existentes: toda evolução posterior deve receber um novo arquivo versionado.
+
+- Migration 0127 adiciona lease_token e os CHECKs de payload, attempts e lease de forma idempotente.
+- A migration 0127 também reconcilia as FKs de empresa/usuário quando ausentes e preserva os índices de fila/tenant/execução única.
+- Não recria nem limpa a tabela; não altera payloads, jobs, catálogo ou estoque.
+- O deploy aplica a migration antes de declarar a API pronta. O worker só processa a fila depois da migração.
