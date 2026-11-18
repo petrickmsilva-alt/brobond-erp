@@ -2893,6 +2893,11 @@ export async function processarFilaCargaComercial(): Promise<void> {
     validarPlanoParaCarga(plano);
     if (leaseLost) throw new HttpError(409, 'O processamento perdeu a reserva de execução e será recuperado pela fila.');
 
+    // A reserva é renovada em outra conexão enquanto esta transação grava
+    // catálogo/preços. SERIALIZABLE faria o heartbeat (UPDATE da mesma linha do
+    // job) conflitar com a confirmação final do job, gerando SQLSTATE 40001.
+    // READ COMMITTED mantém a atomicidade da carga e permite que o UPDATE final
+    // reavalie status + lease_token após os heartbeats concorrentes.
     await getStore().transaction(async (tx) => {
       const dados = await executarCarga(plano, inventario, actor, escopo, tx);
       const resultado = {
@@ -2911,7 +2916,7 @@ export async function processarFilaCargaComercial(): Promise<void> {
       if (concluido.rowCount !== 1) {
         throw new Error('A reserva da carga foi perdida antes da confirmação; a transação será revertida.');
       }
-    });
+    }, { isolation: 'read committed' });
   } catch (error) {
     const detalhe = error instanceof Error ? error.message : String(error);
     const erroPg = error && typeof error === 'object' ? error as Record<string, unknown> : {};
