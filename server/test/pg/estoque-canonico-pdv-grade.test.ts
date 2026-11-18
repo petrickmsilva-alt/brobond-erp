@@ -528,6 +528,20 @@ test('estoque canônico: Grade, PDV, faturamento e cancelamento usam a mesma ide
     assert.equal(Number(negativos.rows[0].n), 0);
   });
 
+  await t.test('PgStore.list mantém o total correto quando a página solicitada está vazia', async () => {
+    const primeira = await store.list(R.produtos, {
+      page: 1, pageSize: 1, filter: { empresa_id: empresaId },
+    });
+    assert.ok(primeira.total > 0);
+    assert.equal(primeira.rows.length, 1);
+
+    const foraDoIntervalo = await store.list(R.produtos, {
+      page: primeira.total + 1, pageSize: 1, filter: { empresa_id: empresaId },
+    });
+    assert.equal(foraDoIntervalo.rows.length, 0);
+    assert.equal(foraDoIntervalo.total, primeira.total);
+  });
+
   const { pool } = await import('../../src/db');
   await pool.end();
 });
