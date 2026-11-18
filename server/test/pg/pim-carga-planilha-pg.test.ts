@@ -283,6 +283,30 @@ test('carga em PG real: preview não grava e confirmação persiste cadastro, pr
   const movimentosAntes = await store.countWhere(R.movimentacoes, { empresa_id: empresaId });
   assert.equal(movimentosAntes, 0, 'saldo inicial não cria movimento artificial');
 
+  // 7.1) Concorrência: o lock da carga impede que outro escritor altere
+  // estoques enquanto o snapshot está sendo substituído.
+  let liberarLock!: () => void;
+  let sinalizarLock!: () => void;
+  const lockAdquirido = new Promise<void>((resolve) => { sinalizarLock = resolve; });
+  const aguardarLiberacao = new Promise<void>((resolve) => { liberarLock = resolve; });
+  const transacaoBloqueadora = store.transaction(async (tx) => {
+    await tx!.query('LOCK TABLE estoques IN SHARE ROW EXCLUSIVE MODE');
+    sinalizarLock();
+    await aguardarLiberacao;
+  });
+  await lockAdquirido;
+  let escritaConcorrenteConcluida = false;
+  const escritaConcorrente = query(
+    'UPDATE estoques SET quantidade = quantidade WHERE id = $1',
+    [Number(estoques.rows[0].id)]
+  ).then(() => { escritaConcorrenteConcluida = true; });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(escritaConcorrenteConcluida, false, 'DML concorrente fica bloqueado até o commit da carga');
+  liberarLock();
+  await transacaoBloqueadora;
+  await escritaConcorrente;
+  assert.equal(escritaConcorrenteConcluida, true, 'escritor prossegue depois da liberação do lock');
+
   // 8) IDEMPOTÊNCIA: reimportar não duplica produto, preço, saldo ou movimento.
   const prodAntes = await store.countWhere(R.produtos, { empresa_id: empresaId });
   const precosAntes = await store.countWhere(R.produto_precos_condicao, { empresa_id: empresaId });
