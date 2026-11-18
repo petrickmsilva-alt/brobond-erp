@@ -2914,9 +2914,21 @@ export async function processarFilaCargaComercial(): Promise<void> {
     });
   } catch (error) {
     const detalhe = error instanceof Error ? error.message : String(error);
+    const erroPg = error && typeof error === 'object' ? error as Record<string, unknown> : {};
+    // Diagnóstico restrito aos logs do servidor: preserva SQLSTATE e metadados
+    // estruturais do PostgreSQL sem expor payload da planilha nem valores de linha.
     console.error('[carga-politica-comercial] falha no worker', {
       jobId: job?.id ?? null,
       detalhe: detalhe.slice(0, 1500),
+      errorName: error instanceof Error ? error.name : typeof error,
+      errorCode: typeof erroPg.code === 'string' ? erroPg.code : null,
+      constraint: typeof erroPg.constraint === 'string' ? erroPg.constraint : null,
+      schema: typeof erroPg.schema === 'string' ? erroPg.schema : null,
+      table: typeof erroPg.table === 'string' ? erroPg.table : null,
+      column: typeof erroPg.column === 'string' ? erroPg.column : null,
+      dataType: typeof erroPg.dataType === 'string' ? erroPg.dataType : null,
+      routine: typeof erroPg.routine === 'string' ? erroPg.routine : null,
+      stack: error instanceof Error ? error.stack?.slice(0, 5000) : null,
     });
     const message = error instanceof HttpError
       ? error.message
