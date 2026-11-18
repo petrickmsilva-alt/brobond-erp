@@ -71,7 +71,7 @@ export async function estoqueGrade(req: Request, res: Response) {
   const idsEncontrados = encontrados
     ? new Set(encontrados.rows.flatMap((row) => [row.id, ...row.variacoes.map((variant) => variant.id)]))
     : null;
-  const [produtos, tamanhos, categorias, grades, gradeTamanhos, locais, colecoes, celulasCanonicas] = await Promise.all([
+  const [produtos, tamanhos, categorias, grades, gradeTamanhos, locais, colecoes] = await Promise.all([
     s.list(RESOURCES.produtos, { page: 1, pageSize: 2000, filter: filtroProdutos }),
     s.list(RESOURCES.tamanhos, { page: 1, pageSize: 200, sort: 'ordem', dir: 'asc' }),
     s.list(RESOURCES.categorias, { page: 1, pageSize: 2000 }),
@@ -79,11 +79,11 @@ export async function estoqueGrade(req: Request, res: Response) {
     s.list(RESOURCES.grade_tamanhos, { page: 1, pageSize: 10000, sort: 'ordem', dir: 'asc' }),
     s.list(RESOURCES.locais, { page: 1, pageSize: 2000, filter: { empresa_id: escopo.empresaId } }),
     s.list(RESOURCES.colecoes, { page: 1, pageSize: 20000, filter: { empresa_id: escopo.empresaId } }),
-    // REGRA CANÔNICA (estoqueCanonico.ts): identidade empresa+produto+tamanho+
-    // local, vínculo legado por nome e falha fechada em saldo duplicado. É a
-    // MESMA leitura que o PDV usa — não existe uma segunda agregação de grade.
-    celulasDaEmpresa(escopo),
   ]);
+  // Reaproveita os locais já lidos acima para canonicalizar os saldos. A
+  // regra compartilhada com o PDV permanece a mesma; eliminamos apenas a
+  // segunda listagem de locais da mesma empresa.
+  const celulasCanonicas = await celulasDaEmpresa(escopo, undefined, locais.rows);
   if ([produtos, tamanhos, categorias, grades, gradeTamanhos, locais, colecoes].some((result) => result.total > result.rows.length)) {
     throw new HttpError(409, 'A grade do estoque excede o limite seguro de leitura. Nenhum resultado parcial foi retornado.');
   }
