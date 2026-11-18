@@ -4,19 +4,19 @@
 // A planilha ("TABELA DE PREÇO BASE PARA ERP.xlsx") é a fonte canônica do
 // catálogo, identificadores, atributos, custos e política comercial. O servidor
 // recalcula preço, margem e tributos; a memória do cálculo fica associada ao SKU
-// e às faixas de quantidade. O saldo físico NÃO é importado: o administrador
-// fará a entrada inicial no único local LOJA após a carga.
+// e às faixas de quantidade. O saldo físico é substituído pelo inventário
+// reconciliado da planilha no único local LOJA, na mesma transação atômica.
 //
 // Princípios:
 //   • importa três fontes: Política Comercial Completa, BASE CONTROLE DE ESTOQUE
 //     e Política Comercial Roupas (2);
 //   • preserva Item/IDs da planilha e Código Industria como SKU (texto);
-//   • remove todas as células físicas antigas e NÃO importa quantidades da
-//     planilha; o administrador fará a entrada inicial no único local LOJA;
+//   • substitui as células físicas antigas pelas quantidades reconciliadas da
+//     planilha, vinculadas ao produto-pai + tamanho no único local LOJA;
 //   • varejo, atacado, representantes e e-commerce usam o mesmo catálogo/base;
 //   • fórmulas externas não são executadas no servidor: o cálculo é reproduzido
 //     com os parâmetros de entrada da própria planilha, com conferências;
-//   • idempotente por SKU e faixa de quantidade; não cria células físicas.
+//   • idempotente por SKU e faixa de quantidade; reconstrói células físicas.
 //
 // Endpoints:
 //   POST /api/carga/politica-comercial/preview   { conteudo, nome }  → prévia
@@ -2085,7 +2085,7 @@ export async function previewCarga(req: Request, res: Response) {
       })),
       limite: LIMITE_CARGA,
       truncado: plano.itens.length > LIMITE_CARGA,
-      nao_gravado: 'Prévia apenas: nenhum produto, variação, preço ou estoque foi gravado. Na confirmação, o estoque físico anterior será removido e nenhum saldo será importado; o administrador lançará as quantidades posteriormente no local único LOJA.'
+      nao_gravado: 'Prévia apenas: nenhum produto, variação, preço ou estoque foi gravado. Na confirmação, as células físicas anteriores serão substituídas pelas quantidades reconciliadas desta planilha no local único LOJA.'
     });
   } catch (e) {
     throw toHttpError(e, RESOURCES.produtos);
@@ -2107,12 +2107,12 @@ export async function confirmarCarga(req: Request, res: Response) {
       ...resultado,
       abas_examinadas: reconciliacao.abas.length,
       reconciliacao,
-      estoque_importado: false,
+      estoque_importado: true,
       estoque_fisico_removido: true,
-      saldo_inicial: 0,
+      saldo_inicial: resultado.estoque.saldo_inicial,
       precos_sobrescritos: true,
       formulas_planilha_importadas: true,
-      observacao: 'Todas as abas de CADASTRO foram processadas; a política comercial e a memória de cálculo foram gravadas por SKU. Todas as células de estoque físico anteriores foram removidas. Nenhuma quantidade da planilha foi importada: o administrador fará os lançamentos no estoque único LOJA, compartilhado por varejo, atacado, representantes e e-commerce.'
+      observacao: 'Catálogo, política comercial e quantidades físicas da planilha gravados por SKU no estoque único LOJA, na mesma transação atômica.'
     });
   } catch (e) {
     throw toHttpError(e, RESOURCES.produtos);
@@ -2124,6 +2124,13 @@ export async function confirmarCarga(req: Request, res: Response) {
 // ---------------------------------------------------------------------------
 export async function executarCarga(plano: Plano, inventario: InventarioPlanilha, actor: { id?: number; name?: string }, escopo: Escopo, tx: Tx) {
   const s = getStore();
+
+  // Adquire o lock antes de alterar catálogo/preços para manter a ordem de locks
+  // consistente com operações concorrentes de estoque. O lock é mantido até o
+  // commit/rollback da transação inteira e bloqueia qualquer DML em estoques.
+  if (tx && typeof (tx as any).query === 'function') {
+    await (tx as any).query('LOCK TABLE estoques IN SHARE ROW EXCLUSIVE MODE');
+  }
   // Autoria: só grava o id se o usuário existir de fato. Em banco novo (ou no
   // modo demonstração) o ator é sintético e uma FK inválida rejeitaria TODA a
   // gravação de preço — preferimos a autoria ausente à carga inteira perdida.
@@ -2507,11 +2514,22 @@ export async function executarCarga(plano: Plano, inventario: InventarioPlanilha
     throw new HttpError(409, 'Carga cancelada: inventário físico e catálogo não têm a mesma quantidade de SKUs.');
   }
 
-  // O catálogo e a política comercial usam um único cadastro/base para
-  // varejo, atacado, representantes e e-commerce. A carga NÃO define saldos:
-  // o administrador fará a entrada física depois da importação.
+  // O catálogo e a política comercial usam um único cadastro/base. Cada SKU
+  // do inventário deve apontar para um produto simples ou produto-pai + tamanho.
   if (produtoEstoquePorSku.size !== plano.itens.length) {
     throw new HttpError(409, 'Carga cancelada: nem todos os SKUs foram vinculados ao catálogo.');
+  }
+  if (inventario.itens.length !== inventario.total_skus || inventario.total_skus !== plano.itens.length ||
+      inventario.total_unidades !== inventario.itens.reduce((soma, item) => soma + item.quantidade, 0)) {
+    throw new HttpError(409, 'Carga cancelada: totais do inventário não fecham com os itens/SKUs calculados.');
+  }
+  const skusInventario = new Set<string>();
+  for (const item of inventario.itens) {
+    if (!item.sku || skusInventario.has(item.sku) || !Number.isInteger(item.quantidade) || item.quantidade < 0) {
+      throw new HttpError(422, 'Carga cancelada: SKU duplicado ou quantidade física inválida no inventário (' + item.sku + ').');
+    }
+    skusInventario.add(item.sku);
+    if (!produtoEstoquePorSku.has(item.sku)) throw new HttpError(422, 'Carga cancelada: SKU físico sem vínculo de produto/variação (' + item.sku + ').');
   }
 
   // Mantém LOJA como ÚNICO local ativo e padrão. Locais legados adicionais
@@ -2542,8 +2560,7 @@ export async function executarCarga(plano: Plano, inventario: InventarioPlanilha
     locaisAdicionaisInativados++;
   }
 
-  // Remove todas as células físicas de teste/legadas. Não cria células zeradas,
-  // não importa as 447 unidades da planilha e não gera movimentos artificiais.
+  // Remove todas as células físicas antigas e reconstrói o saldo da planilha.
   const estoquesAnteriores = await s.list(
     RESOURCES.estoques,
     { page: 1, pageSize: 5_000, filter: { empresa_id: escopo.empresaId } },
@@ -2560,6 +2577,22 @@ export async function executarCarga(plano: Plano, inventario: InventarioPlanilha
   const unidadesFisicasRemovidas = estoquesAnteriores.rows.reduce(
     (total, row) => total + Number(row.quantidade ?? 0), 0
   );
+  let celulasImportadas = 0;
+  let unidadesImportadas = 0;
+  for (const item of inventario.itens) {
+    if (item.quantidade === 0) continue;
+    const destino = produtoEstoquePorSku.get(item.sku);
+    if (!destino) throw new HttpError(422, 'Carga cancelada: não existe vínculo de estoque para o SKU ' + item.sku + '.');
+    await s.insert(RESOURCES.estoques, {
+      empresa_id: escopo.empresaId, produto_id: destino.produto_id, tamanho_id: destino.tamanho_id,
+      local: 'LOJA', local_id: localId, quantidade: item.quantidade, estoque_min: 0,
+    }, tx);
+    celulasImportadas++;
+    unidadesImportadas += item.quantidade;
+  }
+  if (unidadesImportadas !== inventario.total_unidades) {
+    throw new HttpError(409, 'Carga cancelada: soma das unidades gravadas (' + unidadesImportadas + ') diverge do inventário calculado (' + inventario.total_unidades + ').');
+  }
 
   const produtosAtuais = await s.list(
     RESOURCES.produtos,
@@ -2600,10 +2633,10 @@ export async function executarCarga(plano: Plano, inventario: InventarioPlanilha
     local: 'LOJA',
     celulas_removidas: estoquesAnteriores.rows.length,
     unidades_fisicas_removidas: unidadesFisicasRemovidas,
-    celulas_importadas: 0,
-    unidades_importadas: 0,
+    celulas_importadas: celulasImportadas,
+    unidades_importadas: unidadesImportadas,
     movimentacoes_geradas: 0,
-    saldo_inicial: 0,
+    saldo_inicial: unidadesImportadas,
     locais_adicionais_inativados: locaisAdicionaisInativados,
     produtos_antigos_inativados: produtosAntigosInativados,
   };
@@ -2614,7 +2647,7 @@ export async function executarCarga(plano: Plano, inventario: InventarioPlanilha
       acao: 'importar',
       recurso: 'produtos',
       registro_id: null,
-      descricao: `Carga canônica da planilha: ${produtos} produto(s)-pai, ${variacoes} variação(ões), ${precosGravados} preços gravados, ${precosVersionados} preços versionados; estoque físico removido: ${estoquesAnteriores.rows.length} célula(s), ${unidadesFisicasRemovidas} unidade(s); nenhum saldo foi importado; ${produtosAntigosInativados} produto(s) de teste inativado(s).`,
+      descricao: `Carga canônica da planilha: ${produtos} produto(s)-pai, ${variacoes} variação(ões), ${precosGravados} preços gravados, ${precosVersionados} preços versionados; estoque substituído: ${estoquesAnteriores.rows.length} célula(s)/${unidadesFisicasRemovidas} unidade(s) removidas e ${celulasImportadas} célula(s)/${unidadesImportadas} unidade(s) importadas em LOJA; ${produtosAntigosInativados} produto(s) de teste inativado(s).`,
       dados: {
         produtos, variacoes, ignorados,
         precos_gravados: precosGravados, precos_ignorados: precosIgnorados,
@@ -2622,7 +2655,7 @@ export async function executarCarga(plano: Plano, inventario: InventarioPlanilha
         fontes: fontesPresentes, conflitos_preco: conflitosPreco.slice(0, 100),
         rejeitados: rejeitados.slice(0, 100), ids: ids.slice(0, 100),
         estoque: resumoEstoque,
-        estoque_fisico: { local: 'LOJA', celulas_removidas: estoquesAnteriores.rows.length, unidades_removidas: unidadesFisicasRemovidas, saldo_inicial_importado: 0 },
+        estoque_fisico: { local: 'LOJA', celulas_removidas: estoquesAnteriores.rows.length, unidades_removidas: unidadesFisicasRemovidas, celulas_importadas: celulasImportadas, unidades_importadas: unidadesImportadas, saldo_inicial_importado: unidadesImportadas, por_fonte: inventario.por_fonte },
       },
       empresa_id: empresaDoAtorAudit(actor),
     },
@@ -2902,9 +2935,9 @@ export async function processarFilaCargaComercial(): Promise<void> {
       const dados = await executarCarga(plano, inventario, actor, escopo, tx);
       const resultado = {
         ok: true, ...dados, abas_examinadas: reconciliacao.abas.length, reconciliacao,
-        estoque_importado: false, estoque_fisico_removido: true, saldo_inicial: 0,
+        estoque_importado: true, estoque_fisico_removido: true, saldo_inicial: dados.estoque.saldo_inicial,
         precos_sobrescritos: true, formulas_planilha_importadas: true,
-        observacao: 'Política comercial gravada por SKU. Células físicas anteriores removidas; nenhuma quantidade da planilha importada. O estoque inicial será lançado posteriormente no local LOJA.'
+        observacao: 'Política comercial e inventário físico da planilha gravados por SKU no local único LOJA, na mesma transação atômica.'
       };
       const concluido = await tx!.query(
         `UPDATE carga_politica_comercial_jobs SET status = 'succeeded',

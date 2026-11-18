@@ -101,8 +101,15 @@ O `postgresql-client-16` do PGDG depende de `sensible-utils` (só resolvido com 
   que só diferem depois do corte). `desempatarSkusPai` aplica discriminador estável e reporta
   em `validacoes.skus_pai_colididos`. O `hashChave` usa os dígitos MENOS significativos do
   base36 (os de maior ordem não variam entre chaves vizinhas).
-- Quantidade física NUNCA é importada (nem "Qtd. Estoque" das abas de controle): o saldo
-  é lançado depois, por operação própria.
+- **Inventário físico é fonte oficial da planilha (decisão operacional Brobond, 2026-11-18):**
+  a confirmação reconcilia os saldos finais das abas físicas e substitui as células de teste
+  em uma transação atômica no único local ativo `LOJA`. `ENTRADA MERCADORIA`, venda diária
+  e `SITUAÇÃO ESTOQUE` não são somadas para evitar dupla contagem; as saídas já estão
+  abatidas no saldo consolidado. `Qtd. Estoque` de Roupas e contagem por tamanho entram na
+  reconciliação por SKU. Falha de SKU sem vínculo, divergência de totais ou consulta truncada
+  aborta a transação. Histórico de movimentações/auditoria é preservado; o saldo inicial
+  importado não cria movimentos artificiais. Varejo, atacado, representantes e e-commerce
+  compartilham o mesmo estoque físico `LOJA`.
 - Código de indústria repetido (`93845-42`, linhas 7 e 90 de "Roupas") é LINHA DUPLICADA
   (mesmo produto/tamanho/preço): a variação é idempotente por SKU e a segunda linha é
   ignorada — preservado e reportado em `validacoes.codigos_industria_repetidos`.
@@ -150,11 +157,12 @@ O `postgresql-client-16` do PGDG depende de `sensible-utils` (só resolvido com 
 
 ## Commerce Engine — precificação (migration 0118)
 
-- **A planilha é FONTE DE CADASTRO e de preços OFICIAIS de ENTRADA; o ERP governa o
+- **A planilha é FONTE OFICIAL de cadastro, inventário físico e preços de entrada; o ERP governa o
   cálculo.** O importador (`server/src/cargaPoliticaComercial.ts`) grava os preços
   "à vista/boleto/cartão" em `produto_precos_condicao` como DADO, nunca fórmula; a BASE
   do canal (`preco_atacado`/`preco_venda`) só é preenchida quando está ZERADA (nunca
-  sobrescreve preço já definido). Estoque NÃO é importado.
+  sobrescreve preço já definido). O inventário físico reconciliado substitui o saldo anterior
+  de teste atomicamente em `LOJA`, com vínculo pai/tamanho, auditoria e validação de totais.
 - `server/src/commerce/motorPrecos.ts` **orquestra** os serviços canônicos
   (`listasPreco.precoDe`, `politicasComerciais`) — não duplica tabelas nem regras.
   Ordem de resolução: **preço OFICIAL por condição (FINAL) → lista vigente → base do

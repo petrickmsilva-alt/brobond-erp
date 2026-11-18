@@ -1,6 +1,6 @@
 // ============================================================================
-// CARGA DA POLÍTICA COMERCIAL EM POSTGRESQL REAL — o preview NÃO grava e a
-// confirmação PERSISTE pai, variações, atributos e preços, mas NÃO importa saldo físico.
+// CARGA COMERCIAL + INVENTÁRIO EM POSTGRESQL REAL — o preview NÃO grava e a
+// confirmação PERSISTE pai, variações, atributos, preços e saldos reconciliados.
 //
 // O teste de memória (`carga-politica-comercial.test.ts`) prova a regra; este
 // prova o que só o PostgreSQL mostra:
@@ -11,8 +11,9 @@
 //   • produto-pai × variação respeitam a FK composta por empresa;
 //   • a reimportação é IDEMPOTENTE (nenhum produto/preço duplicado);
 //   • preco_venda/preco_atacado recebem a base calculada pelo motor de preço;
-//   • quantidades físicas presentes nas abas são ignoradas na confirmação;
-//   • nenhum saldo, célula de estoque ou movimento de ajuste é criado.
+//   • saldo físico reconciliado é persistido por SKU no local LOJA;
+//   • soma e células persistidas fecham com o inventário da planilha;
+//   • saldo inicial não cria movimento artificial.
 //
 // Sem DATABASE_URL o arquivo se auto-pula (gate test:pg / job testes-postgres).
 // ============================================================================
@@ -84,8 +85,7 @@ async function xlsxBase64(linhas: Linha[]): Promise<string> {
   });
 
   // A fixture inclui deliberadamente uma unidade física na planilha para provar
-  // que a carga comercial ignora quantidades. Estoque inicial será lançado
-  // posteriormente pelo administrador no local LOJA.
+  // que a carga substitui o saldo de teste pelo inventário oficial em LOJA.
   const saida = wb.addWorksheet('CONTROLE ESTOQUE SAÍDA');
   const cabSaida = [
     'Codigo Cadastro', 'COLEÇÃO', 'CATEGORIA', 'SUBCATEGORIA',
@@ -156,7 +156,7 @@ function linhas(sufixo: string): Linha[] {
   ];
 }
 
-test('carga em PG real: preview não grava, confirmação persiste cadastro e preços sem importar estoque', { skip }, async (t) => {
+test('carga em PG real: preview não grava e confirmação persiste cadastro, preços e inventário', { skip }, async (t) => {
   const { migrate, query } = await import('../../src/db');
   await migrate();
   const { RESOURCES: R } = await import('../../src/resources');
@@ -225,9 +225,10 @@ test('carga em PG real: preview não grava, confirmação persiste cadastro e pr
   assert.equal(conf.saida.status ?? 200, 200, JSON.stringify(conf.saida.json));
   assert.equal(conf.saida.json.produtos, 2, 'dois produtos-pai');
   assert.equal(conf.saida.json.variacoes, 2, 'duas variações da camiseta');
-  assert.equal(conf.saida.json.estoque_importado, false, 'a confirmação comercial não importa saldo físico');
-  assert.equal(conf.saida.json.estoque.unidades_importadas, 0, 'quantidades da planilha não entram no estoque');
-  assert.equal(conf.saida.json.estoque.celulas_importadas, 0, 'a carga não cria células físicas');
+  assert.equal(conf.saida.json.estoque_importado, true, 'a confirmação importa o inventário físico oficial');
+  assert.equal(conf.saida.json.estoque.unidades_importadas, 1, 'uma unidade declarada na aba de saldo é importada');
+  assert.equal(conf.saida.json.estoque.saldo_inicial, 1, 'o saldo inicial coincide com o inventário');
+  assert.equal(conf.saida.json.estoque.celulas_importadas, 1, 'uma célula física positiva é criada');
 
   // 3) PERSISTÊNCIA conferida por SQL direto (não pela resposta HTTP).
   const pai = (await query(
@@ -273,11 +274,38 @@ test('carga em PG real: preview não grava, confirmação persiste cadastro e pr
   assert.equal(oculos.ativo, false);
   assert.equal(oculos.produto_pai_id ?? null, null);
 
-  // 7) Nenhuma célula física nem movimento é criado pela carga comercial.
+  // 7) O saldo oficial é persistido em LOJA e conferido diretamente no PostgreSQL.
   const estoques = await store.list(R.estoques, { page: 1, pageSize: 100, filter: { empresa_id: empresaId } });
-  assert.equal(estoques.rows.length, 0, 'não cria células de estoque, nem mesmo zeradas');
+  assert.equal(estoques.rows.length, 1, 'uma célula física positiva é persistida');
+  assert.equal(Number(estoques.rows[0].quantidade), 1, 'o saldo da planilha está gravado');
+  const lojaPersistida = await store.findOneWhere(R.locais, { empresa_id: empresaId, nome: 'LOJA' });
+  assert.equal(Number(estoques.rows[0].local_id), Number(lojaPersistida!.id));
   const movimentosAntes = await store.countWhere(R.movimentacoes, { empresa_id: empresaId });
-  assert.equal(movimentosAntes, 0, 'não cria movimentos físicos a partir da planilha');
+  assert.equal(movimentosAntes, 0, 'saldo inicial não cria movimento artificial');
+
+  // 7.1) Concorrência: o lock da carga impede que outro escritor altere
+  // estoques enquanto o snapshot está sendo substituído.
+  let liberarLock!: () => void;
+  let sinalizarLock!: () => void;
+  const lockAdquirido = new Promise<void>((resolve) => { sinalizarLock = resolve; });
+  const aguardarLiberacao = new Promise<void>((resolve) => { liberarLock = resolve; });
+  const transacaoBloqueadora = store.transaction(async (tx) => {
+    await tx!.query('LOCK TABLE estoques IN SHARE ROW EXCLUSIVE MODE');
+    sinalizarLock();
+    await aguardarLiberacao;
+  });
+  await lockAdquirido;
+  let escritaConcorrenteConcluida = false;
+  const escritaConcorrente = query(
+    'UPDATE estoques SET quantidade = quantidade WHERE id = $1',
+    [Number(estoques.rows[0].id)]
+  ).then(() => { escritaConcorrenteConcluida = true; });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(escritaConcorrenteConcluida, false, 'DML concorrente fica bloqueado até o commit da carga');
+  liberarLock();
+  await transacaoBloqueadora;
+  await escritaConcorrente;
+  assert.equal(escritaConcorrenteConcluida, true, 'escritor prossegue depois da liberação do lock');
 
   // 8) IDEMPOTÊNCIA: reimportar não duplica produto, preço, saldo ou movimento.
   const prodAntes = await store.countWhere(R.produtos, { empresa_id: empresaId });
@@ -289,8 +317,9 @@ test('carga em PG real: preview não grava, confirmação persiste cadastro e pr
   assert.equal(await store.countWhere(R.produtos, { empresa_id: empresaId }), prodAntes);
   assert.equal(await store.countWhere(R.produto_precos_condicao, { empresa_id: empresaId }), precosAntes, 'preços não duplicam');
   const estoquesDepois = await store.list(R.estoques, { page: 1, pageSize: 100, filter: { empresa_id: empresaId } });
-  assert.equal(estoquesDepois.rows.length, 0, 'reimportação também não cria células de estoque');
-  assert.equal(await store.countWhere(R.movimentacoes, { empresa_id: empresaId }), movimentosAntes, 'reimportação não cria movimentos físicos');
+  assert.equal(estoquesDepois.rows.length, 1, 'reimportação substitui o snapshot sem duplicar a célula');
+  assert.equal(Number(estoquesDepois.rows[0].quantidade), 1, 'reimportação mantém o saldo físico da planilha');
+  assert.equal(await store.countWhere(R.movimentacoes, { empresa_id: empresaId }), movimentosAntes, 'reimportação não cria movimentos artificiais');
   assert.ok(escopo.empresaId === empresaId);
 
   // 9) WORKER DURÁVEL: o mesmo importador roda em background e o status é consultável.
@@ -312,7 +341,10 @@ test('carga em PG real: preview não grava, confirmação persiste cadastro e pr
   assert.equal(jobConsultado.saida.json.status, 'succeeded', `erro do worker: ${jobConsultado.saida.json.error ?? 'sem detalhe persistido'}`);
   assert.equal(jobConsultado.saida.json.result.ok, true);
   assert.equal(jobConsultado.saida.json.result.produtos, 0, 'worker reimporta sem duplicar os produtos existentes');
-  assert.equal(jobConsultado.saida.json.result.estoque_importado, false);
+  assert.equal(jobConsultado.saida.json.result.estoque_importado, true);
+  assert.equal(jobConsultado.saida.json.result.estoque.unidades_importadas, 1);
+  const estoqueWorker = await store.list(R.estoques, { page: 1, pageSize: 100, filter: { empresa_id: empresaId } });
+  assert.equal(estoqueWorker.rows.length, 1, 'worker também mantém um único snapshot físico');
   assert.equal(await store.countWhere(R.produtos, { empresa_id: empresaId }), prodAntes);
 
   // 10) FALHA RECUPERÁVEL: erro de leitura não grava catálogo e permite retry idempotente.
