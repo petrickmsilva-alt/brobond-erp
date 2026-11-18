@@ -473,6 +473,13 @@ export async function saldoDisponivelCelula(
 
 type LocaisDaEmpresa = { localPorId: Map<number, string>; idPorNome: Map<string, number> };
 
+function mapearLocaisDaEmpresa(rows: Row[]): LocaisDaEmpresa {
+  const localPorId = new Map(rows.map((local) => [Number(local.id), String(local.nome)]));
+  const idPorNome = new Map<string, number>();
+  for (const local of rows) idPorNome.set(String(local.nome), Number(local.id));
+  return { localPorId, idPorNome };
+}
+
 async function locaisDaEmpresa(escopo: EscopoEmpresa, tx?: Tx): Promise<LocaisDaEmpresa> {
   const locais = await getStore().list(
     getResource('locais')!,
@@ -480,10 +487,7 @@ async function locaisDaEmpresa(escopo: EscopoEmpresa, tx?: Tx): Promise<LocaisDa
     tx
   );
   if (locais.total > locais.rows.length) throw new HttpError(409, 'Os locais da empresa excedem o limite seguro de leitura do estoque.');
-  const localPorId = new Map(locais.rows.map((local) => [Number(local.id), String(local.nome)]));
-  const idPorNome = new Map<string, number>();
-  for (const local of locais.rows) idPorNome.set(String(local.nome), Number(local.id));
-  return { localPorId, idPorNome };
+  return mapearLocaisDaEmpresa(locais.rows);
 }
 
 /** Converte as linhas de `estoques` para a identidade canônica, falhando fechado. */
@@ -557,13 +561,23 @@ export async function celulasDoProduto(escopo: EscopoEmpresa, produtoId: number,
  * Mesma regra canônica em lote (Grade/Estoque Físico): uma leitura de saldos e
  * uma de locais para a empresa inteira, sem N+1 e sem agregação paralela.
  */
-export async function celulasDaEmpresa(escopo: EscopoEmpresa, tx?: Tx): Promise<CelulaCanonica[]> {
+export async function celulasDaEmpresa(
+  escopo: EscopoEmpresa,
+  tx?: Tx,
+  locaisPrecarregados?: Row[]
+): Promise<CelulaCanonica[]> {
   const s = getStore();
   const saldos = await s.list(getResource('estoques')!, { page: 1, pageSize: LIMITE_CELULAS, filter: { empresa_id: escopo.empresaId } }, tx);
   if (saldos.total > saldos.rows.length) {
     throw new HttpError(409, 'O estoque da empresa excede o limite seguro de células. Nenhum saldo parcial foi retornado.');
   }
-  return canonicalizar(saldos.rows, await locaisDaEmpresa(escopo, tx));
+  // A grade já carrega os locais para montar o seletor. Reaproveitar essas
+  // linhas evita uma segunda listagem da mesma tabela sem relaxar a validação
+  // de empresa nem alterar a identidade canônica das células.
+  const locais = locaisPrecarregados
+    ? mapearLocaisDaEmpresa(locaisPrecarregados)
+    : await locaisDaEmpresa(escopo, tx);
+  return canonicalizar(saldos.rows, locais);
 }
 
 /** Célula exata (produto + tamanho + local) — a identidade do faturamento. */
