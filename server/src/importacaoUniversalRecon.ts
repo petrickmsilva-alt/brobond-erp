@@ -115,7 +115,12 @@ export function reconciliarImportacaoUniversal(
    }
   }
   for(const [sku,rows] of rowsBySku) if(rows.length>1) divergencias.push({tipo:'duplicado_origem',aba:aba.nome,linhasOrigem:rows,chave:sku,descricao:'SKU aparece múltiplas vezes na mesma aba; resolução manual obrigatória.',requerAprovacao:true});
-  for(const [barcode,rows] of rowsByBarcode) if(rows.length>1) divergencias.push({tipo:'conflito_codigo_barras',aba:aba.nome,linhasOrigem:rows,chave:barcode,descricao:'Código de barras duplicado na planilha de origem; associação ambígua bloqueia importação.',detalhes:{linhas:rows},requerAprovacao:true});
+
+ }
+ for(const [barcode,origens] of origemPorBarcode){
+  const unicas=new Map<string,{aba:string;linha:number;sku:string}>();
+  for(const origem of origens)for(const linha of origem.linhas)unicas.set(origem.aba+'|'+linha,{aba:origem.aba,linha,sku:origem.sku});
+  if(unicas.size>1)divergencias.push({tipo:'conflito_codigo_barras',aba:[...new Set([...unicas.values()].map(o=>o.aba))].join(', '),linhasOrigem:[...unicas.values()].map(o=>o.linha),chave:barcode,descricao:'Código de barras duplicado entre registros da planilha (inclusive abas diferentes); associação ambígua bloqueia importação.',detalhes:{origens:[...unicas.values()]},requerAprovacao:true});
  }
  for(const d of divergencias) totals[d.tipo]++;
  return {registros,divergencias,totais:totals,perdaDadosPrevista:0,importacaoLiberada:false};
