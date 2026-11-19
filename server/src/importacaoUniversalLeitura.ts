@@ -163,7 +163,7 @@ export async function inventariarArquivoUniversal(opts: OpcoesLeituraUniversal):
       const rowVals: unknown[] = [];
       row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
         cellCount++;
-        if (cellCount > maxCelulas) throw new Error(`Arquivo excede o limite de ${maxCelulas} células.`);
+        if (cellCount > maxCelulas) throw new Error(`Arquivo excede o limite de células configurado (${maxCelulas}).`);
         const raw = cell.value as any;
         const formula = raw && typeof raw === 'object' && 'formula' in raw ? String(raw.formula ?? '') : undefined;
         const sharedFormula = raw && typeof raw === 'object' && 'sharedFormula' in raw ? String(raw.sharedFormula ?? '') : undefined;
