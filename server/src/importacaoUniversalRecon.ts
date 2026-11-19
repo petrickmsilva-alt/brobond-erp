@@ -77,6 +77,8 @@ export function reconciliarImportacaoUniversal(
    const m=mapRow(analise,aba.nome,row.valores);
    const reg:RegistroReconhecido={aba:aba.nome,linha:row.linhaOrigem,entidade,dadosOriginais:{...row.valores},mapeado:m};registros.push(reg);
    const sku=normalKey(m.sku);
+   const barcode=normalKey(m.codigo_barras);
+   if(barcode){const origin=origemPorBarcode.get(barcode)||[];origin.push({aba:aba.nome,linhas:[row.linhaOrigem],sku});origemPorBarcode.set(barcode,origin);const erpMatches=produtosPorBarcode.get(barcode)||[];if(erpMatches.length>0&&(!sku||erpMatches.some(p=>normalKey(p.sku)!==sku)))divergencias.push({tipo:'conflito_codigo_barras',aba:aba.nome,linhasOrigem:[row.linhaOrigem],chave:barcode,descricao:'Código de barras já pertence a outro SKU no ERP; conflito bloqueia importação.',detalhes:{skusERP:erpMatches.map(p=>p.sku),skuOrigem:sku},requerAprovacao:true});}
    if(sku){const r=rowsBySku.get(sku)||[];r.push(row.linhaOrigem);rowsBySku.set(sku,r);}
    if(analise.sugestoes.some(s=>s.aba===aba.nome&&!s.campoCanonico)){
     divergencias.push({tipo:'campo_desconhecido',aba:aba.nome,linhasOrigem:[row.linhaOrigem],descricao:'Registro possui campos não mapeados; dados originais preservados.',detalhes:{campos:analise.sugestoes.filter(s=>s.aba===aba.nome&&!s.campoCanonico).map(s=>s.colunaOriginal)},requerAprovacao:true});
