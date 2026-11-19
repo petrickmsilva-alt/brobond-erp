@@ -47,3 +47,14 @@ export async function analisarImportacaoUniversalHandler(req:Request,res:Respons
   throw err;
  }
 }
+
+export async function consultarImportacaoUniversalHandler(req:Request,res:Response):Promise<void>{
+ const user=currentUser(req);
+ if(!user||!user.empresa_id||user.empresa_id<=0) throw new HttpError(403,'Usuário sem empresa ativa.');
+ const id=String(req.params?.id||'');
+ if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) throw new HttpError(400,'ID de sessão inválido.');
+ const result=await queryDb(`SELECT id,nome_arquivo,mime_type,tamanho_bytes,sha256,status,versao,inventario_abas,interpretacao,reconciliacao,preview,aprovacao_usuario_id,aprovado_em,importacao_iniciada_em,importacao_finalizada_em,resultado,erro,criado_em,atualizado_em
+ FROM importacao_universal_sessoes WHERE id=$1 AND empresa_id=$2 AND usuario_id=$3 LIMIT 1`,[id,user.empresa_id,user.id]);
+ if(!result.rows.length) throw new HttpError(404,'Sessão de importação não encontrada.');
+ res.json(result.rows[0]);
+}
