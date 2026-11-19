@@ -68,6 +68,9 @@ export function reconciliarImportacaoUniversal(
  const totals:ResultadoRecon['totais']={novo:0,existente_igual:0,atualizacao_proposta:0,duplicado_origem:0,conflito_sku:0,conflito_codigo_barras:0,ambiguidade:0,campo_desconhecido:0};
  const produtosPorSku=new Map<string,SnapshotProdutoERP[]>();
  for(const p of produtosERP){const k=normalKey(p.sku);const arr=produtosPorSku.get(k)||[];arr.push(p);produtosPorSku.set(k,arr);}
+ const produtosPorBarcode=new Map<string,SnapshotProdutoERP[]>();
+ for(const p of produtosERP){const k=normalKey(p.codigo_barras);if(!k)continue;const arr=produtosPorBarcode.get(k)||[];arr.push(p);produtosPorBarcode.set(k,arr);}
+ const origemPorBarcode=new Map<string,{aba:string;linhas:number[];sku:string}[]>();
  const saldos=new Map<string,SnapshotSaldoERP[]>();
  for(const s of saldosERP){const k=[normalKey(s.sku),normalKey(s.tamanho),normalKey(s.local)].join('|');const arr=saldos.get(k)||[];arr.push(s);saldos.set(k,arr);}
  for(const aba of arquivo.abas){
