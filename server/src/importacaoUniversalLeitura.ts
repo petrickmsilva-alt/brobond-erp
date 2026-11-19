@@ -43,8 +43,8 @@ export type OpcoesLeituraUniversal = {
   maxCelulas?: number;
 };
 
-const MAX_BYTES_PADRAO = 20 * 1024 * 1024;
-const MAX_CELULAS_PADRAO = 500_000;
+const MAX_BYTES_PADRAO = 2.5 * 1024 * 1024;
+const MAX_CELULAS_PADRAO = 100_000;
 const MAX_LINHAS_CABECALHO = 15;
 
 function serializarValor(valor: unknown): unknown {
