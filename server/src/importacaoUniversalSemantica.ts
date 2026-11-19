@@ -113,7 +113,7 @@ function sugerir(aba: AbaInventariada, coluna: string): SugestaoCampo {
 
 export function interpretarCamposUniversal(arquivo: ArquivoInventariado): AnaliseSemantica {
   const sugestoes: SugestaoCampo[] = [];
-  for (const aba of arquivo.abas) for (const coluna of aba.cabecalhos) sugestoes.push(suger(aba, coluna));
+  for (const aba of arquivo.abas) for (const coluna of aba.cabecalhos) sugestoes.push(sugerir(aba, coluna));
   const bySheet = new Map<string, Map<CampoCanonico, SugestaoCampo[]>>();
   for (const s of sugestoes) {
     if (!s.campoCanonico) continue;
