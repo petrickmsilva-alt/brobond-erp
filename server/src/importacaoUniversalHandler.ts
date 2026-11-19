@@ -5,6 +5,47 @@ import { currentUser } from './auth';
 import { analisarArquivoUniversal } from './importacaoUniversalAnalise';
 import { HttpError } from './errors';
 
+
+const CAMPOS_CANONICOS_IMPORTACAO = new Set(['sku','nome','categoria','colecao','cor','tamanho','quantidade','custo','custo_aquisicao','custo_fabricacao','custo_adicional','imposto','margem','preco_venda','preco_atacado','preco_promocional','qtd_min_atacado','codigo_barras','ncm','peso_g','local','fornecedor','telefone','email','cnpj_cpf','descricao','composicao','tipo_movimento','data','referencia_externa']);
+const TIPOS_CAMPO_IMPORTACAO = new Set(['texto','numero','percentual','data','booleano','codigo','desconhecido']);
+const TIPOS_ENTIDADE_IMPORTACAO = new Set(['produto','sku','variacao','estoque','preco','movimentacao','cliente','fornecedor','tabela_generica']);
+export async function salvarMapeamentoImportacaoUniversalHandler(req:Request,res:Response):Promise<void>{
+ const user=currentUser(req);
+ if(!user||!user.empresa_id||user.empresa_id<=0) throw new HttpError(403,'Usuário sem empresa ativa para mapeamento.');
+ const id=String(req.params?.id||'');
+ if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) throw new HttpError(400,'ID de sessão inválido.');
+ const session=await queryDb(`SELECT id,status,inventario_abas,interpretacao FROM importacao_universal_sessoes WHERE id=$1 AND empresa_id=$2 AND usuario_id=$3 LIMIT 1`,[id,user.empresa_id,user.id]);
+ if(!session.rows.length) throw new HttpError(404,'Sessão de importação não encontrada.');
+ const row=session.rows[0];
+ if(!['aguardando_mapeamento','aguardando_aprovacao'].includes(String(row.status))) throw new HttpError(409,'Sessão não permite editar mapeamento neste estado.');
+ const mappings=req.body?.mapeamentos, entities=req.body?.entidades;
+ if(!Array.isArray(mappings)||!Array.isArray(entities)) throw new HttpError(400,'Envie mapeamentos e entidades em formato de lista.');
+ const abas=Array.isArray(row.inventario_abas)?row.inventario_abas:[];
+ const interpretacaoOriginal=(row.interpretacao&&typeof row.interpretacao==='object')?row.interpretacao:{};
+ const validPairs=new Set(abas.flatMap((a:any)=>Array.isArray(a.cabecalhos)?a.cabecalhos.map((h:string)=>String(a.nome)+'::'+h):[]);
+ const seen=new Set<string>(), normalized:any[]=[];
+ for(const m of mappings){
+  if(!m||typeof m.aba!=='string'||typeof m.colunaOriginal!=='string'||!validPairs.has(m.aba+'::'+m.colunaOriginal)) throw new HttpError(400,'Mapeamento referencia aba/coluna inexistente.');
+  const key=m.aba+'::'+m.colunaOriginal;if(seen.has(key)) throw new HttpError(400,'Coluna duplicada no payload de mapeamento.');seen.add(key);
+  const field=m.campoCanonico===null||m.campoCanonico===''?null:String(m.campoCanonico),tipo=String(m.tipo||'desconhecido');
+  if(field!==null&&!CAMPOS_CANONICOS_IMPORTACAO.has(field)) throw new HttpError(400,'Campo canônico inválido: '+field);
+  if(!TIPOS_CAMPO_IMPORTACAO.has(tipo)) throw new HttpError(400,'Tipo de campo inválido.');
+  normalized.push({aba:m.aba,colunaOriginal:m.colunaOriginal,campoCanonico:field,tipoInferido:tipo,ignorado:field===null,confirmado:true});
+ }
+ if(normalized.length!==validPairs.size) throw new HttpError(400,'Mapeie todas as colunas da origem, inclusive as que serão ignoradas.');
+ const entidades:any[]=[], entitySeen=new Set<string>();
+ for(const e of entities){
+  if(!e||typeof e.aba!=='string'||!abas.some((a:any)=>a.nome===e.aba)||!TIPOS_ENTIDADE_IMPORTACAO.has(String(e.tipo))) throw new HttpError(400,'Entidade/aba inválida.');
+  if(entitySeen.has(e.aba)) throw new HttpError(400,'Tipo de entidade duplicado para aba.');
+  entitySeen.add(e.aba);entidades.push({aba:e.aba,tipo:e.tipo,confirmado:true});
+ }
+ for(const a of abas) if(!entitySeen.has(String(a.nome))) throw new HttpError(400,'Confirme a entidade de todas as abas.');
+ const camposPorAba=new Map<string,Set<string>>();
+ for(const m of normalized)if(m.campoCanonico){const set=camposPorAba.get(m.aba)||new Set<string>();if(set.has(m.campoCanonico))throw new HttpError(400,'Campo canônico duplicado na aba '+m.aba+': '+m.campoCanonico);set.add(m.campoCanonico);camposPorAba.set(m.aba,set);}
+ const novo={...interpretacaoOriginal,mapeamentoConfirmado:{versao:1,confirmadoPor:user.id,confirmadoEm:new Date().toISOString(),mapeamentos:normalized,entidades}};
+ await queryDb(`UPDATE importacao_universal_sessoes SET interpretacao=$2::jsonb,status='aguardando_mapeamento',versao=versao+1,atualizado_em=now() WHERE id=$1 AND empresa_id=$3 AND usuario_id=$4`,[id,JSON.stringify(novo),user.empresa_id,user.id]);
+ res.json({id,status:'aguardando_mapeamento',mapeamentoSalvo:true,versao:1,totalMapeamentos:normalized.length,totalEntidades:entidades.length});
+}
 const MAX_BYTES=2.5*1024*1024;
 const ALLOWED_EXT=new Set(['xlsx','xlsm','csv']);
 
@@ -78,7 +119,11 @@ export async function reconciliarImportacaoUniversalHandler(req:Request,res:Resp
  const tipoArquivo: 'csv'|'xlsx'=String(row.nome_arquivo).toLowerCase().endsWith('.csv')?'csv':'xlsx';
  const arquivo={nome:String(row.nome_arquivo),sha256:String(row.sha256),tamanhoBytes:Number(row.tamanho_bytes),tipo:tipoArquivo,abas:row.inventario_abas as any};
  const interpretacao=row.interpretacao as any;
- const result=reconciliarImportacaoUniversal(arquivo,interpretacao.semantica,interpretacao.entidades,produtosERP,saldosERP);
+ const confirmado=interpretacao.mapeamentoConfirmado;
+ if(!confirmado||confirmado.versao!==1||!Array.isArray(confirmado.mapeamentos)||!Array.isArray(confirmado.entidades)) throw new HttpError(409,'Confirme e salve o mapeamento antes de reconciliar.');
+ const semanticaConfirmada={...interpretacao.semantica,sugestoes:interpretacao.semantica.sugestoes.map((s:any)=>{const m=confirmado.mapeamentos.find((x:any)=>x.aba===s.aba&&x.colunaOriginal===s.colunaOriginal);return m?{...s,campoCanonico:m.campoCanonico,tipoInferido:m.tipoInferido,requerConfirmacao:false,ignorado:m.ignorado===true}:s;})};
+ const entidadesConfirmadas={...interpretacao.entidades,entidades:interpretacao.entidades.entidades.map((e:any)=>{const m=confirmado.entidades.find((x:any)=>x.aba===e.aba);return m?{...e,tipo:m.tipo,requerConfirmacao:false}:e;})};
+ const result=reconciliarImportacaoUniversal(arquivo,semanticaConfirmada,entidadesConfirmadas,produtosERP,saldosERP);
  await queryDb(`UPDATE importacao_universal_sessoes SET reconciliacao=$2::jsonb,status='aguardando_aprovacao',atualizado_em=now()
   WHERE id=$1 AND empresa_id=$3 AND usuario_id=$4`,[JSON.stringify(result),user.empresa_id,user.id]);
  res.json({id,status:'aguardando_aprovacao',reconciliacao:result,erpSnapshot:{produtos:produtosERP.length,saldos:saldosERP.length}});

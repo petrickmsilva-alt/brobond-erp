@@ -47,7 +47,7 @@ export type ResultadoRecon = {
 };
 
 function mapRow(analise:AnaliseSemantica,aba:string,row:Record<string,unknown>):Partial<Record<CampoCanonico,unknown>> {
-  const mapping=analise.sugestoes.filter(s=>s.aba===aba&&s.campoCanonico&&!s.requerConfirmacao);
+  const mapping=analise.sugestoes.filter(s=>s.aba===aba&&s.campoCanonico&&!s.requerConfirmacao&&!((s as any).ignorado));
   const out:Partial<Record<CampoCanonico,unknown>>={};
   for(const s of mapping) if(row[s.colunaOriginal]!==undefined) out[s.campoCanonico as CampoCanonico]=row[s.colunaOriginal];
   return out;
@@ -83,7 +83,7 @@ export function reconciliarImportacaoUniversal(
    const barcode=normalKey(m.codigo_barras);
    if(barcode){const origin=origemPorBarcode.get(barcode)||[];origin.push({aba:aba.nome,linhas:[row.linhaOrigem],sku});origemPorBarcode.set(barcode,origin);const erpMatches=produtosPorBarcode.get(barcode)||[];if(erpMatches.length>0&&(!sku||erpMatches.some(p=>normalKey(p.sku)!==sku)))divergencias.push({tipo:'conflito_codigo_barras',aba:aba.nome,linhasOrigem:[row.linhaOrigem],chave:barcode,descricao:'Código de barras já pertence a outro SKU no ERP; conflito bloqueia importação.',detalhes:{skusERP:erpMatches.map(p=>p.sku),skuOrigem:sku},requerAprovacao:true});}
    if(sku){const r=rowsBySku.get(sku)||[];r.push(row.linhaOrigem);rowsBySku.set(sku,r);}
-   if(analise.sugestoes.some(s=>s.aba===aba.nome&&!s.campoCanonico)){
+   if(analise.sugestoes.some(s=>s.aba===aba.nome&&!s.campoCanonico&&!(s as any).ignorado)){
     divergencias.push({tipo:'campo_desconhecido',aba:aba.nome,linhasOrigem:[row.linhaOrigem],descricao:'Registro possui campos não mapeados; dados originais preservados.',detalhes:{campos:analise.sugestoes.filter(s=>s.aba===aba.nome&&!s.campoCanonico).map(s=>s.colunaOriginal)},requerAprovacao:true});
    }
    if(analise.sugestoes.some(s=>s.aba===aba.nome&&s.requerConfirmacao)){

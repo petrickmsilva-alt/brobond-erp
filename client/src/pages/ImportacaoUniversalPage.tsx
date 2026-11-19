@@ -31,6 +31,18 @@ export default function ImportacaoUniversalPage(){
  const [recon,setRecon]=useState<any|null>(null);
  const [resultado,setResultado]=useState<ResultadoAnalise|null>(null);
  const [erro,setErro]=useState('');
+ const [mapeamentos,setMapeamentos]=useState<any[]>([]);
+ const [entidadesConfirmadas,setEntidadesConfirmadas]=useState<any[]>([]);
+ const [mappingSaved,setMappingSaved]=useState(false);
+ const [savingMapping,setSavingMapping]=useState(false);
+ const CAMPOS_CANONICOS=['(ignorar)','sku','nome','categoria','colecao','cor','tamanho','quantidade','custo','custo_aquisicao','custo_fabricacao','custo_adicional','imposto','margem','preco_venda','preco_atacado','preco_promocional','qtd_min_atacado','codigo_barras','ncm','peso_g','local','fornecedor','telefone','email','cnpj_cpf','descricao','composicao','tipo_movimento','data','referencia_externa'];
+ const TIPOS_ENTIDADE=['produto','sku','variacao','estoque','preco','movimentacao','cliente','fornecedor','tabela_generica'];
+ function atualizarMapeamento(index:number,field:string,value:any){setMapeamentos(prev=>prev.map((m,i)=>i===index?{...m,[field]:value}:m));setMappingSaved(false);setRecon(null);}
+ function atualizarEntidade(aba:string,tipo:string){setEntidadesConfirmadas(prev=>prev.map(e=>e.aba===aba?{...e,tipo}:e));setMappingSaved(false);setRecon(null);}
+ async function salvarMapeamento(){if(!resultado?.id)return;setSavingMapping(true);setErro('');
+  try{await api.post<any>('/importacao-universal/sessoes/'+resultado.id+'/mapeamento',{mapeamentos:mapeamentos.map(m=>({...m,campoCanonico:m.campoCanonico||null})),entidades:entidadesConfirmadas});setMappingSaved(true);toast.success('Mapeamento confirmado e persistido. A reconciliação utilizará estas escolhas.');}
+  catch(e){setErro(e instanceof ApiError?e.message:'Falha ao salvar mapeamento.');}finally{setSavingMapping(false);}
+ }
  async function reconciliar(){
   if(!resultado?.id)return;
   setReconciliando(true);setErro('');
@@ -48,6 +60,9 @@ export default function ImportacaoUniversalPage(){
    const base64=bytesParaBase64(bytes);
    const response=await api.post<ResultadoAnalise>('/importacao-universal/analisar',{nomeArquivo:file.name,mimeType:file.type||'application/octet-stream',arquivoBase64:base64});
    setResultado(response);
+   setRecon(null);setMappingSaved(false);
+   setMapeamentos(response.analise.semantica.sugestoes.map((s:any)=>({aba:s.aba,colunaOriginal:s.colunaOriginal,campoCanonico:s.campoCanonico||'',tipo:s.tipoInferido||'desconhecido'})));
+   setEntidadesConfirmadas(response.analise.entidades.entidades.map((e:any)=>({aba:e.aba,tipo:e.tipo})));
    toast.success('Análise concluída. Nenhum cadastro ou estoque foi alterado.');
   }catch(e){setErro(e instanceof ApiError?e.message:'Falha ao analisar arquivo.');}
   finally{setAnalisando(false);}
@@ -95,13 +110,20 @@ export default function ImportacaoUniversalPage(){
      <div className="overflow-auto"><table className="min-w-full text-xs border-collapse"><thead><tr>{['Aba','Campo origem','Sugestão ERP','Tipo','Confiança','Revisão'].map(c=><th key={c} className="border px-2 py-2 text-left">{c}</th>)}</tr></thead><tbody>{resultado.analise.semantica.sugestoes.map((s,i)=><tr key={i}><td className="border px-2 py-1">{s.aba}</td><td className="border px-2 py-1">{s.colunaOriginal}</td><td className="border px-2 py-1">{s.campoCanonico||'—'}</td><td className="border px-2 py-1">{s.tipoInferido}</td><td className="border px-2 py-1">{Math.round(s.confianca*100)}%</td><td className="border px-2 py-1">{s.requerConfirmacao?'Confirmar':'Alta confiança'}</td></tr>)}</tbody></table></div>
     </section>
     <section className="rounded-xl border border-slate-200 dark:border-slate-700 p-4 space-y-3">
+    <section className="rounded-xl border border-slate-200 dark:border-slate-700 p-4 space-y-3">
+     <h2 className="font-semibold">Mapeamento editável e confirmação</h2>
+     <p className="text-sm text-slate-500">Revise os campos antes da reconciliação. Campos ignorados permanecem no arquivo RAW original. Cada campo canônico pode ser usado uma única vez por aba.</p>
+     <div className="overflow-auto"><table className="min-w-full text-xs border-collapse"><thead><tr>{['Aba','Campo de origem','Campo ERP confirmado','Tipo'].map(c=><th key={c} className="border px-2 py-2 text-left">{c}</th>)}</tr></thead><tbody>{mapeamentos.map((m,i)=><tr key={m.aba+'::'+m.colunaOriginal}><td className="border px-2 py-1">{m.aba}</td><td className="border px-2 py-1">{m.colunaOriginal}</td><td className="border px-2 py-1"><select className="border rounded p-1 min-w-40" value={m.campoCanonico} onChange={e=>atualizarMapeamento(i,'campoCanonico',e.target.value)}>{CAMPOS_CANONICOS.map(c=><option key={c} value={c==='(ignorar)'?'':c}>{c==='(ignorar)'?'Ignorar campo':c}</option>)}</select></td><td className="border px-2 py-1"><select className="border rounded p-1" value={m.tipo} onChange={e=>atualizarMapeamento(i,'tipo',e.target.value)}>{['texto','numero','percentual','data','booleano','codigo','desconhecido'].map(t=><option key={t}>{t}</option>)}</select></td></tr>)}</tbody></table></div>
+     <div className="space-y-2"><h3 className="font-medium text-sm">Entidade por aba</h3>{entidadesConfirmadas.map(e=><div key={e.aba} className="flex items-center justify-between gap-3 border rounded p-2"><span className="text-sm">{e.aba}</span><select className="border rounded p-1 text-sm" value={e.tipo} onChange={ev=>atualizarEntidade(e.aba,ev.target.value)}>{TIPOS_ENTIDADE.map(t=><option key={t}>{t}</option>)}</select></div>)}</div>
+     <div className="flex flex-wrap items-center gap-3"><button className="btn btn-primary" disabled={savingMapping||mapeamentos.length===0} onClick={salvarMapeamento}>{savingMapping?'Salvando confirmação…':'Salvar e confirmar mapeamento'}</button>{mappingSaved&&<Alert tone="green">Mapeamento confirmado e persistido, pronto para reconciliação.</Alert>}</div>
+    </section>
      <h2 className="font-semibold">Entidades reconhecidas</h2>
      {resultado.analise.entidades.entidades.map(e=><div key={e.aba} className="border rounded-lg p-3 flex flex-wrap justify-between gap-2"><div><strong>{e.aba}</strong><div className="text-xs text-slate-500">{tipoLabel(e.tipo)} · {e.linhasComDados} registros · {e.camposRelacionados.join(', ')||'sem campos reconhecidos'}</div></div><div className="text-xs">{Math.round(e.confianca*100)}% confiança {e.requerConfirmacao?'· revisar':''}</div></div>)}
     </section>
     <section className="rounded-xl border border-slate-200 dark:border-slate-700 p-4 space-y-3">
      <h2 className="font-semibold">Reconciliação com o ERP</h2>
      <p className="text-sm text-slate-500">Consulta os dados da empresa ativa, compara com a origem e gera divergências. Etapa somente leitura.</p>
-     <button className="btn btn-primary flex items-center gap-2" disabled={reconciliando} onClick={reconciliar}>{reconciliando?<Loader2 className="h-4 w-4 animate-spin"/>:<Database className="h-4 w-4"/>}{reconciliando?'Reconciliando…':'Reconciliar com ERP'}</button>
+     <button className="btn btn-primary flex items-center gap-2" disabled={!mappingSaved||reconciliando} onClick={reconciliar}>{reconciliando?<Loader2 className="h-4 w-4 animate-spin"/>:<Database className="h-4 w-4"/>}{reconciliando?'Reconciliando…':'Reconciliar com ERP'}</button>
      {recon&&<div className="space-y-3">
       <Alert tone="amber">Snapshot: {recon.erpSnapshot?.produtos??0} produtos e {recon.erpSnapshot?.saldos??0} saldos. Importação continua bloqueada.</Alert>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2">{Object.entries(recon.reconciliacao?.totais||{}).map(([k,v])=><div key={k} className="border rounded p-2"><div className="text-xs text-slate-500">{k.replaceAll('_',' ')}</div><div className="font-bold text-lg">{String(v)}</div></div>)}</div>
