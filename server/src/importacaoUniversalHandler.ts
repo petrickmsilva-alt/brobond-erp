@@ -5,7 +5,7 @@ import { currentUser } from './auth';
 import { analisarArquivoUniversal } from './importacaoUniversalAnalise';
 import { HttpError } from './errors';
 
-const MAX_BYTES=20*1024*1024;
+const MAX_BYTES=2.5*1024*1024;
 const ALLOWED_EXT=new Set(['xlsx','xlsm','csv']);
 
 export async function analisarImportacaoUniversalHandler(req:Request,res:Response):Promise<void>{
@@ -19,7 +19,7 @@ export async function analisarImportacaoUniversalHandler(req:Request,res:Respons
  if(!ALLOWED_EXT.has(ext)) throw new HttpError(400,'Formato não suportado. Envie XLSX, XLSM ou CSV.');
  if(!base64||base64.length>Math.ceil(MAX_BYTES*4/3)+8||!/^[A-Za-z0-9+/]*={0,2}$/.test(base64)) throw new HttpError(400,'Conteúdo base64 inválido ou acima do limite.');
  const bytes=Buffer.from(base64,'base64');
- if(!bytes.length||bytes.length>MAX_BYTES) throw new HttpError(400,'Arquivo vazio ou acima de 20 MB.');
+ if(!bytes.length||bytes.length>MAX_BYTES) throw new HttpError(400,'Arquivo vazio ou acima de 2,5 MB.');
  const canonical=bytes.toString('base64');
  if(canonical.replace(/=+$/,'')!==base64.replace(/=+$/,'')) throw new HttpError(400,'Base64 inválido.');
  const id=randomUUID();
