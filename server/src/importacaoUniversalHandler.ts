@@ -63,13 +63,13 @@ export async function reconciliarImportacaoUniversalHandler(req:Request,res:Resp
  const {escopoDe}=await import('./empresa');
  const {reconciliarImportacaoUniversal}=await import('./importacaoUniversalRecon');
  const store=getStore(),escopo=escopoDe(user);
- const fetchAll=async(resource:any)=>{
+ const fetchAll=async(resource:any,empresaScoped=false)=>{
   const all:any[]=[];let page=1;const pageSize=500;
-  while(true){const result=await store.list(resource,{page,pageSize,sort:'id',dir:'asc'},undefined);
+  while(true){const result=await store.list(resource,{page,pageSize,sort:'id',dir:'asc',filter:empresaScoped?{empresa_id:user.empresa_id}:undefined},undefined);
    all.push(...result.rows);if(all.length>=result.total||result.rows.length===0)break;page++;
   }return all;
  };
- const [products,stocks,sizes,locations]=await Promise.all([fetchAll(RESOURCES.produtos),fetchAll(RESOURCES.estoques),fetchAll(RESOURCES.tamanhos),fetchAll(RESOURCES.locais)]);
+ const [products,stocks,sizes,locations]=await Promise.all([fetchAll(RESOURCES.produtos,true),fetchAll(RESOURCES.estoques,true),fetchAll(RESOURCES.tamanhos),fetchAll(RESOURCES.locais)]);
  const produtoById=new Map(products.map((p:any)=>[Number(p.id),p]));
  const tamanhoById=new Map(sizes.map((t:any)=>[Number(t.id),t]));
  const localById=new Map(locations.map((l:any)=>[Number(l.id),l]));
