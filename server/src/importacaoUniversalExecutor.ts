@@ -9,8 +9,9 @@ import { validatePayload, parseNumber } from './validate';
 import { validarReferenciasDaEmpresa } from './empresa';
 import type { Row, Tx } from './store';
 
-const BLOQUEADORES = new Set(['duplicado_origem','conflito_sku','conflito_codigo_barras','ambiguidade','campo_desconhecido','orfao_relacionamento','conflito_dimensional','produto_sem_sku','sku_sem_produto','variacao_sem_produto','estoque_sem_produto','estoque_sem_local','preco_sem_produto','movimentacao_sem_produto']);
+const BLOQUEADORES = new Set(['duplicado_origem','conflito_sku','conflito_codigo_barras','ambiguidade','campo_desconhecido','orfao_relacionamento','conflito_dimensional','produto_sem_sku','sku_sem_produto','variacao_sem_produto','estoque_sem_produto','estoque_sem_local','preco_sem_produto','movimentacao_sem_produto','entidade_sem_executor']);
 const normal=(v:unknown)=>String(v??'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim().toUpperCase();
+export function normalizarDocumentoImportacao(value:unknown):string{return String(value??'').replace(/\D/g,'');}
 const parseNum=(v:unknown)=>{const n=parseNumber(v);if(n===null)throw new HttpError(422,'Valor numérico inválido na importação.');return n;};
 const field=(r:Resource,n:string)=>r.fields.find(f=>f.name===n);
 type SheetRow={linhaOrigem:number;valores:Record<string,unknown>};
@@ -239,7 +240,7 @@ export async function executarImportacaoUniversalHandler(req:Request,res:Respons
    const genericRows=[...customerRows,...supplierRows];
    for(const item of genericRows){
     const mapped=mapSheetRow(item.row,item.aba,mappings),resource=getResource(item.tipo==='cliente'?'clientes':'fornecedores')!;
-    const documentKey=item.tipo==='cliente'?String(mapped.cnpj_cpf??'').replace(/\\D/g,''):String(mapped.cnpj_cpf??mapped.cnpj??'').replace(/\\D/g,'');
+    const documentKey=item.tipo==='cliente'?normalizarDocumentoImportacao(mapped.cnpj_cpf):normalizarDocumentoImportacao(mapped.cnpj_cpf??mapped.cnpj);
     const emailKey=String(mapped.email??'').trim().toLowerCase();
     if(!documentKey&&!emailKey)throw new HttpError(422,`Importação de ${item.tipo} exige documento ou e-mail para garantir idempotência (${item.aba} linha ${item.row.linhaOrigem}).`);
     const match=documentKey?await s.findOneWhere(resource,{empresa_id:empresaId,[item.tipo==='cliente'?'cnpj_cpf':'cnpj']:documentKey},tx):await s.findOneWhere(resource,{empresa_id:empresaId,email:emailKey},tx);

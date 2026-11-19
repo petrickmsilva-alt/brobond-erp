@@ -45,3 +45,13 @@ test('reconciliation blocks duplicate barcodes across separate workbook sheets',
  assert.equal((conflict.detalhes?.origens as unknown[]).length,2);
  assert.equal(result.importacaoLiberada,false);
 });
+
+test('generic table entities block approval instead of silently skipping imported rows',()=>{
+ const file:ArquivoInventariado={nome:'generic.csv',sha256:'e'.repeat(64),tamanhoBytes:4,tipo:'csv',abas:[{nome:'Auxiliary',indice:0,totalLinhas:2,totalColunas:2,linhaCabecalho:1,cabecalhos:['referencia_externa','tags'],vazia:false,celulas:[],linhas:[{linhaOrigem:2,valores:{referencia_externa:'X-1',tags:'a,b'}}]}]};
+ const sem=interpretarCamposUniversal(file),ent=reconhecerEntidadesUniversal(file,sem);
+ assert.equal(ent.entidades[0]?.tipo,'tabela_generica');
+ const result=reconciliarImportacaoUniversal(file,sem,ent,[],[]);
+ assert.equal(result.totais.entidade_sem_executor,1);
+ assert.ok(result.divergencias.some(d=>d.tipo==='entidade_sem_executor'));
+ assert.equal(result.importacaoLiberada,false);
+});

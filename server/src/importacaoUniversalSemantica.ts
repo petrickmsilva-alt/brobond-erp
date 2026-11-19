@@ -4,6 +4,7 @@ export type CampoCanonico =
   | 'sku' | 'nome' | 'categoria' | 'colecao' | 'cor' | 'tamanho' | 'quantidade'
   | 'custo' | 'custo_aquisicao' | 'custo_fabricacao' | 'custo_adicional' | 'imposto' | 'margem' | 'preco_venda' | 'preco_atacado' | 'preco_promocional' | 'qtd_min_atacado' | 'codigo_barras' | 'ncm' | 'peso_g'
   | 'local' | 'fornecedor' | 'telefone' | 'email' | 'cnpj_cpf' | 'descricao' | 'composicao'
+  | 'material' | 'modelagem' | 'genero' | 'marca' | 'cest' | 'tipo' | 'condicao' | 'producao' | 'unidade' | 'tags' | 'formato' | 'ativo' | 'codigo_item' | 'codigo_categoria' | 'codigo_industria' | 'variacao_tamanho_id' | 'local_destino' | 'motivo'
   | 'tipo_movimento' | 'data' | 'referencia_externa';
 
 export type TipoCampo = 'texto' | 'numero' | 'percentual' | 'data' | 'booleano' | 'codigo' | 'desconhecido';
@@ -53,7 +54,25 @@ const DICIONARIO: Record<CampoCanonico, string[]> = {
   email: ['email','e_mail','mail'],
   cnpj_cpf: ['cnpj','cpf','cnpj_cpf','documento','tax_id'],
   descricao: ['descricao','description','detalhes','observacao'],
-  composicao: ['composicao','composition','material','tecido','fabric'],
+  composicao: ['composicao','composition'],
+  material: ['material','tecido','fabric','fabricacao'],
+  modelagem: ['modelagem','model','fit','corte'],
+  genero: ['genero','gender','sexo','publico'],
+  marca: ['marca','brand'],
+  cest: ['cest'],
+  tipo: ['tipo','type'],
+  condicao: ['condicao','condition','estado_produto'],
+  producao: ['producao','production','origem_producao'],
+  unidade: ['unidade','unit','unidade_medida','uom'],
+  tags: ['tags','tag','etiquetas','keywords'],
+  formato: ['formato','format'],
+  ativo: ['ativo','active','status_ativo'],
+  codigo_item: ['codigo_item','item_code'],
+  codigo_categoria: ['codigo_categoria','category_code'],
+  codigo_industria: ['codigo_industria','industry_code'],
+  variacao_tamanho_id: ['variacao_tamanho_id','size_id'],
+  local_destino: ['local_destino','destino','warehouse_destination'],
+  motivo: ['motivo','reason','justificativa'],
   tipo_movimento: ['tipo_movimento','movimento','movement_type','entrada_saida','operacao'],
   data: ['data','date','data_movimento','data_entrada','data_saida'],
   referencia_externa: ['referencia_externa','external_id','id_externo','codigo_externo','reference_id'],

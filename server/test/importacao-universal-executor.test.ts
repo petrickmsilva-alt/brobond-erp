@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { calcularDeltaSaldo, normalizarTipoMovimentacao, validarQuantidadeMovimentacao } from '../src/importacaoUniversalExecutor';
+import { calcularDeltaSaldo, normalizarDocumentoImportacao, normalizarTipoMovimentacao, validarQuantidadeMovimentacao } from '../src/importacaoUniversalExecutor';
 
 test('normaliza tipos de movimentação incluindo acentos e caixa',()=>{
  assert.equal(normalizarTipoMovimentacao('ENTRADA'),'entrada');
@@ -30,4 +30,12 @@ test('saldo absoluto vira delta e não reaplica o saldo integral',()=>{
  assert.equal(calcularDeltaSaldo(4,4),0);
  assert.throws(()=>calcularDeltaSaldo(4,-1),e=>(e as any)?.status===422);
  assert.throws(()=>calcularDeltaSaldo(-2,1),e=>(e as any)?.status===422);
+});
+
+test('normaliza CPF/CNPJ para chave idempotente sem pontuação',()=>{
+ assert.equal(normalizarDocumentoImportacao('12.345.678/0001-90'),'12345678000190');
+ assert.equal(normalizarDocumentoImportacao('123.456.789-09'),'12345678909');
+ assert.equal(normalizarDocumentoImportacao('  00.111.222/0001-33  '),'00111222000133');
+ assert.equal(normalizarDocumentoImportacao(''),'');
+ assert.equal(normalizarDocumentoImportacao(null),'');
 });

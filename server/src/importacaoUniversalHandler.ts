@@ -7,10 +7,10 @@ import { construirModeloDependencias } from './importacaoUniversalEntidades';
 import { HttpError } from './errors';
 
 
-const CAMPOS_CANONICOS_IMPORTACAO = new Set(['sku','nome','categoria','colecao','cor','tamanho','quantidade','custo','custo_aquisicao','custo_fabricacao','custo_adicional','imposto','margem','preco_venda','preco_atacado','preco_promocional','qtd_min_atacado','codigo_barras','ncm','peso_g','local','fornecedor','telefone','email','cnpj_cpf','descricao','composicao','tipo_movimento','data','referencia_externa','local_destino']);
+const CAMPOS_CANONICOS_IMPORTACAO = new Set(['sku','nome','categoria','colecao','cor','tamanho','quantidade','custo','custo_aquisicao','custo_fabricacao','custo_adicional','imposto','margem','preco_venda','preco_atacado','preco_promocional','qtd_min_atacado','codigo_barras','ncm','cest','peso_g','local','local_destino','fornecedor','telefone','email','cnpj_cpf','descricao','composicao','material','modelagem','genero','marca','tipo','condicao','producao','unidade','tags','formato','ativo','codigo_item','codigo_categoria','codigo_industria','variacao_tamanho_id','motivo','tipo_movimento','data','referencia_externa']);
 const TIPOS_CAMPO_IMPORTACAO = new Set(['texto','numero','percentual','data','booleano','codigo','desconhecido']);
 const TIPOS_ENTIDADE_IMPORTACAO = new Set(['produto','sku','variacao','estoque','preco','movimentacao','cliente','fornecedor','tabela_generica']);
-const TIPOS_BLOQUEADORES_APROVACAO = new Set(['duplicado_origem','conflito_sku','conflito_codigo_barras','ambiguidade','campo_desconhecido','orfao_relacionamento','conflito_dimensional','produto_sem_sku','sku_sem_produto','variacao_sem_produto','estoque_sem_produto','estoque_sem_local','preco_sem_produto','movimentacao_sem_produto']);
+const TIPOS_BLOQUEADORES_APROVACAO = new Set(['duplicado_origem','conflito_sku','conflito_codigo_barras','ambiguidade','campo_desconhecido','orfao_relacionamento','conflito_dimensional','produto_sem_sku','sku_sem_produto','variacao_sem_produto','estoque_sem_produto','estoque_sem_local','preco_sem_produto','movimentacao_sem_produto','entidade_sem_executor']);
 function hashAprovacaoUniversal(id:string,empresaId:number,sha256:string,versao:number,mapeamentoConfirmado:unknown,reconciliacao:unknown):string{
  return createHash('sha256').update(JSON.stringify({id,empresaId,sha256,versao,mapeamentoConfirmado,reconciliacao})).digest('hex');
 }

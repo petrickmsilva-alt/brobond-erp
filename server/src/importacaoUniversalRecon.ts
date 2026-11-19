@@ -34,7 +34,7 @@ export type RegistroReconhecido = {
   mapeado: Partial<Record<CampoCanonico, unknown>>;
 };
 export type DivergenciaRecon = {
-  tipo: 'novo'|'existente_igual'|'atualizacao_proposta'|'duplicado_origem'|'conflito_sku'|'conflito_codigo_barras'|'ambiguidade'|'campo_desconhecido'|'orfao_relacionamento'|'conflito_dimensional'|'produto_sem_sku'|'sku_sem_produto'|'variacao_sem_produto'|'estoque_sem_produto'|'estoque_sem_local'|'preco_sem_produto'|'movimentacao_sem_produto';
+  tipo: 'novo'|'existente_igual'|'atualizacao_proposta'|'duplicado_origem'|'conflito_sku'|'conflito_codigo_barras'|'ambiguidade'|'campo_desconhecido'|'orfao_relacionamento'|'conflito_dimensional'|'produto_sem_sku'|'sku_sem_produto'|'variacao_sem_produto'|'estoque_sem_produto'|'estoque_sem_local'|'preco_sem_produto'|'movimentacao_sem_produto'|'entidade_sem_executor';
   aba: string;
   linhasOrigem: number[];
   chave?: string;
@@ -78,7 +78,7 @@ export function reconciliarImportacaoUniversal(
 ):ResultadoRecon {
  const registros:RegistroReconhecido[]=[];
  const divergencias:DivergenciaRecon[]=[];
- const totals:ResultadoRecon['totais']={novo:0,existente_igual:0,atualizacao_proposta:0,duplicado_origem:0,conflito_sku:0,conflito_codigo_barras:0,ambiguidade:0,campo_desconhecido:0,orfao_relacionamento:0,conflito_dimensional:0,produto_sem_sku:0,estoque_sem_produto:0,preco_sem_produto:0,movimentacao_sem_produto:0,sku_sem_produto:0,variacao_sem_produto:0,estoque_sem_local:0};
+ const totals:ResultadoRecon['totais']={novo:0,existente_igual:0,atualizacao_proposta:0,duplicado_origem:0,conflito_sku:0,conflito_codigo_barras:0,ambiguidade:0,campo_desconhecido:0,orfao_relacionamento:0,conflito_dimensional:0,produto_sem_sku:0,estoque_sem_produto:0,preco_sem_produto:0,movimentacao_sem_produto:0,entidade_sem_executor:0,sku_sem_produto:0,variacao_sem_produto:0,estoque_sem_local:0};
  const produtosPorSku=new Map<string,SnapshotProdutoERP[]>();
  for(const p of produtosERP){const k=normalKey(p.sku);const arr=produtosPorSku.get(k)||[];arr.push(p);produtosPorSku.set(k,arr);}
  const produtosPorBarcode=new Map<string,SnapshotProdutoERP[]>();
@@ -93,6 +93,7 @@ export function reconciliarImportacaoUniversal(
    const m=mapRow(analise,aba.nome,row.valores);
    const reg:RegistroReconhecido={aba:aba.nome,linha:row.linhaOrigem,entidade,dadosOriginais:{...row.valores},mapeado:m};registros.push(reg);
    const sku=normalKey(m.sku);
+   if(entidade==='tabela_generica')divergencias.push({tipo:'entidade_sem_executor',aba:aba.nome,linhasOrigem:[row.linhaOrigem],descricao:'Esta aba foi classificada como tabela genérica e não possui destino de gravação implementado. Importação bloqueada para impedir descarte silencioso dos registros.',detalhes:{cabecalhos:aba.cabecalhos},requerAprovacao:true});
    const barcode=normalKey(m.codigo_barras);
    if(barcode){const origin=origemPorBarcode.get(barcode)||[];origin.push({aba:aba.nome,linhas:[row.linhaOrigem],sku});origemPorBarcode.set(barcode,origin);const erpMatches=produtosPorBarcode.get(barcode)||[];if(erpMatches.length>0&&sku&&erpMatches.some(p=>normalKey(p.sku)!==sku))divergencias.push({tipo:'conflito_codigo_barras',aba:aba.nome,linhasOrigem:[row.linhaOrigem],chave:barcode,descricao:'Código de barras já pertence a outro SKU no ERP; conflito bloqueia importação.',detalhes:{skusERP:erpMatches.map(p=>p.sku),skuOrigem:sku},requerAprovacao:true});}
    if(sku){const identity=entidade==='estoque'?[sku,normalKey(m.tamanho),normalKey(m.local)].join('|'):sku;const r=rowsBySku.get(identity)||[];r.push(row.linhaOrigem);rowsBySku.set(identity,r);}
