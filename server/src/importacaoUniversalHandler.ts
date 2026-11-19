@@ -58,6 +58,7 @@ export async function reconciliarImportacaoUniversalHandler(req:Request,res:Resp
  if(!session.rows.length) throw new HttpError(404,'Sessão de importação não encontrada.');
  const row=session.rows[0];
  if(!row.inventario_abas||!row.interpretacao) throw new HttpError(409,'Sessão não possui inventário e interpretação completos.');
+ if(row.status!=='aguardando_mapeamento'&&row.status!=='aguardando_aprovacao') throw new HttpError(409,'A sessão não está em um estado permitido para reconciliação.');
  const {getStore}=await import('./services');
  const {RESOURCES}=await import('./resources');
  const {reconciliarImportacaoUniversal}=await import('./importacaoUniversalRecon');
@@ -68,7 +69,7 @@ export async function reconciliarImportacaoUniversalHandler(req:Request,res:Resp
    all.push(...result.rows);if(all.length>=result.total||result.rows.length===0)break;page++;
   }return all;
  };
- const [products,stocks,sizes,locations]=await Promise.all([fetchAll(RESOURCES.produtos,true),fetchAll(RESOURCES.estoques,true),fetchAll(RESOURCES.tamanhos),fetchAll(RESOURCES.locais)]);
+ const [products,stocks,sizes,locations]=await Promise.all([fetchAll(RESOURCES.produtos,true),fetchAll(RESOURCES.estoques,true),fetchAll(RESOURCES.tamanhos),fetchAll(RESOURCES.locais,true)]);
  const produtoById=new Map(products.map((p:any)=>[Number(p.id),p]));
  const tamanhoById=new Map(sizes.map((t:any)=>[Number(t.id),t]));
  const localById=new Map(locations.map((l:any)=>[Number(l.id),l]));
@@ -78,9 +79,9 @@ export async function reconciliarImportacaoUniversalHandler(req:Request,res:Resp
  const arquivo={nome:String(row.nome_arquivo),sha256:String(row.sha256),tamanhoBytes:Number(row.tamanho_bytes),tipo:tipoArquivo,abas:row.inventario_abas as any};
  const interpretacao=row.interpretacao as any;
  const result=reconciliarImportacaoUniversal(arquivo,interpretacao.semantica,interpretacao.entidades,produtosERP,saldosERP);
- await queryDb(`UPDATE importacao_universal_sessoes SET reconciliacao=$2::jsonb,status='aguardando_revisao',atualizado_em=now()
+ await queryDb(`UPDATE importacao_universal_sessoes SET reconciliacao=$2::jsonb,status='aguardando_aprovacao',atualizado_em=now()
   WHERE id=$1 AND empresa_id=$3 AND usuario_id=$4`,[JSON.stringify(result),user.empresa_id,user.id]);
- res.json({id,status:'aguardando_revisao',reconciliacao:result,erpSnapshot:{produtos:produtosERP.length,saldos:saldosERP.length}});
+ res.json({id,status:'aguardando_aprovacao',reconciliacao:result,erpSnapshot:{produtos:produtosERP.length,saldos:saldosERP.length}});
 }
 
 export async function consultarImportacaoUniversalHandler(req:Request,res:Response):Promise<void>{
