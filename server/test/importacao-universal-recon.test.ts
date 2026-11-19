@@ -31,3 +31,17 @@ test('reconciliation blocks duplicate source barcodes across different SKUs',()=
  assert.ok(result.divergencias.some(d=>d.tipo==='conflito_codigo_barras'&&d.linhasOrigem.length===2));
  assert.equal(result.importacaoLiberada,false);
 });
+
+test('reconciliation blocks duplicate barcodes across separate workbook sheets',()=>{
+ const file:ArquivoInventariado={nome:'multiabas.xlsx',sha256:'d'.repeat(64),tamanhoBytes:8,tipo:'xlsx',abas:[
+  {nome:'Products A',indice:0,totalLinhas:2,totalColunas:3,linhaCabecalho:1,cabecalhos:['sku','nome','codigo_barras'],vazia:false,celulas:[],linhas:[{linhaOrigem:2,valores:{sku:'SKU-A',nome:'Produto A',codigo_barras:'7890000000002'}}]},
+  {nome:'Products B',indice:1,totalLinhas:2,totalColunas:3,linhaCabecalho:1,cabecalhos:['sku','nome','codigo_barras'],vazia:false,celulas:[],linhas:[{linhaOrigem:2,valores:{sku:'SKU-B',nome:'Produto B',codigo_barras:'7890000000002'}}]}
+ ]};
+ const sem=interpretarCamposUniversal(file),ent=reconhecerEntidadesUniversal(file,sem);
+ const result=reconciliarImportacaoUniversal(file,sem,ent,[],[]);
+ const conflict=result.divergencias.find(d=>d.tipo==='conflito_codigo_barras'&&d.chave==='7890000000002');
+ assert.ok(conflict);
+ assert.equal(conflict.linhasOrigem.length,2);
+ assert.equal((conflict.detalhes?.origens as unknown[]).length,2);
+ assert.equal(result.importacaoLiberada,false);
+});
