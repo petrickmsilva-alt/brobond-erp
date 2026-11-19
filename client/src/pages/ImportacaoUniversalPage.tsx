@@ -47,7 +47,7 @@ export default function ImportacaoUniversalPage(){
    <section className="rounded-xl border border-slate-200 dark:border-slate-700 p-4 space-y-3">
     <div className="flex items-center gap-2 font-semibold"><FileUp className="h-5 w-5"/>Arquivo de origem</div>
     <input type="file" accept=".xlsx,.xlsm,.csv" onChange={e=>{setFile(e.target.files?.[0]||null);setResultado(null);setErro('');}} className="block w-full text-sm"/>
-    <p className="text-xs text-slate-500">XLSX, XLSM ou CSV. Limite de 20 MB. O arquivo original é armazenado no registro da sessão, com SHA-256.</p>
+    <p className="text-xs text-slate-500">XLSX, XLSM ou CSV. Limite de 2,5 MB. O arquivo original é armazenado no registro da sessão, com SHA-256.</p>
     <button className="btn btn-primary flex items-center gap-2" disabled={!file||analisando} onClick={analisar}>
      {analisando?<Loader2 className="h-4 w-4 animate-spin"/>:<ScanSearch className="h-4 w-4"/>}
      {analisando?'Analisando todas as abas…':'Analisar planilha'}
