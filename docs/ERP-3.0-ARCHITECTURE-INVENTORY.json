@@ -7,8 +7,8 @@
     "prisma": 7
   },
   "tabelas": {
-    "total": 238,
-    "com_empresa_id": 216,
+    "total": 239,
+    "com_empresa_id": 217,
     "sem_empresa_id": 22,
     "fora_do_prisma": 227
   },
