@@ -2,7 +2,7 @@ import type { ArquivoInventariado, AbaInventariada } from './importacaoUniversal
 
 export type CampoCanonico =
   | 'sku' | 'nome' | 'categoria' | 'colecao' | 'cor' | 'tamanho' | 'quantidade'
-  | 'custo' | 'preco_venda' | 'preco_atacado' | 'codigo_barras' | 'ncm' | 'peso_g'
+  | 'custo' | 'custo_aquisicao' | 'custo_fabricacao' | 'custo_adicional' | 'imposto' | 'margem' | 'preco_venda' | 'preco_atacado' | 'preco_promocional' | 'qtd_min_atacado' | 'codigo_barras' | 'ncm' | 'peso_g'
   | 'local' | 'fornecedor' | 'telefone' | 'email' | 'cnpj_cpf' | 'descricao' | 'composicao'
   | 'tipo_movimento' | 'data' | 'referencia_externa';
 
@@ -34,9 +34,16 @@ const DICIONARIO: Record<CampoCanonico, string[]> = {
   cor: ['cor','color','colour','variant_color','cor_variacao'],
   tamanho: ['tamanho','size','tam','grade_tamanho','variant_size'],
   quantidade: ['quantidade','qtd','qty','quantity','saldo','estoque','stock','units','unidades'],
-  custo: ['custo','cost','custo_unitario','unit_cost','custo_compra','custo_medio','custo_total'],
+  custo: ['custo','cost','custo_unitario','unit_cost','custo_medio','custo_total'],
+  custo_aquisicao: ['custo_aquisicao','custo_compra','purchase_cost','acquisition_cost','valor_compra'],
+  custo_fabricacao: ['custo_fabricacao','manufacturing_cost','custo_producao','production_cost'],
+  custo_adicional: ['custo_adicional','additional_cost','frete','embalagem','custo_extra'],
+  imposto: ['imposto','tax','tributo','aliquota','taxa_imposto','icms','ipi','pis','cofins'],
+  margem: ['margem','margin','margem_lucro','markup','margem_percentual'],
   preco_venda: ['preco_venda','preco','price','retail_price','preco_retail','valor_venda','preco_sugerido'],
   preco_atacado: ['preco_atacado','atacado','wholesale_price','preco_wholesale','preco_revenda'],
+  preco_promocional: ['preco_promocional','promocao','preco_promo','promotional_price','sale_price'],
+  qtd_min_atacado: ['qtd_min_atacado','quantidade_minima_atacado','minimum_wholesale_quantity','minimo_atacado'],
   codigo_barras: ['codigo_barras','ean','gtin','barcode','bar_code'],
   ncm: ['ncm','classificacao_fiscal'],
   peso_g: ['peso','peso_g','weight','peso_gramas','gramas'],
