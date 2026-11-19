@@ -22,3 +22,12 @@ test('reconciliation proposes product field differences without writing to ERP',
  assert.equal(result.totais.atualizacao_proposta,1);
  assert.equal(result.importacaoLiberada,false);
 });
+
+test('reconciliation blocks duplicate source barcodes across different SKUs',()=>{
+ const file:ArquivoInventariado={nome:'duplicados.csv',sha256:'c'.repeat(64),tamanhoBytes:5,tipo:'csv',abas:[{nome:'Products',indice:0,totalLinhas:3,totalColunas:3,linhaCabecalho:1,cabecalhos:['sku','nome','codigo_barras'],vazia:false,celulas:[],linhas:[{linhaOrigem:2,valores:{sku:'SKU-1',nome:'Produto 1',codigo_barras:'7890000000001'}},{linhaOrigem:3,valores:{sku:'SKU-2',nome:'Produto 2',codigo_barras:'7890000000001'}}]}]};
+ const sem=interpretarCamposUniversal(file),ent=reconhecerEntidadesUniversal(file,sem);
+ const result=reconciliarImportacaoUniversal(file,sem,ent,[],[]);
+ assert.equal(result.totais.conflito_codigo_barras,1);
+ assert.ok(result.divergencias.some(d=>d.tipo==='conflito_codigo_barras'&&d.linhasOrigem.length===2));
+ assert.equal(result.importacaoLiberada,false);
+});
