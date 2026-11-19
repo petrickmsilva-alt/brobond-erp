@@ -8,7 +8,7 @@ test('CSV inventory keeps normalized columns and all rows', async () => {
   const result = await inventariarArquivoUniversal({ nomeArquivo: 'catalogo.csv', bytes });
   assert.equal(result.tipo, 'csv');
   assert.equal(result.sha256.length, 64);
-  assert.equal(result.abaS?.length, undefined as any);
+  assert.equal(result.tamanhoBytes, bytes.length);
   assert.equal(result.abas.length, 1);
   assert.equal(result.abas[0].cabecalhos.length, 3);
   assert.equal(result.abas[0].linhas.length, 2);
