@@ -27,8 +27,19 @@ export default function ImportacaoUniversalPage(){
  const toast=useToast();
  const [file,setFile]=useState<File|null>(null);
  const [analisando,setAnalisando]=useState(false);
+ const [reconciliando,setReconciliando]=useState(false);
+ const [recon,setRecon]=useState<any|null>(null);
  const [resultado,setResultado]=useState<ResultadoAnalise|null>(null);
  const [erro,setErro]=useState('');
+ async function reconciliar(){
+  if(!resultado?.id)return;
+  setReconciliando(true);setErro('');
+  try{
+   const response=await api.post<any>('/importacao-universal/sessoes/'+resultado.id+'/reconciliar',{});
+   setRecon(response);toast.success('Reconciliação concluída. Nenhuma gravação foi executada.');
+  }catch(e){setErro(e instanceof ApiError?e.message:'Falha ao reconciliar com o ERP.');}
+  finally{setReconciliando(false);}
+ }
  async function analisar(){
   if(!file)return;
   setAnalisando(true);setErro('');setResultado(null);
@@ -87,7 +98,16 @@ export default function ImportacaoUniversalPage(){
      <h2 className="font-semibold">Entidades reconhecidas</h2>
      {resultado.analise.entidades.entidades.map(e=><div key={e.aba} className="border rounded-lg p-3 flex flex-wrap justify-between gap-2"><div><strong>{e.aba}</strong><div className="text-xs text-slate-500">{tipoLabel(e.tipo)} · {e.linhasComDados} registros · {e.camposRelacionados.join(', ')||'sem campos reconhecidos'}</div></div><div className="text-xs">{Math.round(e.confianca*100)}% confiança {e.requerConfirmacao?'· revisar':''}</div></div>)}
     </section>
-    <Alert tone="amber">Este estágio é apenas leitura/análise. Não há botão de importação: a próxima etapa será reconciliação de SKU, preço, custo, variações e estoque com o banco ERP, seguida de revisão e aprovação.</Alert>
+    <section className="rounded-xl border border-slate-200 dark:border-slate-700 p-4 space-y-3">
+     <h2 className="font-semibold">Reconciliação com o ERP</h2>
+     <p className="text-sm text-slate-500">Consulta os dados da empresa ativa, compara com a origem e gera divergências. Etapa somente leitura.</p>
+     <button className="btn btn-primary flex items-center gap-2" disabled={reconciliando} onClick={reconciliar}>{reconciliando?<Loader2 className="h-4 w-4 animate-spin"/>:<Database className="h-4 w-4"/>}{reconciliando?'Reconciliando…':'Reconciliar com ERP'}</button>
+     {recon&&<div className="space-y-3">
+      <Alert tone="amber">Snapshot: {recon.erpSnapshot?.produtos??0} produtos e {recon.erpSnapshot?.saldos??0} saldos. Importação continua bloqueada.</Alert>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2">{Object.entries(recon.reconciliacao?.totais||{}).map(([k,v])=><div key={k} className="border rounded p-2"><div className="text-xs text-slate-500">{k.replaceAll('_',' ')}</div><div className="font-bold text-lg">{String(v)}</div></div>)}</div>
+      <div className="overflow-auto max-h-96"><table className="min-w-full text-xs border-collapse"><thead><tr>{['Tipo','Aba','Linha(s)','Chave','Diagnóstico'].map(h=><th key={h} className="border px-2 py-1 text-left">{h}</th>)}</tr></thead><tbody>{(recon.reconciliacao?.divergencias||[]).map((d:any,i:number)=><tr key={i}><td className="border px-2 py-1">{d.tipo}</td><td className="border px-2 py-1">{d.aba}</td><td className="border px-2 py-1">{d.linhasOrigem?.join(', ')||'—'}</td><td className="border px-2 py-1">{d.chave||'—'}</td><td className="border px-2 py-1">{d.descricao}</td></tr>)}</tbody></table></div>
+     </div>}
+    </section>
    </div>}
   </div>
  </PageShell>;
