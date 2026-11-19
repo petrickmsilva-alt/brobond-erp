@@ -40,7 +40,7 @@ test('semantic mapping marks duplicate target suggestions as ambiguous', () => {
 test('heuristic partial matches never become auto-approved mappings', () => {
   const partial: ArquivoInventariado = {
     ...fixture,
-    abas: [{ ...fixture.abas[0], cabecalhos: ['preco_promocional'], linhas: [] }],
+    abas: [{ ...fixture.abas[0], cabecalhos: ['preco_promo_cliente'], linhas: [] }],
   };
   const result = interpretarCamposUniversal(partial);
   const suggestion = result.sugestoes[0];
