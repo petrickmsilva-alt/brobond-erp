@@ -79,8 +79,8 @@ export function reconhecerEntidadesUniversal(arquivo: ArquivoInventariado, anali
     const aFields=camposDaAba(a.nome,analise), bFields=camposDaAba(b.nome,analise);
     const keys: [CampoCanonico,CampoCanonico][]=[['sku','sku'],['referencia_externa','referencia_externa'],['codigo_barras','codigo_barras']];
     for(const [fa,fb] of keys) {
-      const colA=a.cabecalhos.find(c=>analise.sugestoes.some(s=>s.aba===a.nome&&s.colunaOriginal===c&&s.campoCanonico===fa));
-      const colB=b.cabecalhos.find(c=>analise.sugestoes.some(s=>s.aba===b.nome&&s.colunaOriginal===c&&s.campoCanonico===fb));
+      const colA=a.cabecalhos.find(c=>analise.sugestoes.some(s=>s.aba===a.nome&&s.colunaOriginal===col&&s.campoCanonico===fa));
+      const colB=b.cabecalhos.find(c=>analise.sugestoes.some(s=>s.aba===b.nome&&s.colunaOriginal===col&&s.campoCanonico===fb));
       if(!colA||!colB) continue;
       const va=rowsWith(arquivo,a.nome,colA), vb=rowsWith(arquivo,b.nome,colB);
       const overlap=[...va].filter(v=>vb.has(v)).length;
