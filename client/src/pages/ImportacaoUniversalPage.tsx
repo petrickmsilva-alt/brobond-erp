@@ -87,7 +87,7 @@ export default function ImportacaoUniversalPage(){
      <h2 className="font-semibold">Entidades reconhecidas</h2>
      {resultado.analise.entidades.entidades.map(e=><div key={e.aba} className="border rounded-lg p-3 flex flex-wrap justify-between gap-2"><div><strong>{e.aba}</strong><div className="text-xs text-slate-500">{tipoLabel(e.tipo)} · {e.linhasComDados} registros · {e.camposRelacionados.join(', ')||'sem campos reconhecidos'}</div></div><div className="text-xs">{Math.round(e.confianca*100)}% confiança {e.requerConfirmacao?'· revisar':''}</div></div>)}
     </section>
-    <Alert tone="yellow">Este estágio é apenas leitura/análise. Não há botão de importação: a próxima etapa será reconciliação de SKU, preço, custo, variações e estoque com o banco ERP, seguida de revisão e aprovação.</Alert>
+    <Alert tone="amber">Este estágio é apenas leitura/análise. Não há botão de importação: a próxima etapa será reconciliação de SKU, preço, custo, variações e estoque com o banco ERP, seguida de revisão e aprovação.</Alert>
    </div>}
   </div>
  </PageShell>;
