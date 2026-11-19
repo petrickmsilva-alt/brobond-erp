@@ -73,7 +73,7 @@ import { listarEventosTerceirizacao, registrarEventoTerceirizacao } from './terc
 import { relatorio } from './relatorios';
 import { exportarRecurso } from './export';
 import { confirmarImportacao, modeloImportacao, previewImportacao } from './importacao';
-import { analisarImportacaoUniversalHandler } from './importacaoUniversalHandler';
+import { analisarImportacaoUniversalHandler, consultarImportacaoUniversalHandler } from './importacaoUniversalHandler';
 import { previewCarga, iniciarJobCarga, statusJobCarga, processarFilaCargaComercial } from './cargaPoliticaComercial';
 import {
   aplicarPrecoFicha,
@@ -1731,6 +1731,7 @@ app.get('/api/relatorios/:nome', wrap(async (req, res) => relatorio(req, res, re
 app.post('/api/importar/preview', wrap(previewImportacao));
 // Universal Data Ingestion Engine — upload preservado e análise multi-aba, sem gravação nos cadastros ERP.
 app.post('/api/importacao-universal/analisar', requireRole('admin','gerente'), wrap(analisarImportacaoUniversalHandler));
+app.get('/api/importacao-universal/sessoes/:id', requireRole('admin','gerente'), wrap(consultarImportacaoUniversalHandler));
 app.post('/api/importar/confirmar', wrap(confirmarImportacao));
 app.get('/api/importar/modelo', wrap(modeloImportacao));
 // Carga oficial da política comercial (planilha-base do cadastro mestre).
