@@ -48,6 +48,41 @@ export async function analisarImportacaoUniversalHandler(req:Request,res:Respons
  }
 }
 
+export async function reconciliarImportacaoUniversalHandler(req:Request,res:Response):Promise<void>{
+ const user=currentUser(req);
+ if(!user||!user.empresa_id||user.empresa_id<=0) throw new HttpError(403,'Usuário sem empresa ativa para reconciliação.');
+ const id=String(req.params?.id||'');
+ if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) throw new HttpError(400,'ID de sessão inválido.');
+ const session=await queryDb(`SELECT id,status,inventario_abas,interpretacao FROM importacao_universal_sessoes
+  WHERE id=$1 AND empresa_id=$2 AND usuario_id=$3 LIMIT 1`,[id,user.empresa_id,user.id]);
+ if(!session.rows.length) throw new HttpError(404,'Sessão de importação não encontrada.');
+ const row=session.rows[0];
+ if(!row.inventario_abas||!row.interpretacao) throw new HttpError(409,'Sessão não possui inventário e interpretação completos.');
+ const {getStore}=await import('./services');
+ const {RESOURCES}=await import('./resources');
+ const {escopoDe}=await import('./empresa');
+ const {reconciliarImportacaoUniversal}=await import('./importacaoUniversalRecon');
+ const store=getStore(),escopo=escopoDe(user);
+ const fetchAll=async(resource:any)=>{
+  const all:any[]=[];let page=1;const pageSize=500;
+  while(true){const result=await store.list(resource,{page,pageSize,sort:'id',dir:'asc'},undefined);
+   all.push(...result.rows);if(all.length>=result.total||result.rows.length===0)break;page++;
+  }return all;
+ };
+ const [products,stocks,sizes,locations]=await Promise.all([fetchAll(RESOURCES.produtos),fetchAll(RESOURCES.estoques),fetchAll(RESOURCES.tamanhos),fetchAll(RESOURCES.locais)]);
+ const produtoById=new Map(products.map((p:any)=>[Number(p.id),p]));
+ const tamanhoById=new Map(sizes.map((t:any)=>[Number(t.id),t]));
+ const localById=new Map(locations.map((l:any)=>[Number(l.id),l]));
+ const produtosERP=products.map((p:any)=>({id:Number(p.id),sku:String(p.sku||''),nome:String(p.nome||''),codigo_barras:p.codigo_barras??null,cor:p.cor??null,tamanho:null,custo:p.custo==null?null:Number(p.custo),preco_venda:p.preco_venda==null?null:Number(p.preco_venda),ativo:p.ativo!==false}));
+ const saldosERP=stocks.map((s:any)=>{const p=produtoById.get(Number(s.produto_id)) as any;const t=s.tamanho_id==null?null:tamanhoById.get(Number(s.tamanho_id)) as any;const l=s.local_id==null?null:localById.get(Number(s.local_id)) as any;return{produto_id:Number(s.produto_id),sku:String(p?.sku||''),tamanho_id:s.tamanho_id==null?null:Number(s.tamanho_id),tamanho:t?.codigo??null,local_id:s.local_id==null?null:Number(s.local_id),local:l?.nome??s.local??null,quantidade:Number(s.quantidade||0)};});
+ const arquivo={nomeArquivo:String(row.id),abas:row.inventario_abas as any};
+ const interpretacao=row.interpretacao as any;
+ const result=reconciliarImportacaoUniversal(arquivo,interpretacao.semantica,interpretacao.entidades,produtosERP,saldosERP);
+ await queryDb(`UPDATE importacao_universal_sessoes SET reconciliacao=$2::jsonb,status='aguardando_revisao',atualizado_em=now()
+  WHERE id=$1 AND empresa_id=$3 AND usuario_id=$4`,[JSON.stringify(result),user.empresa_id,user.id]);
+ res.json({id,status:'aguardando_revisao',reconciliacao:result,erpSnapshot:{produtos:produtosERP.length,saldos:saldosERP.length}});
+}
+
 export async function consultarImportacaoUniversalHandler(req:Request,res:Response):Promise<void>{
  const user=currentUser(req);
  if(!user||!user.empresa_id||user.empresa_id<=0) throw new HttpError(403,'Usuário sem empresa ativa.');
