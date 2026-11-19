@@ -22,7 +22,7 @@ export async function salvarMapeamentoImportacaoUniversalHandler(req:Request,res
  if(!Array.isArray(mappings)||!Array.isArray(entities)) throw new HttpError(400,'Envie mapeamentos e entidades em formato de lista.');
  const abas=Array.isArray(row.inventario_abas)?row.inventario_abas:[];
  const interpretacaoOriginal=(row.interpretacao&&typeof row.interpretacao==='object')?row.interpretacao:{};
- const validPairs=new Set(abas.flatMap((a:any)=>Array.isArray(a.cabecalhos)?a.cabecalhos.map((h:string)=>String(a.nome)+'::'+h):[]);
+ const validPairs=new Set(abas.flatMap((a:any)=>Array.isArray(a.cabecalhos)?a.cabecalhos.map((h:string)=>String(a.nome)+'::'+h):[]));
  const seen=new Set<string>(), normalized:any[]=[];
  for(const m of mappings){
   if(!m||typeof m.aba!=='string'||typeof m.colunaOriginal!=='string'||!validPairs.has(m.aba+'::'+m.colunaOriginal)) throw new HttpError(400,'Mapeamento referencia aba/coluna inexistente.');
