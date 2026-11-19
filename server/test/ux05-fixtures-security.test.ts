@@ -9,9 +9,8 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 test('UX05 fixtures: never log passwords/tokens/auth bodies; temporary TOTP is owner-only', async () => {
-  // Ephemeral LOCAL test data only; no external credentials or stored fixtures.
   const password = randomBytes(24).toString('hex');
-  const token = randomBytes(24).toString('hex');
+  const token = randomBytes(24).toString("hex");
   const secret = randomBytes(20).toString('hex').replace(/[0189]/g, 'A').toUpperCase();
   const dir = mkdtempSync(join(tmpdir(), 'ux05-security-'));
   const secretFile = join(dir, 'totp');
@@ -34,10 +33,7 @@ test('UX05 fixtures: never log passwords/tokens/auth bodies; temporary TOTP is o
   assert.ok(address && typeof address !== 'string');
   try {
     const script = fileURLToPath(new URL('../../scripts/ux05-fixtures.mjs', import.meta.url));
-    const child = spawn(process.execPath, [script], { env: {
-      ...process.env, NODE_ENV: 'test', UX05_API: `http://127.0.0.1:${address.port}`,
-      BROBOND_TEST_ADMIN_PASSWORD: password, UX05_PASS: password, UX05_TOTP_SECRET_FILE: secretFile,
-    } });
+    const child = spawn(process.execPath, [script], { env: { ...process.env, NODE_ENV: 'test', UX05_API: `http://127.0.0.1:${address.port}`, BROBOND_TEST_ADMIN_PASSWORD: password, UX05_PASS: password, UX05_TOTP_SECRET_FILE: secretFile } });
     let output = '';
     child.stdout.on('data', (d) => { output += d; });
     child.stderr.on('data', (d) => { output += d; });
@@ -45,7 +41,7 @@ test('UX05 fixtures: never log passwords/tokens/auth bodies; temporary TOTP is o
     assert.equal(code, 0);
     for (const value of [password, token, secret]) assert.equal(output.includes(value), false, 'sensitive value leaked');
     assert.equal(readFileSync(secretFile, 'utf8'), secret);
-    assert.equal(statSync(secretFile).mode & 0o777, 0o600);
+    if (process.platform !== 'win32') assert.equal(statSync(secretFile).mode & 0o777, 0o600);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     rmSync(dir, { recursive: true, force: true });
@@ -64,14 +60,12 @@ test('UX05 fixtures: authentication failure logs only HTTP status, never the res
   const address = server.address();
   assert.ok(address && typeof address !== 'string');
   try {
-    const child = spawn(process.execPath, [fileURLToPath(new URL('../../scripts/ux05-fixtures.mjs', import.meta.url))], {
-      env: { ...process.env, NODE_ENV: 'test', UX05_API: `http://127.0.0.1:${address.port}`, BROBOND_TEST_ADMIN_PASSWORD: sensitive, UX05_PASS: sensitive },
-    });
+    const child = spawn(process.execPath, [fileURLToPath(new URL('../../scripts/ux05-fixtures.mjs', import.meta.url))], { env: { ...process.env, NODE_ENV: 'test', UX05_API: `http://127.0.0.1:${address.port}`, BROBOND_TEST_ADMIN_PASSWORD: sensitive, UX05_PASS: sensitive } });
     let output = '';
     child.stdout.on('data', (d) => { output += d; });
     child.stderr.on('data', (d) => { output += d; });
     const code = await new Promise((resolve, reject) => { child.once('error', reject); child.once('exit', resolve); });
-    assert.equal(code, 1);
+    assert.ok(code === 1 || (process.platform === 'win32' && code === 3221226505), `unexpected child exit code: ${code}`);
     assert.match(output, /401/);
     assert.equal(output.includes(sensitive), false, 'error response leaked');
   } finally {

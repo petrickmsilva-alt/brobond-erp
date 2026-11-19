@@ -1,19 +1,19 @@
 {
-  "gerado_em": "2026-11-18T01:25:11.144Z",
+  "gerado_em": "2026-11-19T18:47:24.335Z",
   "fonte_de_verdade_do_schema": "db/schema.sql + db/migrations/*.sql (PostgreSQL); Prisma = bounded context do commerce",
   "migrations": {
-    "sql": 128,
-    "sql_com_conteudo": 128,
+    "sql": 129,
+    "sql_com_conteudo": 129,
     "prisma": 7
   },
   "tabelas": {
     "total": 239,
     "com_empresa_id": 217,
     "sem_empresa_id": 22,
-    "fora_do_prisma": 227
+    "fora_do_prisma": 228
   },
-  "indices": 667,
-  "constraints": 476,
+  "indices": 670,
+  "constraints": 485,
   "recursos": {
     "total": 199,
     "com_tabela": 199,
@@ -93,10 +93,10 @@
     "com_recurso": 112
   },
   "rotas": {
-    "total": 516,
+    "total": 523,
     "por_metodo": {
-      "GET": 229,
-      "POST": 248,
+      "GET": 230,
+      "POST": 254,
       "PUT": 22,
       "DELETE": 14,
       "PATCH": 3
@@ -215,14 +215,14 @@
   },
   "testes": {
     "server": {
-      "arquivos": 358,
-      "casos": 2919
+      "arquivos": 364,
+      "casos": 2937
     },
     "client": {
       "arquivos": 133,
       "casos": 1121
     },
-    "total": 4040
+    "total": 4058
   },
   "integracoes": {
     "arquivos_modules": 129,
@@ -283,6 +283,11 @@
       "nivel": "AVISO",
       "regra": "TABELA_SEM_RECURSO",
       "mensagem": "A tabela \"gateway_webhook_events\" tem empresa_id, mas nenhum recurso a expõe no CRUD genérico (escopo aplicado por endpoint próprio)."
+    },
+    {
+      "nivel": "AVISO",
+      "regra": "TABELA_SEM_RECURSO",
+      "mensagem": "A tabela \"importacao_universal_sessoes\" tem empresa_id, mas nenhum recurso a expõe no CRUD genérico (escopo aplicado por endpoint próprio)."
     },
     {
       "nivel": "AVISO",
@@ -542,6 +547,7 @@
     "gateway_webhook_events",
     "grade_tamanhos",
     "grades",
+    "importacao_universal_sessoes",
     "importacoes_nfe",
     "insumos",
     "inutilizacoes_fiscais",

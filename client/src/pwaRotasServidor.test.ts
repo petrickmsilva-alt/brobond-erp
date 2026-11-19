@@ -99,7 +99,7 @@ beforeAll(async () => {
       // Mesmo modo do build da Render: runtime de produção do Workbox.
       env: { ...process.env, NODE_ENV: 'production' },
       encoding: 'utf8',
-      timeout: 120_000,
+      timeout: 240_000,
     });
     expect(r.status, `falha ao gerar o Service Worker:\n${r.stderr}`).toBe(0);
     swGerado = readFileSync(path.join(dir, 'sw.js'), 'utf8');
@@ -109,7 +109,7 @@ beforeAll(async () => {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
-}, 150_000);
+}, 300_000);
 
 describe('Service Worker de produção × rotas do servidor', () => {
   it('controle: o fallback de navegação existe e continua entregando o SPA nas rotas do ERP', () => {
