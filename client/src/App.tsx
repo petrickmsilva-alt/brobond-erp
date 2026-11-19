@@ -98,6 +98,7 @@ const EmpresaFormPage = lazy(() => import('./pages/EmpresaFormPage'));
 const NovaFichaPage = lazy(() => import('./pages/NovaFichaPage'));
 const DevolucaoNovaPage = lazy(() => import('./pages/DevolucaoNovaPage'));
 const ImportarPage = lazy(() => import('./pages/ImportarPage'));
+const ImportacaoUniversalPage = lazy(() => import('./pages/ImportacaoUniversalPage'));
 const RecebimentoCompraPage = lazy(() => import('./pages/RecebimentoCompraPage'));
 const ImpressaoTerminalFormPage = lazy(() => import('./pages/ImpressaoTerminalFormPage'));
 const ImpressaoAgenteNovaPage = lazy(() => import('./pages/ImpressaoAgenteNovaPage'));
@@ -533,6 +534,7 @@ export default function App() {
               }
             />
             <Route path="importar/:tipo" element={<ImportarPage />} />
+            <Route path="importacao-universal" element={<AdminOnly><ImportacaoUniversalPage /></AdminOnly>} />
             <Route
               path="compras/:id/receber"
               element={

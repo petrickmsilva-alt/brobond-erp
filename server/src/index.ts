@@ -73,6 +73,7 @@ import { listarEventosTerceirizacao, registrarEventoTerceirizacao } from './terc
 import { relatorio } from './relatorios';
 import { exportarRecurso } from './export';
 import { confirmarImportacao, modeloImportacao, previewImportacao } from './importacao';
+import { analisarImportacaoUniversalHandler, salvarMapeamentoImportacaoUniversalHandler, consultarImportacaoUniversalHandler, reconciliarImportacaoUniversalHandler } from './importacaoUniversalHandler';
 import { previewCarga, iniciarJobCarga, statusJobCarga, processarFilaCargaComercial } from './cargaPoliticaComercial';
 import {
   aplicarPrecoFicha,
@@ -1728,6 +1729,11 @@ app.get('/api/rastreabilidade/documento', wrap(trilhaDocumento));
 // Fase 5 — relatórios, importação e exportação
 app.get('/api/relatorios/:nome', wrap(async (req, res) => relatorio(req, res, req.params.nome)));
 app.post('/api/importar/preview', wrap(previewImportacao));
+// Universal Data Ingestion Engine — upload preservado e análise multi-aba, sem gravação nos cadastros ERP.
+app.post('/api/importacao-universal/analisar', requireRole('admin','gerente'), wrap(analisarImportacaoUniversalHandler));
+app.post('/api/importacao-universal/sessoes/:id/mapeamento', requireRole('admin','gerente'), wrap(salvarMapeamentoImportacaoUniversalHandler));
+app.get('/api/importacao-universal/sessoes/:id', requireRole('admin','gerente'), wrap(consultarImportacaoUniversalHandler));
+app.post('/api/importacao-universal/sessoes/:id/reconciliar', requireRole('admin','gerente'), wrap(reconciliarImportacaoUniversalHandler));
 app.post('/api/importar/confirmar', wrap(confirmarImportacao));
 app.get('/api/importar/modelo', wrap(modeloImportacao));
 // Carga oficial da política comercial (planilha-base do cadastro mestre).
