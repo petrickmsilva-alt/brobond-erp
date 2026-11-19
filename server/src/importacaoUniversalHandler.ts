@@ -60,9 +60,8 @@ export async function reconciliarImportacaoUniversalHandler(req:Request,res:Resp
  if(!row.inventario_abas||!row.interpretacao) throw new HttpError(409,'Sessão não possui inventário e interpretação completos.');
  const {getStore}=await import('./services');
  const {RESOURCES}=await import('./resources');
- const {escopoDe}=await import('./empresa');
  const {reconciliarImportacaoUniversal}=await import('./importacaoUniversalRecon');
- const store=getStore(),escopo=escopoDe(user);
+ const store=getStore();
  const fetchAll=async(resource:any,empresaScoped=false)=>{
   const all:any[]=[];let page=1;const pageSize=500;
   while(true){const result=await store.list(resource,{page,pageSize,sort:'id',dir:'asc',filter:empresaScoped?{empresa_id:user.empresa_id}:undefined},undefined);
@@ -75,7 +74,8 @@ export async function reconciliarImportacaoUniversalHandler(req:Request,res:Resp
  const localById=new Map(locations.map((l:any)=>[Number(l.id),l]));
  const produtosERP=products.map((p:any)=>({id:Number(p.id),sku:String(p.sku||''),nome:String(p.nome||''),codigo_barras:p.codigo_barras??null,cor:p.cor??null,tamanho:null,custo:p.custo==null?null:Number(p.custo),preco_venda:p.preco_venda==null?null:Number(p.preco_venda),ativo:p.ativo!==false}));
  const saldosERP=stocks.map((s:any)=>{const p=produtoById.get(Number(s.produto_id)) as any;const t=s.tamanho_id==null?null:tamanhoById.get(Number(s.tamanho_id)) as any;const l=s.local_id==null?null:localById.get(Number(s.local_id)) as any;return{produto_id:Number(s.produto_id),sku:String(p?.sku||''),tamanho_id:s.tamanho_id==null?null:Number(s.tamanho_id),tamanho:t?.codigo??null,local_id:s.local_id==null?null:Number(s.local_id),local:l?.nome??s.local??null,quantidade:Number(s.quantidade||0)};});
- const arquivo={nome:String(row.nome_arquivo),sha256:String(row.sha256),tamanhoBytes:Number(row.tamanho_bytes),tipo:String(row.nome_arquivo).toLowerCase().endsWith('.csv')?'csv':'xlsx',abas:row.inventario_abas as any};
+ const tipoArquivo: 'csv'|'xlsx'=String(row.nome_arquivo).toLowerCase().endsWith('.csv')?'csv':'xlsx';
+ const arquivo={nome:String(row.nome_arquivo),sha256:String(row.sha256),tamanhoBytes:Number(row.tamanho_bytes),tipo:tipoArquivo,abas:row.inventario_abas as any};
  const interpretacao=row.interpretacao as any;
  const result=reconciliarImportacaoUniversal(arquivo,interpretacao.semantica,interpretacao.entidades,produtosERP,saldosERP);
  await queryDb(`UPDATE importacao_universal_sessoes SET reconciliacao=$2::jsonb,status='aguardando_revisao',atualizado_em=now()
