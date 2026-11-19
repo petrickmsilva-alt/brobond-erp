@@ -154,7 +154,7 @@ export async function inventariarArquivoUniversal(opts: OpcoesLeituraUniversal):
   }
   if (ext !== 'xlsx' && ext !== 'xlsm') throw new Error('Formato não suportado. Envie XLSX, XLSM ou CSV.');
   const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(bytes as unknown as Buffer);
+  await workbook.xlsx.load(bytes as unknown as Parameters<typeof workbook.xlsx.load>[0]);
   let cellCount = 0;
   const sheets: AbaInventariada[] = workbook.worksheets.map((ws, idx) => {
     const matrix: unknown[][] = [];
