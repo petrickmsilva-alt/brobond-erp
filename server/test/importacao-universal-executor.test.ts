@@ -87,12 +87,13 @@ test('resolve existing variation child SKU to its ERP parent, never to the child
  assert.equal(resolveExistingVariationParent([{id:101,sku:'CHILD-M',produto_pai_id:999}] as any,'CHILD-M'),null);
 });
 
-test('mapped variation size ID resolves directly and remains tenant-scoped',()=>{
- const sizes=[{id:7,empresa_id:1,codigo:'M',nome:'Medium'},{id:8,empresa_id:2,codigo:'G',nome:'Large'}] as any;
+test('mapped variation size IDs resolve from the global catalog, not tenant scope',()=>{
+ const sizes=[{id:7,codigo:'M',nome:'Medium'},{id:8,codigo:'G',nome:'Large'}] as any;
  assert.equal(resolveMappedVariationSize(sizes,null,7,1)?.id,7);
  assert.equal(resolveMappedVariationSize(sizes,'M',7,1)?.id,7);
+ assert.equal(resolveMappedVariationSize(sizes,'Medium',7,1)?.id,7);
+ assert.equal(resolveMappedVariationSize(sizes,null,8,1)?.id,8);
  assert.equal(resolveMappedVariationSize(sizes,null,null,1),null);
- assert.throws(()=>resolveMappedVariationSize(sizes,null,8,1),e=>(e as any)?.status===422);
- assert.throws(()=>resolveMappedVariationSize(sizes,'M',9,1),e=>(e as any)?.status===422);
- assert.throws(()=>resolveMappedVariationSize(sizes,'M',7,2),e=>(e as any)?.status===422);
+ assert.throws(()=>resolveMappedVariationSize(sizes,null,9,1),e=>(e as any)?.status===422);
+ assert.throws(()=>resolveMappedVariationSize(sizes,'M',8,1),e=>(e as any)?.status===422);
 });

@@ -13,11 +13,12 @@ import { hashAprovacaoImportacaoUniversal } from './importacaoUniversalHash';
 const BLOQUEADORES = new Set(['duplicado_origem','conflito_sku','conflito_codigo_barras','ambiguidade','campo_desconhecido','orfao_relacionamento','conflito_dimensional','produto_sem_sku','sku_sem_produto','variacao_sem_produto','estoque_sem_produto','estoque_sem_local','preco_sem_produto','movimentacao_sem_produto','entidade_sem_executor','condicao_pagamento_ausente']);
 const normal=(v:unknown)=>String(v??'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim().toUpperCase();
 export function normalizarDocumentoImportacao(value:unknown):string{return String(value??'').replace(/\D/g,'');}
-export function resolveMappedVariationSize(sizes:Row[],sizeText:unknown,sizeId:unknown,empresaId:number):Row|null{
+export function resolveMappedVariationSize(sizes:Row[],sizeText:unknown,sizeId:unknown,_empresaId:number):Row|null{
+ // The ERP size catalog is global and has no empresa_id; validate both keys against it.
  const byText=sizeText===undefined||sizeText===null||String(sizeText).trim()===''?null:sizes.find(t=>normal(t.codigo)===normal(sizeText)||normal(t.nome)===normal(sizeText))??null;
- const byId=sizeId===undefined||sizeId===null||String(sizeId).trim()===''?null:sizes.find(t=>Number(t.id)===Number(parseNum(sizeId))&&Number(t.empresa_id)===empresaId)??null;
- if(sizeText!==undefined&&sizeText!==null&&String(sizeText).trim()!==''&&!byText)throw new HttpError(422,'Mapped size text does not exist in the active tenant.');
- if(sizeId!==undefined&&sizeId!==null&&String(sizeId).trim()!==''&&!byId)throw new HttpError(422,'Mapped size ID is invalid or belongs to another tenant.');
+ const byId=sizeId===undefined||sizeId===null||String(sizeId).trim()===''?null:sizes.find(t=>Number(t.id)===Number(parseNum(sizeId)))??null;
+ if(sizeText!==undefined&&sizeText!==null&&String(sizeText).trim()!==''&&!byText)throw new HttpError(422,'Mapped size text does not exist in the global catalog.');
+ if(sizeId!==undefined&&sizeId!==null&&String(sizeId).trim()!==''&&!byId)throw new HttpError(422,'Mapped size ID does not exist in the global catalog.');
  if(byText&&byId&&Number(byText.id)!==Number(byId.id))throw new HttpError(422,'Mapped size text and ID conflict.');
  return byId??byText;
 }
