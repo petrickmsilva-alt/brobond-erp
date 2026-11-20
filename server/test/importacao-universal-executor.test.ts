@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildExtraAttributes, calcularDeltaSaldo, findByNormalizedDocument, normalizarDocumentoImportacao, normalizarTipoMovimentacao, validarQuantidadeMovimentacao } from '../src/importacaoUniversalExecutor';
+import { buildExtraAttributes, mergeExtraAttributes, calcularDeltaSaldo, findByNormalizedDocument, normalizarDocumentoImportacao, normalizarTipoMovimentacao, validarQuantidadeMovimentacao } from '../src/importacaoUniversalExecutor';
 
 test('normaliza tipos de movimentação incluindo acentos e caixa',()=>{
  assert.equal(normalizarTipoMovimentacao('ENTRADA'),'entrada');
@@ -47,6 +47,12 @@ test('ignora explicitamente colunas mapeadas como Ignorar campo ao montar extras
   {aba:'Produtos',colunaOriginal:'Notas',campoCanonico:null,ignorado:false},
  ];
  assert.deepEqual(buildExtraAttributes({SKU:'A-1',Interno:'segredo',Notas:'extra'},'Produtos',mappings),{Notas:'extra'});
+});
+
+test('reimportação de variação preserva atributos ERP e sobrescreve apenas chaves fornecidas',()=>{
+ assert.deepEqual(mergeExtraAttributes({erp_fabricante:'BroBond',erp_grade:'M',origem:'anterior'},{origem:'nova',observacao:'sheet'}),{erp_fabricante:'BroBond',erp_grade:'M',origem:'nova',observacao:'sheet'});
+ assert.deepEqual(mergeExtraAttributes(null,{observacao:'sheet'}),{observacao:'sheet'});
+ assert.deepEqual(mergeExtraAttributes(['invalido'],{observacao:'sheet'}),{observacao:'sheet'});
 });
 
 test('localiza CPF/CNPJ existente com pontuacao no registro e escopo do tenant',()=>{
