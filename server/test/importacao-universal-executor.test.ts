@@ -15,6 +15,12 @@ test('normaliza margem percentual em fração Excel ou pontos percentuais',()=>{
  assert.equal(normalizarMargemPercentual(35),35);
  assert.equal(normalizarMargemPercentual(0.355),35.5);
  assert.equal(normalizarMargemPercentual(75.5),75.5);
+ assert.equal(normalizarMargemPercentual('0.35%'),0.35);
+ assert.equal(normalizarMargemPercentual('0,35%'),0.35);
+ assert.equal(normalizarMargemPercentual('35%'),35);
+ assert.equal(normalizarMargemPercentual('0.35'),35);
+ assert.throws(()=>normalizarMargemPercentual('100%'),e=>(e as any)?.status===422);
+ assert.throws(()=>normalizarMargemPercentual('abc%'),e=>(e as any)?.status===422);
  assert.throws(()=>normalizarMargemPercentual(100),e=>(e as any)?.status===422);
  assert.throws(()=>normalizarMargemPercentual(-5),e=>(e as any)?.status===422);
 });
