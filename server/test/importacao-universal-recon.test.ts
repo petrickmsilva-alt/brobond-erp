@@ -23,6 +23,19 @@ test('reconciliation proposes product field differences without writing to ERP',
  assert.equal(result.importacaoLiberada,false);
 });
 
+test('reconciliation blocks price rows when required payment-condition codes are missing',()=>{
+ const file:ArquivoInventariado={nome:'precos.csv',sha256:'f'.repeat(64),tamanhoBytes:2,tipo:'csv',abas:[{nome:'Precos',indice:0,totalLinhas:2,totalColunas:3,linhaCabecalho:1,cabecalhos:['sku','atacado_vista','boleto_30'],vazia:false,celulas:[],linhas:[{linhaOrigem:2,valores:{sku:'SKU-A',atacado_vista:'49,90',boleto_30:'45,90'}}]}]};
+ const sem=interpretarCamposUniversal(file),ent=reconhecerEntidadesUniversal(file,sem);
+ const result=reconciliarImportacaoUniversal(file,sem,ent,[{id:7,sku:'SKU-A',nome:'Produto A'}],[],['atacado_vista']);
+ const missing=result.divergencias.find(d=>d.tipo==='condicao_pagamento_ausente');assert.ok(missing);assert.deepEqual(missing.detalhes?.condicoesAusentes,['boleto_30']);assert.equal(result.totais.condicao_pagamento_ausente,1);assert.equal(result.importacaoLiberada,false);
+});
+
+test('reconciliation allows mapped condition prices when required codes are active',()=>{
+ const file:ArquivoInventariado={nome:'precos.csv',sha256:'1'.repeat(64),tamanhoBytes:2,tipo:'csv',abas:[{nome:'Precos',indice:0,totalLinhas:2,totalColunas:2,linhaCabecalho:1,cabecalhos:['sku','atacado_vista'],vazia:false,celulas:[],linhas:[{linhaOrigem:2,valores:{sku:'SKU-A',atacado_vista:'49,90'}}]}]};
+ const sem=interpretarCamposUniversal(file),ent=reconhecerEntidadesUniversal(file,sem);
+ const result=reconciliarImportacaoUniversal(file,sem,ent,[{id:7,sku:'SKU-A',nome:'Produto A'}],[],['atacado_vista']);assert.equal(result.totais.condicao_pagamento_ausente,0);
+});
+
 test('reconciliation blocks duplicate source barcodes across different SKUs',()=>{
  const file:ArquivoInventariado={nome:'duplicados.csv',sha256:'c'.repeat(64),tamanhoBytes:5,tipo:'csv',abas:[{nome:'Products',indice:0,totalLinhas:3,totalColunas:3,linhaCabecalho:1,cabecalhos:['sku','nome','codigo_barras'],vazia:false,celulas:[],linhas:[{linhaOrigem:2,valores:{sku:'SKU-1',nome:'Produto 1',codigo_barras:'7890000000001'}},{linhaOrigem:3,valores:{sku:'SKU-2',nome:'Produto 2',codigo_barras:'7890000000001'}}]}]};
  const sem=interpretarCamposUniversal(file),ent=reconhecerEntidadesUniversal(file,sem);

@@ -7,9 +7,10 @@ import { getStore, createRecord, lancarMovimentacaoDentro, escopoDe, type Actor 
 import { validatePayload, parseNumber } from './validate';
 import { validarReferenciasDaEmpresa } from './empresa';
 import type { Row, Tx } from './store';
+import { UNIVERSAL_CONDITION_PRICE_FIELDS, preserveNonzeroBasePrices, requiredConditionCodesFromMappedRows, missingConditionCodes, persistUniversalConditionPrice } from './importacaoUniversalPrecos';
 import { hashAprovacaoImportacaoUniversal } from './importacaoUniversalHash';
 
-const BLOQUEADORES = new Set(['duplicado_origem','conflito_sku','conflito_codigo_barras','ambiguidade','campo_desconhecido','orfao_relacionamento','conflito_dimensional','produto_sem_sku','sku_sem_produto','variacao_sem_produto','estoque_sem_produto','estoque_sem_local','preco_sem_produto','movimentacao_sem_produto','entidade_sem_executor']);
+const BLOQUEADORES = new Set(['duplicado_origem','conflito_sku','conflito_codigo_barras','ambiguidade','campo_desconhecido','orfao_relacionamento','conflito_dimensional','produto_sem_sku','sku_sem_produto','variacao_sem_produto','estoque_sem_produto','estoque_sem_local','preco_sem_produto','movimentacao_sem_produto','entidade_sem_executor','condicao_pagamento_ausente']);
 const normal=(v:unknown)=>String(v??'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim().toUpperCase();
 export function normalizarDocumentoImportacao(value:unknown):string{return String(value??'').replace(/\D/g,'');}
 export function findByNormalizedDocument(rows:Row[],fieldName:string,documentKey:string,empresaId:number):Row|null{const key=normalizarDocumentoImportacao(documentKey);if(!key)return null;return rows.find(r=>Number(r.empresa_id)===empresaId&&normalizarDocumentoImportacao(r[fieldName])===key)??null;}
@@ -111,6 +112,13 @@ export async function executarImportacaoUniversalHandler(req:Request,res:Respons
    // SKU-only tabs are dependent identifiers; they materialize as child SKUs, not duplicate parent products.
    const variationRows=entityRows.filter(x=>['sku','variacao'].includes(x.tipo));
    const priceRows=entityRows.filter(x=>x.tipo==='preco');
+   const requiredConditionCodes=requiredConditionCodesFromMappedRows(priceRows.map(item=>mapSheetRow(item.row,item.aba,mappings)));
+   if(requiredConditionCodes.length){
+    const catalog=await tx.query('SELECT codigo FROM condicoes_pagamento WHERE empresa_id=$1 AND ativo=true AND codigo=ANY($2::text[])',[empresaId,requiredConditionCodes]);
+    const availableCodes=new Set(catalog.rows.map((r:any)=>String(r.codigo)));
+    const missing=missingConditionCodes(requiredConditionCodes,availableCodes);
+    if(missing.length)throw new HttpError(409,'Condicoes comerciais ausentes/inativas no cadastro da empresa: '+missing.join(', ')+'. Cadastre ou ative os codigos antes de aprovar a previa.',{condicoesAusentes:missing});
+   }
    const stockRows=entityRows.filter(x=>x.tipo==='estoque');
    const movementRows=entityRows.filter(x=>x.tipo==='movimentacao');
    const customerRows=entityRows.filter(x=>x.tipo==='cliente'),supplierRows=entityRows.filter(x=>x.tipo==='fornecedor');
@@ -131,7 +139,7 @@ export async function executarImportacaoUniversalHandler(req:Request,res:Respons
     const existing=findBySku(products,sku);
     if(existing){
      if(payload.atributos_adicionais&&existing.atributos_adicionais&&typeof existing.atributos_adicionais==='object')payload.atributos_adicionais={...existing.atributos_adicionais,...payload.atributos_adicionais};
-     const data=validatePayload(productosResource,payload,'update');
+     const data=validatePayload(productosResource,preserveNonzeroBasePrices(existing,payload),'update');
      await validarReferenciasDaEmpresa(productosResource,data,{empresaId,consolidado:false,permitidas:[empresaId]},(target,targetId,empresa,t)=>s.findOneWhere(target,{id:targetId,empresa_id:empresa},t),tx);
      const updated=await s.update(productosResource,Number(existing.id),data,tx);
      if(!updated)throw new HttpError(409,`Produto ${sku} deixou de existir durante a importação.`);
@@ -175,7 +183,7 @@ export async function executarImportacaoUniversalHandler(req:Request,res:Respons
     let child:Row;
     if(existing){
      if(Number(existing.produto_pai_id)!==Number(parent.id))throw new HttpError(409,`SKU ${sku} já existe, mas não é filho do produto ${parent.sku}.`);
-     const data=validatePayload(productosResource,childPayload,'update'),updated=await s.update(productosResource,Number(existing.id),data,tx);if(!updated)throw new HttpError(409,`Variação ${sku} não pôde ser atualizada.`);const linked=await s.update(productosResource,Number(existing.id),{produto_pai_id:Number(parent.id),variacao_chave:chave,variacao_tamanho_id:size?.id??null},tx);Object.assign(existing,updated,linked||{});child=existing;
+     const guardedChildPayload=preserveNonzeroBasePrices(existing,childPayload),data=validatePayload(productosResource,guardedChildPayload,'update'),updated=await s.update(productosResource,Number(existing.id),data,tx);if(!updated)throw new HttpError(409,`Variação ${sku} não pôde ser atualizada.`);const linked=await s.update(productosResource,Number(existing.id),{produto_pai_id:Number(parent.id),variacao_chave:chave,variacao_tamanho_id:size?.id??null},tx);Object.assign(existing,updated,linked||{});child=existing;
      processResult(item.tipo,item.aba,item.row.linhaOrigem,'atualizados',Number(child.id),sku);
     }else{
      child=await createRecord(productosResource,childPayload,user as Actor,{escopo:escopoDe(user as any),tx});
@@ -195,31 +203,19 @@ export async function executarImportacaoUniversalHandler(req:Request,res:Respons
     for(const f of priceFields)if(mapped[f]!==undefined&&mapped[f]!==null&&String(mapped[f]).trim()!==''){const target=f==='custo_aquisicao'?'custo':f==='qtd_min_atacado'?'atacado_min_qtd':f;if(field(productosResource,target))data[target]=mapped[f];}
     for(const k of ['custo_fabricacao','custo_adicional','imposto','margem'])if(mapped[k]!==undefined&&!field(productosResource,k))extras[k+'_origem']=mapped[k];
     if(Object.keys(extras).length&&field(productosResource,'atributos_adicionais'))data.atributos_adicionais={...(product.atributos_adicionais&&typeof product.atributos_adicionais==='object'?product.atributos_adicionais:{}),...extras};
-    const conditionPrices=[
-     {field:'preco_atacado_vista',canal:'atacado',condicao:'atacado_vista',min:1,marginField:'margem_bruta_atacado_vista'},
-     {field:'preco_atacado_boleto_30',canal:'atacado',condicao:'boleto_30',min:1},
-     {field:'preco_atacado_boleto_30_60',canal:'atacado',condicao:'boleto_30_60',min:1},
-     {field:'preco_atacado_boleto_30_60_90',canal:'atacado',condicao:'boleto_30_60_90',min:1},
-     {field:'preco_atacado_cartao_debito',canal:'atacado',condicao:'cartao_debito',min:1},
-     {field:'preco_atacado_cartao_credito_vista',canal:'atacado',condicao:'cartao_credito_vista',min:1},
-     {field:'preco_atacado_cartao_credito_30_60',canal:'atacado',condicao:'cartao_credito_30_60',min:1},
-     {field:'preco_atacado_cartao_credito_30_60_90',canal:'atacado',condicao:'cartao_credito_30_60_90',min:1},
-     {field:'preco_varejo_vista',canal:'varejo',condicao:'varejo_vista',min:1,marginField:'margem_bruta_varejo_vista'},
-     {field:'preco_varejo_vista_min_2_un',canal:'varejo',condicao:'varejo_vista',min:2,marginField:'margem_bruta_varejo_min_2_un'},
-     {field:'preco_varejo_cartao_vista',canal:'varejo',condicao:'cartao_vista',min:1},
-     {field:'preco_varejo_cartao_parcelado',canal:'varejo',condicao:'cartao_parcelado',min:1}
-    ];
+    const conditionPrices=UNIVERSAL_CONDITION_PRICE_FIELDS;
     let conditionRowsUpserted=0;
     for(const cp of conditionPrices){
      const raw=mapped[cp.field];if(raw===undefined||raw===null||String(raw).trim()==='')continue;
      const preco=parseNum(raw);if(preco<0)throw new HttpError(422,`Preço negativo inválido (${cp.field}) em ${item.aba} linha ${item.row.linhaOrigem}.`);
      const marginRaw=cp.marginField?mapped[cp.marginField]:undefined,margem=marginRaw===undefined||marginRaw===null||String(marginRaw).trim()===''?null:parseNum(marginRaw);
-     await tx.query(`INSERT INTO produto_precos_condicao (empresa_id,produto_id,canal,condicao,preco,origem,criado_por,quantidade_minima,margem_pct,regra_calculo) VALUES ($1,$2,$3,$4,$5,'importacao_universal',$6,$7,$8,$9::jsonb) ON CONFLICT (empresa_id,produto_id,canal,condicao,quantidade_minima) WHERE vigencia_fim IS NULL DO UPDATE SET preco=EXCLUDED.preco,origem=EXCLUDED.origem,atualizado_em=now(),atualizado_por=EXCLUDED.criado_por,margem_pct=EXCLUDED.margem_pct,regra_calculo=EXCLUDED.regra_calculo`,[empresaId,Number(product.id),cp.canal,cp.condicao,preco,user.id,cp.min,margem,JSON.stringify({origemPlanilha:item.aba,linha:item.row.linhaOrigem,campoPreco:cp.field,condicao:cp.condicao,quantidadeMinima:cp.min,marginSource:cp.marginField??null})]);
+     await persistUniversalConditionPrice(tx,{empresaId,produtoId:Number(product.id),canal:cp.canal,condicao:cp.condicao,preco,quantidadeMinima:cp.min,margemPct:margem,criadoPor:Number(user.id),regraCalculo:{origemPlanilha:item.aba,linha:item.row.linhaOrigem,campoPreco:cp.field,condicao:cp.condicao,quantidadeMinima:cp.min,marginSource:cp.marginField??null}});
      conditionRowsUpserted++;
     }
-    if(!Object.keys(data).length&&!conditionRowsUpserted){processResult(item.tipo,item.aba,item.row.linhaOrigem,'ignorados',Number(product.id),'Nenhum campo de preço reconhecido.');continue;}
-    if(Object.keys(data).length){
-     const validated=validatePayload(productosResource,data,'update');
+    const basePriceSafeData=preserveNonzeroBasePrices(product,data);
+    if(!Object.keys(basePriceSafeData).length&&!conditionRowsUpserted){processResult(item.tipo,item.aba,item.row.linhaOrigem,'ignorados',Number(product.id),'Nenhum campo de preço reconhecido.');continue;}
+    if(Object.keys(basePriceSafeData).length){
+     const validated=validatePayload(productosResource,basePriceSafeData,'update');
      await validarReferenciasDaEmpresa(productosResource,validated,{empresaId,consolidado:false,permitidas:[empresaId]},(target,targetId,empresa,t)=>s.findOneWhere(target,{id:targetId,empresa_id:empresa},t),tx);
      const updated=await s.update(productosResource,Number(product.id),validated,tx);if(!updated)throw new HttpError(409,'Produto desapareceu durante a atualização de preços.');
      Object.assign(product,updated);

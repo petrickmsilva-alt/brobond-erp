@@ -1,6 +1,7 @@
 ﻿import type { ArquivoInventariado } from './importacaoUniversalLeitura';
 import type { AnaliseSemantica, CampoCanonico } from './importacaoUniversalSemantica';
 import type { ReconhecimentoEntidades } from './importacaoUniversalEntidades';
+import { requiredConditionCodesFromMappedRows, missingConditionCodes } from './importacaoUniversalPrecos';
 
 export type SnapshotProdutoERP = {
   id: number;
@@ -34,7 +35,7 @@ export type RegistroReconhecido = {
   mapeado: Partial<Record<CampoCanonico, unknown>>;
 };
 export type DivergenciaRecon = {
-  tipo: 'novo'|'existente_igual'|'atualizacao_proposta'|'duplicado_origem'|'conflito_sku'|'conflito_codigo_barras'|'ambiguidade'|'campo_desconhecido'|'orfao_relacionamento'|'conflito_dimensional'|'produto_sem_sku'|'sku_sem_produto'|'variacao_sem_produto'|'estoque_sem_produto'|'estoque_sem_local'|'preco_sem_produto'|'movimentacao_sem_produto'|'entidade_sem_executor';
+  tipo: 'novo'|'existente_igual'|'atualizacao_proposta'|'duplicado_origem'|'conflito_sku'|'conflito_codigo_barras'|'ambiguidade'|'campo_desconhecido'|'orfao_relacionamento'|'conflito_dimensional'|'produto_sem_sku'|'sku_sem_produto'|'variacao_sem_produto'|'estoque_sem_produto'|'estoque_sem_local'|'preco_sem_produto'|'movimentacao_sem_produto'|'entidade_sem_executor'|'condicao_pagamento_ausente';
   aba: string;
   linhasOrigem: number[];
   chave?: string;
@@ -74,12 +75,13 @@ function numberValue(v:unknown):number|null {
 }
 export function reconciliarImportacaoUniversal(
  arquivo:ArquivoInventariado, analise:AnaliseSemantica, entidades:ReconhecimentoEntidades,
- produtosERP:SnapshotProdutoERP[], saldosERP:SnapshotSaldoERP[]
+ produtosERP:SnapshotProdutoERP[], saldosERP:SnapshotSaldoERP[], condicoesPagamentoERP?:string[]
 ):ResultadoRecon {
  const registros:RegistroReconhecido[]=[];
  const divergencias:DivergenciaRecon[]=[];
- const totals:ResultadoRecon['totais']={novo:0,existente_igual:0,atualizacao_proposta:0,duplicado_origem:0,conflito_sku:0,conflito_codigo_barras:0,ambiguidade:0,campo_desconhecido:0,orfao_relacionamento:0,conflito_dimensional:0,produto_sem_sku:0,estoque_sem_produto:0,preco_sem_produto:0,movimentacao_sem_produto:0,entidade_sem_executor:0,sku_sem_produto:0,variacao_sem_produto:0,estoque_sem_local:0};
+ const totals:ResultadoRecon['totais']={novo:0,existente_igual:0,atualizacao_proposta:0,duplicado_origem:0,conflito_sku:0,conflito_codigo_barras:0,ambiguidade:0,campo_desconhecido:0,orfao_relacionamento:0,conflito_dimensional:0,produto_sem_sku:0,estoque_sem_produto:0,preco_sem_produto:0,movimentacao_sem_produto:0,entidade_sem_executor:0,sku_sem_produto:0,variacao_sem_produto:0,estoque_sem_local:0,condicao_pagamento_ausente:0};
  const produtosPorSku=new Map<string,SnapshotProdutoERP[]>();
+ const condicoesDisponiveis=condicoesPagamentoERP===undefined?null:new Set(condicoesPagamentoERP.map(c=>String(c).trim().toLowerCase()));
  for(const p of produtosERP){const k=normalKey(p.sku);const arr=produtosPorSku.get(k)||[];arr.push(p);produtosPorSku.set(k,arr);}
  const produtosPorBarcode=new Map<string,SnapshotProdutoERP[]>();
  for(const p of produtosERP){const k=normalKey(p.codigo_barras);if(!k)continue;const arr=produtosPorBarcode.get(k)||[];arr.push(p);produtosPorBarcode.set(k,arr);}
@@ -92,6 +94,10 @@ export function reconciliarImportacaoUniversal(
   for(const row of aba.linhas){
    const m=mapRow(analise,aba.nome,row.valores);
    const reg:RegistroReconhecido={aba:aba.nome,linha:row.linhaOrigem,entidade,dadosOriginais:{...row.valores},mapeado:m};registros.push(reg);
+   if(entidade==='preco'&&condicoesDisponiveis!==null){
+    const missing=missingConditionCodes(requiredConditionCodesFromMappedRows([m as Record<string,unknown>]),condicoesDisponiveis);
+    if(missing.length)divergencias.push({tipo:'condicao_pagamento_ausente',aba:aba.nome,linhasOrigem:[row.linhaOrigem],descricao:'Condicoes de pagamento '+missing.join(', ')+' nao cadastradas ou inativas na empresa. Cadastre/ative antes de aprovar e executar.',detalhes:{condicoesAusentes:missing},requerAprovacao:true});
+   }
    const sku=normalKey(m.sku);
    if(entidade==='tabela_generica')divergencias.push({tipo:'entidade_sem_executor',aba:aba.nome,linhasOrigem:[row.linhaOrigem],descricao:'Esta aba foi classificada como tabela genérica e não possui destino de gravação implementado. Importação bloqueada para impedir descarte silencioso dos registros.',detalhes:{cabecalhos:aba.cabecalhos},requerAprovacao:true});
    const barcode=normalKey(m.codigo_barras);
@@ -190,7 +196,7 @@ export function reconciliarImportacaoUniversal(
  const previaRegistros=registros.map(reg=>{
   const issues=divergencias.filter(d=>(d.aba===reg.aba||d.aba.split(',').map(x=>x.trim()).includes(reg.aba))&&d.linhasOrigem.includes(reg.linha));
   const tipos=[...new Set(issues.map(d=>d.tipo))];
-  const bloqueadores=['duplicado_origem','conflito_sku','conflito_codigo_barras','ambiguidade','campo_desconhecido','orfao_relacionamento','conflito_dimensional','produto_sem_sku','sku_sem_produto','variacao_sem_produto','estoque_sem_produto','estoque_sem_local','preco_sem_produto','movimentacao_sem_produto'];
+  const bloqueadores=['duplicado_origem','conflito_sku','conflito_codigo_barras','ambiguidade','campo_desconhecido','orfao_relacionamento','conflito_dimensional','produto_sem_sku','sku_sem_produto','variacao_sem_produto','estoque_sem_produto','estoque_sem_local','preco_sem_produto','movimentacao_sem_produto','condicao_pagamento_ausente'];
   const status=tipos.some(t=>bloqueadores.includes(t))?'Revisão/bloqueio':tipos.includes('atualizacao_proposta')||tipos.includes('novo')?'Proposta':tipos.includes('existente_igual')?'Identificado no ERP':'Sem divergência individual';
   porEntidade[reg.entidade]=(porEntidade[reg.entidade]||0)+1;porStatus[status]=(porStatus[status]||0)+1;
   return{aba:reg.aba,linha:reg.linha,entidade:reg.entidade,status,divergencias:tipos,mapeado:reg.mapeado as Record<string,unknown>};

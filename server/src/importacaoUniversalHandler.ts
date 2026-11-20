@@ -11,7 +11,7 @@ import { hashAprovacaoImportacaoUniversal } from './importacaoUniversalHash';
 export const CAMPOS_CANONICOS_IMPORTACAO = new Set(['sku','nome','categoria','colecao','cor','tamanho','quantidade','custo','custo_aquisicao','custo_fabricacao','custo_adicional','imposto','margem','preco_venda','preco_atacado','preco_promocional','qtd_min_atacado','codigo_barras','ncm','cest','peso_g','local','local_destino','fornecedor','telefone','email','cnpj_cpf','descricao','composicao','material','modelagem','genero','marca','tipo','condicao','producao','unidade','tags','formato','ativo','codigo_item','codigo_categoria','codigo_industria','variacao_tamanho_id','motivo','tipo_movimento','data','referencia_externa','preco_atacado_vista','preco_atacado_boleto_30','preco_atacado_boleto_30_60','preco_atacado_boleto_30_60_90','preco_atacado_cartao_debito','preco_atacado_cartao_credito_vista','preco_atacado_cartao_credito_30_60','preco_atacado_cartao_credito_30_60_90','preco_varejo_vista','preco_varejo_vista_min_2_un','preco_varejo_cartao_vista','preco_varejo_cartao_parcelado','margem_bruta_atacado_vista','margem_bruta_varejo_vista','margem_bruta_varejo_min_2_un']);
 const TIPOS_CAMPO_IMPORTACAO = new Set(['texto','numero','percentual','data','booleano','codigo','desconhecido']);
 const TIPOS_ENTIDADE_IMPORTACAO = new Set(['produto','sku','variacao','estoque','preco','movimentacao','cliente','fornecedor','tabela_generica']);
-const TIPOS_BLOQUEADORES_APROVACAO = new Set(['duplicado_origem','conflito_sku','conflito_codigo_barras','ambiguidade','campo_desconhecido','orfao_relacionamento','conflito_dimensional','produto_sem_sku','sku_sem_produto','variacao_sem_produto','estoque_sem_produto','estoque_sem_local','preco_sem_produto','movimentacao_sem_produto','entidade_sem_executor']);
+const TIPOS_BLOQUEADORES_APROVACAO = new Set(['duplicado_origem','conflito_sku','conflito_codigo_barras','ambiguidade','campo_desconhecido','orfao_relacionamento','conflito_dimensional','produto_sem_sku','sku_sem_produto','variacao_sem_produto','estoque_sem_produto','estoque_sem_local','preco_sem_produto','movimentacao_sem_produto','entidade_sem_executor','condicao_pagamento_ausente']);
 function normalizarSkuDependenciaERP(v:unknown):string{return Array.from(String(v??'').normalize('NFD')).filter(ch=>ch.charCodeAt(0)<768||ch.charCodeAt(0)>879).join('').trim().toUpperCase();}
 export async function salvarMapeamentoImportacaoUniversalHandler(req:Request,res:Response):Promise<void>{
  const user=currentUser(req);
@@ -131,7 +131,8 @@ export async function reconciliarImportacaoUniversalHandler(req:Request,res:Resp
    all.push(...result.rows);if(all.length>=result.total||result.rows.length===0)break;page++;
   }return all;
  };
- const [products,stocks,sizes,locations,colors]=await Promise.all([fetchAll(RESOURCES.produtos,true),fetchAll(RESOURCES.estoques,true),fetchAll(RESOURCES.tamanhos),fetchAll(RESOURCES.locais,true),fetchAll(RESOURCES.cores)]);
+ const [products,stocks,sizes,locations,colors,conditions]=await Promise.all([fetchAll(RESOURCES.produtos,true),fetchAll(RESOURCES.estoques,true),fetchAll(RESOURCES.tamanhos),fetchAll(RESOURCES.locais,true),fetchAll(RESOURCES.cores),fetchAll(RESOURCES.condicoes_pagamento,true)]);
+ const activeConditionCodes=conditions.filter((c:any)=>c.ativo!==false).map((c:any)=>String(c.codigo));
  const produtoById=new Map(products.map((p:any)=>[Number(p.id),p]));
  const tamanhoById=new Map(sizes.map((t:any)=>[Number(t.id),t]));
  const localById=new Map(locations.map((l:any)=>[Number(l.id),l]));
@@ -150,15 +151,15 @@ export async function reconciliarImportacaoUniversalHandler(req:Request,res:Resp
  const skusPorAba=new Map<string,Set<string>>();
  for(const aba of arquivo.abas){const m=confirmado.mapeamentos.find((x:any)=>x.aba===aba.nome&&x.campoCanonico==='sku'&&x.ignorado!==true);if(!m)continue;const skuValues=(aba.linhas||[]).map((r:any)=>normalizarSkuDependenciaERP(r?.valores?.[m.colunaOriginal]));const skus=new Set<string>(skuValues.filter((sku:string)=>sku.length>0));skusPorAba.set(aba.nome,skus);}
  entidadesConfirmadas.dependencias=construirModeloDependencias(entidadesConfirmadas.entidades,entidadesConfirmadas.relacionamentos as any,{produtosPorSku,skusPorAba});
- const result=reconciliarImportacaoUniversal(arquivo,semanticaConfirmada,entidadesConfirmadas,produtosERP,saldosERP);
+ const result=reconciliarImportacaoUniversal(arquivo,semanticaConfirmada,entidadesConfirmadas,produtosERP,saldosERP,activeConditionCodes);
  const versaoAprovacao=Number(row.versao||1)+1;
  const approvalHash=hashAprovacaoImportacaoUniversal(id,user.empresa_id,String(row.sha256),versaoAprovacao,confirmado,result);
  const previewAtual=(row.preview&&typeof row.preview==='object')?row.preview:{};
- const previewAtualizado={...previewAtual,previaConsolidada:result.previaConsolidada,resumoDimensional:result.resumoDimensional,erpSnapshot:{produtos:produtosERP.length,saldos:saldosERP.length},approvalHash,approvalVersion:versaoAprovacao};
+ const previewAtualizado={...previewAtual,previaConsolidada:result.previaConsolidada,resumoDimensional:result.resumoDimensional,erpSnapshot:{produtos:produtosERP.length,saldos:saldosERP.length,condicoesPagamento:activeConditionCodes.length},approvalHash,approvalVersion:versaoAprovacao};
  const saved=await queryDb(`UPDATE importacao_universal_sessoes SET reconciliacao=$2::jsonb,preview=$3::jsonb,status='aguardando_aprovacao',versao=versao+1,atualizado_em=now()
   WHERE id=$1 AND empresa_id=$4 AND usuario_id=$5 AND versao=$6 AND status IN ('aguardando_mapeamento','aguardando_aprovacao') RETURNING versao`,[id,JSON.stringify(result),JSON.stringify(previewAtualizado),user.empresa_id,user.id,Number(row.versao||1)]);
  if(!saved.rows.length)throw new HttpError(409,'Sessão mudou durante a reconciliação. Atualize a sessão e reconcilie novamente.');
- res.json({id,status:'aguardando_aprovacao',reconciliacao:result,approvalHash,approvalVersion:versaoAprovacao,erpSnapshot:{produtos:produtosERP.length,saldos:saldosERP.length}});
+ res.json({id,status:'aguardando_aprovacao',reconciliacao:result,approvalHash,approvalVersion:versaoAprovacao,erpSnapshot:{produtos:produtosERP.length,saldos:saldosERP.length,condicoesPagamento:activeConditionCodes.length}});
 }
 
 export async function aprovarImportacaoUniversalHandler(req:Request,res:Response):Promise<void>{
