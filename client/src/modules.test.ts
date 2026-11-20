@@ -74,6 +74,7 @@ const ROTAS_CANONICAS_ESPERADAS: Record<string, string> = {
   empresas: '/empresas',
   usuarios: '/usuarios',
   auditoria: '/auditoria',
+  'importacao-universal': '/importacao-universal',
   webhooks: '/webhooks',
   'conector-mercadolivre': '/conectores/mercado-livre',
   'conector-mercadopago': '/conectores/mercado-pago',
@@ -134,11 +135,12 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
     // + 1 da FASE 9.5 — Leiautes SPED/EFD (registro versionado, leitura).
     // + 1 do OPERATIONAL CONTROL PLANE + REMOTE MCP — Controle Operacional
     //   (/operacional), página própria de solicitações/aprovações/execuções.
-    expect(MODULES).toHaveLength(152);
+    // + 1 da Importação Universal para migração de dados (Administração → Governança).
+    expect(MODULES).toHaveLength(153);
     const ids = MODULES.map((m) => m.id);
     const paths = MODULES.map((m) => m.path);
-    expect(new Set(ids).size).toBe(152);
-    expect(new Set(paths).size).toBe(152);
+    expect(new Set(ids).size).toBe(153);
+    expect(new Set(paths).size).toBe(153);
 
     for (const [id, pathEsperado] of Object.entries(ROTAS_CANONICAS_ESPERADAS)) {
       const mod = MODULES.find((m) => m.id === id);
@@ -167,8 +169,8 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
     }
   });
 
-  it('separa ERP CORE (129), Commerce (17), Creators (4) e Utilidades Globais (2)', () => {
-    expect(MODULES.filter((m) => m.space === 'erp')).toHaveLength(129);
+  it('separa ERP CORE (130), Commerce (17), Creators (4) e Utilidades Globais (2)', () => {
+    expect(MODULES.filter((m) => m.space === 'erp')).toHaveLength(130);
     // 4 conectores de canal + 10 módulos do BROBOND COMMERCE OS
     expect(MODULES.filter((m) => m.space === 'commerce')).toHaveLength(17);
     expect(MODULES.filter((m) => m.space === 'creators')).toHaveLength(4);
@@ -344,7 +346,7 @@ describe('ERP-UX-03 — Árvore Master e preservação das funções/rotas', () 
       // FASE 9.5 — registro versionado de leiautes SPED/EFD (leitura).
       'fiscal-layouts',
     ]);
-    expect(porArea('Administração')).toEqual(['empresas', 'usuarios', 'auditoria', 'webhooks', 'operacional']);
+    expect(porArea('Administração')).toEqual(['empresas', 'usuarios', 'auditoria', 'importacao-universal', 'webhooks', 'operacional']);
     expect(porArea('Commerce')).toEqual([
       // COMMERCE ENTERPRISE — ordem do menu:
       // Catálogo → Comercial → Pedidos → Fulfillment → Pagamentos → Canais → Integrações → Inteligência
@@ -785,5 +787,16 @@ describe('PR #95 — auditoria de capacidades (menu × árvore)', () => {
     for (const rota of rotas) {
       expect(moduleOfPath(rota), `rota ${rota} precisa de módulo dono`).toBeDefined();
     }
+  });
+});
+
+describe('Importação Universal — navegação e acesso', () => {
+  it('exibe o módulo apenas para admin e resolve a rota dedicada', () => {
+    const module = MODULES.find(m => m.id === 'importacao-universal');
+    expect(module).toBeDefined();
+    expect(module).toMatchObject({ path: '/importacao-universal', adminOnly: true, area: 'Administração' });
+    expect(visibleModules({ perfil: 'admin' }).map(m => m.id)).toContain('importacao-universal');
+    expect(visibleModules({ perfil: 'gerente' }).map(m => m.id)).not.toContain('importacao-universal');
+    expect(moduleOfPath('/importacao-universal', visibleModules({ perfil: 'admin' }))?.id).toBe('importacao-universal');
   });
 });

@@ -1305,7 +1305,7 @@ async function validarConversaoDeUnidade(data: Row, empresaId: number, tx?: Tx):
   }
 }
 
-export async function createRecord(r: Resource, body: unknown, actor: Actor, ctx: { req?: Request; escopo?: EscopoOuAtor; cyclicCounting?: Record<string, unknown> } = {}): Promise<Row> {
+export async function createRecord(r: Resource, body: unknown, actor: Actor, ctx: { req?: Request; escopo?: EscopoOuAtor; cyclicCounting?: Record<string, unknown>; tx?: Tx } = {}): Promise<Row> {
   const data = validatePayload(r, body, 'create');
   if (r.key === 'lancamentos_financeiros' && data.documento_origem_recurso === 'fin_importacoes_contabeis') throw new HttpError(409, 'Partidas importadas só podem ser criadas pelo fluxo contábil.');
   const s = getStore();
@@ -1331,7 +1331,7 @@ export async function createRecord(r: Resource, body: unknown, actor: Actor, ctx
   let conviteLink: string | undefined;
   let conviteEntregue = false;
   try {
-    const criado = await s.transaction(async (tx) => {
+    const executarTransacao = async (tx:Tx) => {
       if (r.key === 'commerce_configuracoes' && data.checkout_usuario_id) {
         const { responsavelCheckout } = await import('./commerce/checkout-base');
         await responsavelCheckout(escopo.empresaId, data);
@@ -1523,7 +1523,8 @@ export async function createRecord(r: Resource, body: unknown, actor: Actor, ctx
       if (conviteLink) (final as Row).convite_link = conviteLink;
       await attachGradeTamanhos(r, [final], tx);
       return final;
-    });
+    };
+    const criado = ctx.tx !== undefined ? await executarTransacao(ctx.tx) : await s.transaction(executarTransacao);
     // Pós-commit: integrações (fire-and-forget — nunca derrubam a resposta).
     if (r.key === 'usuarios') {
       const conta = {

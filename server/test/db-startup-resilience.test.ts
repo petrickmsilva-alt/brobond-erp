@@ -165,7 +165,8 @@ async function getFreePort(): Promise<number> {
 
 function spawnBackend(port: number, env: Record<string, string | undefined>) {
   const mergedEnv: Record<string, string> = {
-    PATH: process.env.PATH || '',
+    ...Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => typeof entry[1] === 'string')),
+    PATH: process.env.PATH || process.env.Path || '',
     PORT: String(port),
     JWT_SECRET: TEST_JWT_SECRET,
     ADMIN_PASSWORD: TEST_ADMIN_PWD,
@@ -742,3 +743,4 @@ describe('PostgreSQL startup resilience (10 cenarios)', () => {
     }
   });
 });
+

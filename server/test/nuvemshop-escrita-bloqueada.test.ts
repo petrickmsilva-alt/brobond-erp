@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const P: any = await import('../src/commerce/publicacaoNuvemshop');
@@ -55,5 +55,6 @@ test('nenhum outro módulo de produção liga o contrato de teste', () => {
     }
   };
   visitar(raiz);
-  assert.deepEqual(achados.map((a) => a.split('/src/')[1]).sort(), ['commerce/catalogo.ts', 'commerce/publicacaoNuvemshop.ts']);
+  // path.relative + normalização cobre Windows (\\) e POSIX (/), sem alterar a regra.
+  assert.deepEqual(achados.map((a) => relative(raiz, a).replace(/\\/g, '/')).sort(), ['commerce/catalogo.ts', 'commerce/publicacaoNuvemshop.ts']);
 });

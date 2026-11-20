@@ -279,7 +279,7 @@ describe('TopNavigation — Master Top Navigation (UX-05)', () => {
     // + Controle Operacional (Operational Control Plane + Remote MCP).
     // `modules.test.ts` trava o mesmo número e a lista canônica — aqui só se
     // confirma que o menu não perde nem duplica a fonte única.
-    expect(MODULES).toHaveLength(152);
+    expect(MODULES).toHaveLength(153);
     unmount();
   });
 

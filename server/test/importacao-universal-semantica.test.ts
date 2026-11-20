@@ -47,3 +47,39 @@ test('heuristic partial matches never become auto-approved mappings', () => {
   assert.equal(suggestion.requerConfirmacao, true);
   assert.ok(suggestion.confianca < 1);
 });
+
+test('expanded canonical fields are recognized without lossy alias collisions', () => {
+  const headers = [
+    'material','modelagem','genero','marca','cest','tipo','condicao','producao',
+    'unidade','tags','formato','ativo','codigo_item','codigo_categoria',
+    'codigo_industria','variacao_tamanho_id','local_destino','motivo',
+  ];
+  const expanded: ArquivoInventariado = {
+    ...fixture,
+    abas: [{ ...fixture.abas[0], cabecalhos: headers, linhas: [] }],
+  };
+  const result = interpretarCamposUniversal(expanded);
+  for (const header of headers) {
+    assert.equal(result.sugestoes.find(s => s.colunaOriginal === header)?.campoCanonico, header, `canonical field ${header}`);
+  }
+  assert.equal(result.camposDesconhecidos.length, 0);
+});
+
+test('expanded English and operational aliases map to their intended canonical fields', () => {
+  const aliases: Record<string,string> = {
+    fabric: 'material', fit: 'modelagem', gender: 'genero', brand: 'marca',
+    cest: 'cest', type: 'tipo', condition: 'condicao', production: 'producao',
+    uom: 'unidade', keywords: 'tags', format: 'formato', active: 'ativo',
+    item_code: 'codigo_item', category_code: 'codigo_categoria',
+    industry_code: 'codigo_industria', size_id: 'variacao_tamanho_id',
+    warehouse_destination: 'local_destino', reason: 'motivo',
+  };
+  for (const [header, expected] of Object.entries(aliases)) {
+    const isolated: ArquivoInventariado = {
+      ...fixture,
+      abas: [{ ...fixture.abas[0], cabecalhos: [header], linhas: [] }],
+    };
+    const result = interpretarCamposUniversal(isolated);
+    assert.equal(result.sugestoes[0]?.campoCanonico, expected, `alias ${header}`);
+  }
+});

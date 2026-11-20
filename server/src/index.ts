@@ -73,7 +73,8 @@ import { listarEventosTerceirizacao, registrarEventoTerceirizacao } from './terc
 import { relatorio } from './relatorios';
 import { exportarRecurso } from './export';
 import { confirmarImportacao, modeloImportacao, previewImportacao } from './importacao';
-import { analisarImportacaoUniversalHandler, salvarMapeamentoImportacaoUniversalHandler, consultarImportacaoUniversalHandler, reconciliarImportacaoUniversalHandler } from './importacaoUniversalHandler';
+import { analisarImportacaoUniversalHandler, salvarMapeamentoImportacaoUniversalHandler, consultarImportacaoUniversalHandler, reconciliarImportacaoUniversalHandler, aprovarImportacaoUniversalHandler } from './importacaoUniversalHandler';
+import { executarImportacaoUniversalHandler, retryImportacaoUniversalHandler } from './importacaoUniversalExecutor';
 import { previewCarga, iniciarJobCarga, statusJobCarga, processarFilaCargaComercial } from './cargaPoliticaComercial';
 import {
   aplicarPrecoFicha,
@@ -1734,6 +1735,9 @@ app.post('/api/importacao-universal/analisar', requireRole('admin','gerente'), w
 app.post('/api/importacao-universal/sessoes/:id/mapeamento', requireRole('admin','gerente'), wrap(salvarMapeamentoImportacaoUniversalHandler));
 app.get('/api/importacao-universal/sessoes/:id', requireRole('admin','gerente'), wrap(consultarImportacaoUniversalHandler));
 app.post('/api/importacao-universal/sessoes/:id/reconciliar', requireRole('admin','gerente'), wrap(reconciliarImportacaoUniversalHandler));
+app.post('/api/importacao-universal/sessoes/:id/aprovar', requireRole('admin','gerente'), wrap(aprovarImportacaoUniversalHandler));
+app.post('/api/importacao-universal/sessoes/:id/executar', requireRole('admin','gerente'), wrap(executarImportacaoUniversalHandler));
+app.post('/api/importacao-universal/sessoes/:id/retomar', requireRole('admin','gerente'), wrap(retryImportacaoUniversalHandler));
 app.post('/api/importar/confirmar', wrap(confirmarImportacao));
 app.get('/api/importar/modelo', wrap(modeloImportacao));
 // Carga oficial da política comercial (planilha-base do cadastro mestre).

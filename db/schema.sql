@@ -9896,8 +9896,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS carga_politica_comercial_jobs_one_running_per_
   ON carga_politica_comercial_jobs (empresa_id)
   WHERE status = 'running';
 
--- UNIVERSAL DATA INGESTION ENGINE — bootstrap foundation (migration 0128).
--- Stores original upload bytes (BYTEA) and durable analysis/approval checkpoints.
+-- Universal Data Ingestion Engine foundation (0128).
+-- Additive only. Preserves original source file bytes and import-session state.
 CREATE TABLE IF NOT EXISTS importacao_universal_sessoes (
   id UUID PRIMARY KEY,
   empresa_id INTEGER NOT NULL REFERENCES empresas(id) ON DELETE RESTRICT,

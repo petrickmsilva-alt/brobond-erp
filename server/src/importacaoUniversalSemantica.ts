@@ -4,7 +4,12 @@ export type CampoCanonico =
   | 'sku' | 'nome' | 'categoria' | 'colecao' | 'cor' | 'tamanho' | 'quantidade'
   | 'custo' | 'custo_aquisicao' | 'custo_fabricacao' | 'custo_adicional' | 'imposto' | 'margem' | 'preco_venda' | 'preco_atacado' | 'preco_promocional' | 'qtd_min_atacado' | 'codigo_barras' | 'ncm' | 'peso_g'
   | 'local' | 'fornecedor' | 'telefone' | 'email' | 'cnpj_cpf' | 'descricao' | 'composicao'
-  | 'tipo_movimento' | 'data' | 'referencia_externa';
+  | 'material' | 'modelagem' | 'genero' | 'marca' | 'cest' | 'tipo' | 'condicao' | 'producao' | 'unidade' | 'tags' | 'formato' | 'ativo' | 'codigo_item' | 'codigo_categoria' | 'codigo_industria' | 'variacao_tamanho_id' | 'local_destino' | 'motivo'
+  | 'tipo_movimento' | 'data' | 'referencia_externa'
+  | 'preco_atacado_vista' | 'preco_atacado_boleto_30' | 'preco_atacado_boleto_30_60' | 'preco_atacado_boleto_30_60_90'
+  | 'preco_atacado_cartao_debito' | 'preco_atacado_cartao_credito_vista' | 'preco_atacado_cartao_credito_30_60' | 'preco_atacado_cartao_credito_30_60_90'
+  | 'preco_varejo_vista' | 'preco_varejo_vista_min_2_un' | 'preco_varejo_cartao_vista' | 'preco_varejo_cartao_parcelado'
+  | 'margem_bruta_atacado_vista' | 'margem_bruta_varejo_vista' | 'margem_bruta_varejo_min_2_un';
 
 export type TipoCampo = 'texto' | 'numero' | 'percentual' | 'data' | 'booleano' | 'codigo' | 'desconhecido';
 
@@ -44,6 +49,21 @@ const DICIONARIO: Record<CampoCanonico, string[]> = {
   preco_atacado: ['preco_atacado','atacado','wholesale_price','preco_wholesale','preco_revenda'],
   preco_promocional: ['preco_promocional','promocao','preco_promo','promotional_price','sale_price'],
   qtd_min_atacado: ['qtd_min_atacado','quantidade_minima_atacado','minimum_wholesale_quantity','minimo_atacado'],
+  preco_atacado_vista: ['preco_atacado_vista','atacado_vista'],
+  preco_atacado_boleto_30: ['preco_atacado_boleto_30','atacado_boleto_30','boleto_30'],
+  preco_atacado_boleto_30_60: ['preco_atacado_boleto_30_60','atacado_boleto_30_60','boleto_30_60'],
+  preco_atacado_boleto_30_60_90: ['preco_atacado_boleto_30_60_90','atacado_boleto_30_60_90','boleto_30_60_90'],
+  preco_atacado_cartao_debito: ['preco_atacado_cartao_debito','atacado_cartao_debito'],
+  preco_atacado_cartao_credito_vista: ['preco_atacado_cartao_credito_vista','atacado_cartao_credito_vista'],
+  preco_atacado_cartao_credito_30_60: ['preco_atacado_cartao_credito_30_60','atacado_cartao_credito_30_60'],
+  preco_atacado_cartao_credito_30_60_90: ['preco_atacado_cartao_credito_30_60_90','atacado_cartao_credito_30_60_90'],
+  preco_varejo_vista: ['preco_varejo_vista','varejo_vista'],
+  preco_varejo_vista_min_2_un: ['preco_varejo_vista_min_2_un','varejo_vista_min_2_un','varejo_2_un'],
+  preco_varejo_cartao_vista: ['preco_varejo_cartao_vista','varejo_cartao_vista','cartao_vista'],
+  preco_varejo_cartao_parcelado: ['preco_varejo_cartao_parcelado','varejo_cartao_parcelado','cartao_parcelado'],
+  margem_bruta_atacado_vista: ['margem_bruta_atacado_vista','margem_atacado_vista'],
+  margem_bruta_varejo_vista: ['margem_bruta_varejo_vista','margem_varejo_vista'],
+  margem_bruta_varejo_min_2_un: ['margem_bruta_varejo_min_2_un','margem_varejo_2_un'],
   codigo_barras: ['codigo_barras','ean','gtin','barcode','bar_code'],
   ncm: ['ncm','classificacao_fiscal'],
   peso_g: ['peso','peso_g','weight','peso_gramas','gramas'],
@@ -53,7 +73,25 @@ const DICIONARIO: Record<CampoCanonico, string[]> = {
   email: ['email','e_mail','mail'],
   cnpj_cpf: ['cnpj','cpf','cnpj_cpf','documento','tax_id'],
   descricao: ['descricao','description','detalhes','observacao'],
-  composicao: ['composicao','composition','material','tecido','fabric'],
+  composicao: ['composicao','composition'],
+  material: ['material','tecido','fabric','fabricacao'],
+  modelagem: ['modelagem','model','fit','corte'],
+  genero: ['genero','gender','sexo','publico'],
+  marca: ['marca','brand'],
+  cest: ['cest'],
+  tipo: ['tipo','type'],
+  condicao: ['condicao','condition','estado_produto'],
+  producao: ['producao','production','origem_producao'],
+  unidade: ['unidade','unit','unidade_medida','uom'],
+  tags: ['tags','tag','etiquetas','keywords'],
+  formato: ['formato','format'],
+  ativo: ['ativo','active','status_ativo'],
+  codigo_item: ['codigo_item','item_code'],
+  codigo_categoria: ['codigo_categoria','category_code'],
+  codigo_industria: ['codigo_industria','industry_code'],
+  variacao_tamanho_id: ['variacao_tamanho_id','size_id'],
+  local_destino: ['local_destino','destino','warehouse_destination'],
+  motivo: ['motivo','reason','justificativa'],
   tipo_movimento: ['tipo_movimento','movimento','movement_type','entrada_saida','operacao'],
   data: ['data','date','data_movimento','data_entrada','data_saida'],
   referencia_externa: ['referencia_externa','external_id','id_externo','codigo_externo','reference_id'],

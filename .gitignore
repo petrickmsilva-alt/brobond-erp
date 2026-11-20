@@ -23,3 +23,7 @@ npm-debug.log*
 # Editores
 .vscode/
 .idea/
+
+# Confidential Brobond migration homologation data
+data/migrations/universal-ingestion/*.csv
+data/migrations/universal-ingestion/*.xlsx

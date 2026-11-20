@@ -19,7 +19,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 process.env.NODE_ENV = 'test';
 delete process.env.DATABASE_URL;
@@ -126,7 +126,7 @@ test('D2: valores próximos de epoch e da virada do dia são preservados', async
 test('E: o instante não muda quando o processo roda em outro timezone', () => {
   const alvo = '2026-10-17T12:34:56.789Z';
   const script = `
-    const { instanteAuditoriaISO } = await import(${JSON.stringify(fileURLToPath(new URL('../src/auditChain.ts', import.meta.url)))});
+    const { instanteAuditoriaISO } = await import(${JSON.stringify(pathToFileURL(fileURLToPath(new URL('../src/auditChain.ts', import.meta.url))).href)});
     const d = new Date(${JSON.stringify(alvo)});
     process.stdout.write(JSON.stringify({ iso: instanteAuditoriaISO(d), ms: d.getTime(), offsetMin: d.getTimezoneOffset() }));
   `;
