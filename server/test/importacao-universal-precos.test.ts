@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { Tx } from '../src/store';
-import { determinePriceConditionAction, missingConditionCodes, preserveNonzeroBasePrices, requiredConditionCodesFromMappedRows, persistUniversalConditionPrice } from '../src/importacaoUniversalPrecos';
+import { UNIVERSAL_CONDITION_PRICE_FIELDS, determinePriceConditionAction, missingConditionCodes, preserveNonzeroBasePrices, requiredConditionCodesFromMappedRows, persistUniversalConditionPrice } from '../src/importacaoUniversalPrecos';
 
 test('preserves existing nonzero base prices and fills only zero or missing fields',()=>{
  const existing={preco_venda:59.9,preco_atacado:24.5,custo:12};
@@ -48,4 +48,8 @@ test('changed condition price closes old row, inserts new active row, and record
  assert.equal(calls.filter(c=>c.sql.includes('UPDATE produto_precos_condicao')&&c.sql.includes('vigencia_fim=CURRENT_DATE')).length,1);
  assert.equal(calls.filter(c=>c.sql.startsWith('INSERT INTO produto_precos_condicao (')).length,1);
  const history=calls.find(c=>c.sql.includes('INSERT INTO produto_precos_condicao_historico'));assert.ok(history);assert.equal(history.params[4],51.25);assert.equal(history.params[5],52.35);
+});
+test('parcelled retail card condition is gated at minimum quantity two',()=>{
+ const definition=UNIVERSAL_CONDITION_PRICE_FIELDS.find(d=>d.field==='preco_varejo_cartao_parcelado');
+ assert.equal(definition?.condicao,'cartao_parcelado');assert.equal(definition?.canal,'varejo');assert.equal(definition?.min,2);
 });

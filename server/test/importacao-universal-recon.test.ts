@@ -68,3 +68,12 @@ test('generic table entities block approval instead of silently skipping importe
  assert.ok(result.divergencias.some(d=>d.tipo==='entidade_sem_executor'));
  assert.equal(result.importacaoLiberada,false);
 });
+test('movement rows may repeat a SKU for distinct ledger events without duplicate-SKU blocker',()=>{
+ const file:ArquivoInventariado={nome:'movimentos.csv',sha256:'f'.repeat(64),tamanhoBytes:4,tipo:'csv',abas:[{nome:'Movimentos',indice:0,totalLinhas:3,totalColunas:4,linhaCabecalho:1,cabecalhos:['sku','tipo_movimento','quantidade','local'],vazia:false,celulas:[],linhas:[{linhaOrigem:2,valores:{sku:'SKU-MOV',tipo_movimento:'entrada',quantidade:'3',local:'LOJA'}},{linhaOrigem:3,valores:{sku:'SKU-MOV',tipo_movimento:'saida',quantidade:'1',local:'LOJA'}}]}]};
+ const sem=interpretarCamposUniversal(file),ent=reconhecerEntidadesUniversal(file,sem);
+ assert.equal(ent.entidades[0]?.tipo,'movimentacao');
+ const result=reconciliarImportacaoUniversal(file,sem,ent,[{id:7,sku:'SKU-MOV',nome:'Produto de teste'}],[]);
+ assert.equal(result.totais.duplicado_origem,0);
+ assert.equal(result.totais.movimentacao_sem_produto,0);
+ assert.equal(result.importacaoLiberada,false,'movement duplicate check does not authorize execution; reconciliation remains a separate gate');
+});

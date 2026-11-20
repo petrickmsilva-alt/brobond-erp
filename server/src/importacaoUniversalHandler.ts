@@ -147,10 +147,12 @@ export async function reconciliarImportacaoUniversalHandler(req:Request,res:Resp
  const semanticaConfirmada={...interpretacao.semantica,sugestoes:interpretacao.semantica.sugestoes.map((s:any)=>{const m=confirmado.mapeamentos.find((x:any)=>x.aba===s.aba&&x.colunaOriginal===s.colunaOriginal);return m?{...s,campoCanonico:m.campoCanonico,tipoInferido:m.tipoInferido,requerConfirmacao:false,ignorado:m.ignorado===true}:s;})};
  const entidadesConfirmadas={...interpretacao.entidades,entidades:interpretacao.entidades.entidades.map((e:any)=>{const m=confirmado.entidades.find((x:any)=>x.aba===e.aba);return m?{...e,tipo:m.tipo,requerConfirmacao:false}:e;}),relacionamentos:Array.isArray(confirmado.relacionamentos)?confirmado.relacionamentos:interpretacao.entidades.relacionamentos};
  const produtosPorSku=new Map<string,number>();
- for(const produto of produtosERP){const sku=normalizarSkuDependenciaERP(produto.sku);if(!sku)continue;produtosPorSku.set(sku,(produtosPorSku.get(sku)||0)+1);}
+ const produtoPaiPorSku=new Map<string,number|null>();
+ const produtoIdsERP=new Set<number>();
+ for(const produto of produtosERP){const produtoId=Number(produto.id);if(Number.isInteger(produtoId)&&produtoId>0)produtoIdsERP.add(produtoId);const sku=normalizarSkuDependenciaERP(produto.sku);if(!sku)continue;const count=(produtosPorSku.get(sku)||0)+1;produtosPorSku.set(sku,count);if(count===1)produtoPaiPorSku.set(sku,produto.produto_pai_id==null?null:Number(produto.produto_pai_id));}
  const skusPorAba=new Map<string,Set<string>>();
  for(const aba of arquivo.abas){const m=confirmado.mapeamentos.find((x:any)=>x.aba===aba.nome&&x.campoCanonico==='sku'&&x.ignorado!==true);if(!m)continue;const skuValues=(aba.linhas||[]).map((r:any)=>normalizarSkuDependenciaERP(r?.valores?.[m.colunaOriginal]));const skus=new Set<string>(skuValues.filter((sku:string)=>sku.length>0));skusPorAba.set(aba.nome,skus);}
- entidadesConfirmadas.dependencias=construirModeloDependencias(entidadesConfirmadas.entidades,entidadesConfirmadas.relacionamentos as any,{produtosPorSku,skusPorAba});
+ entidadesConfirmadas.dependencias=construirModeloDependencias(entidadesConfirmadas.entidades,entidadesConfirmadas.relacionamentos as any,{produtosPorSku,skusPorAba,produtoPaiPorSku,produtoIdsERP});
  const result=reconciliarImportacaoUniversal(arquivo,semanticaConfirmada,entidadesConfirmadas,produtosERP,saldosERP,activeConditionCodes);
  const versaoAprovacao=Number(row.versao||1)+1;
  const approvalHash=hashAprovacaoImportacaoUniversal(id,user.empresa_id,String(row.sha256),versaoAprovacao,confirmado,result);

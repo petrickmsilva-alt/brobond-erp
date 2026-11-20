@@ -13,7 +13,7 @@ export const UNIVERSAL_CONDITION_PRICE_FIELDS:UniversalConditionPriceDefinition[
  {field:'preco_varejo_vista',canal:'varejo',condicao:'varejo_vista',min:1,marginField:'margem_bruta_varejo_vista'},
  {field:'preco_varejo_vista_min_2_un',canal:'varejo',condicao:'varejo_vista',min:2,marginField:'margem_bruta_varejo_min_2_un'},
  {field:'preco_varejo_cartao_vista',canal:'varejo',condicao:'cartao_vista',min:1},
- {field:'preco_varejo_cartao_parcelado',canal:'varejo',condicao:'cartao_parcelado',min:1},
+ {field:'preco_varejo_cartao_parcelado',canal:'varejo',condicao:'cartao_parcelado',min:2},
 ];
 const BASE_PRICE_FIELDS=['preco_venda','preco_atacado'] as const;
 const hasValue=(v:unknown)=>v!==null&&v!==undefined&&String(v).trim()!=='';

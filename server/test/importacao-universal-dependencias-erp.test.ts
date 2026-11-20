@@ -7,7 +7,7 @@ import type { ArquivoInventariado } from '../src/importacaoUniversalLeitura';
 
 const priceOnly:ArquivoInventariado={nome:'precos.csv',sha256:'b'.repeat(64),tamanhoBytes:3,tipo:'csv',abas:[{nome:'Preços',indice:0,totalLinhas:2,totalColunas:2,linhaCabecalho:1,cabecalhos:['sku','atacado_vista'],vazia:false,celulas:[],linhas:[{linhaOrigem:2,valores:{sku:'SKU-A',atacado_vista:'39,90'}}]}]};
 const productsERP=[{id:7,sku:'SKU-A',nome:'Produto A',codigo_barras:null,cor:null,tamanho:null,custo:10,preco_venda:50,ativo:true,produto_pai_id:null,variacao_chave:null,variacao_tamanho_id:null,cor_id:null}];
-const contexto=(erpSkus:Map<string,number>,sourceSkus:Map<string,Set<string>>)=>({produtosPorSku:erpSkus,skusPorAba:sourceSkus});
+const contexto=(erpSkus:Map<string,number>,sourceSkus:Map<string,Set<string>>,parents=new Map<string,number|null>(),ids=new Set<number>())=>({produtosPorSku:erpSkus,skusPorAba:sourceSkus,produtoPaiPorSku:parents,produtoIdsERP:ids});
 function confirmedSemantic(file:ArquivoInventariado){const sem=interpretarCamposUniversal(file);return{...sem,sugestoes:sem.sugestoes.map(s=>({...s,requerConfirmacao:false,ignorado:false}))};}
 
 test('price-only sheet is classified and linked by unique existing ERP SKU without redundant product tab',()=>{
@@ -73,5 +73,29 @@ test('ERP unique SKU resolution is limited to stock, price, and movement update 
    assert.equal(dependency.estado,'pendente','SKU sheet still requires an explicit product parent');
    assert.equal(dependency.resolvidaNoERP,false);
   }
+ }
+});
+test('variation-only sheet resolves existing child SKUs to a valid ERP parent',()=>{
+ const file:ArquivoInventariado={nome:'variacoes.csv',sha256:'a'.repeat(64),tamanhoBytes:3,tipo:'csv',abas:[{nome:'Variacoes',indice:0,totalLinhas:2,totalColunas:3,linhaCabecalho:1,cabecalhos:['sku','cor','tamanho'],vazia:false,celulas:[],linhas:[{linhaOrigem:2,valores:{sku:'CHILD-M',cor:'Azul',tamanho:'M'}}]}]};
+ const sem=confirmedSemantic(file),entities=reconhecerEntidadesUniversal(file,sem);
+ assert.equal(entities.entidades[0]?.tipo,'variacao');
+ const erpCounts=new Map([['CHILD-M',1]]),sourceSkus=new Map([['Variacoes',new Set(['CHILD-M'])]]),parentBySku=new Map([['CHILD-M',100]]),erpIds=new Set([100,101]);
+ const deps=construirModeloDependencias(entities.entidades,[],contexto(erpCounts,sourceSkus,parentBySku,erpIds));
+ const dep=deps.find(d=>d.aba==='Variacoes');
+ assert.equal(dep?.estado,'vinculada');assert.equal(dep?.resolvidaNoERP,true);assert.equal(dep?.skusERPResolvidos,1);assert.deepEqual(dep?.bloqueios,[]);
+ const result=reconciliarImportacaoUniversal(file,sem,{...entities,dependencias:deps},[{id:100,sku:'PARENT',nome:'Produto pai',produto_pai_id:null},{id:101,sku:'CHILD-M',nome:'Produto filho',produto_pai_id:100}],[]);
+ assert.equal(result.totais.variacao_sem_produto,0);assert.equal(result.importacaoLiberada,false,'existing-parent resolution only clears this blocker; preview still requires approval');
+});
+
+test('variation dependency remains blocked when ERP child parent is missing or invalid',()=>{
+ const file:ArquivoInventariado={nome:'variacoes.csv',sha256:'b'.repeat(64),tamanhoBytes:3,tipo:'csv',abas:[{nome:'Variacoes',indice:0,totalLinhas:2,totalColunas:3,linhaCabecalho:1,cabecalhos:['sku','cor','tamanho'],vazia:false,celulas:[],linhas:[{linhaOrigem:2,valores:{sku:'CHILD-M',cor:'Azul',tamanho:'M'}}]}]};
+ const sem=confirmedSemantic(file),entities=reconhecerEntidadesUniversal(file,sem);
+ const invalidContexts=[
+  {parents:new Map<string,number|null>([['CHILD-M',null]]),ids:new Set<number>([101])},
+  {parents:new Map<string,number|null>([['CHILD-M',999]]),ids:new Set<number>([101])}
+ ];
+ for(const invalid of invalidContexts){
+  const deps=construirModeloDependencias(entities.entidades,[],contexto(new Map([['CHILD-M',1]]),new Map([['Variacoes',new Set(['CHILD-M'])]]),invalid.parents,invalid.ids));
+  const dep=deps[0];assert.equal(dep?.estado,'pendente');assert.equal(dep?.resolvidaNoERP,false);assert.ok(dep?.bloqueios.length>0);
  }
 });

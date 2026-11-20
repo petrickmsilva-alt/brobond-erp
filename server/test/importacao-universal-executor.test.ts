@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildExtraAttributes, mergeExtraAttributes, normalizarMargemPercentual, calcularDeltaSaldo, findByNormalizedDocument, normalizarDocumentoImportacao, normalizarTipoMovimentacao, validarQuantidadeMovimentacao } from '../src/importacaoUniversalExecutor';
+import { buildExtraAttributes, mergeExtraAttributes, normalizarMargemPercentual, calcularDeltaSaldo, findByNormalizedDocument, normalizarDocumentoImportacao, normalizarTipoMovimentacao, validarQuantidadeMovimentacao, resolveExistingVariationParent } from '../src/importacaoUniversalExecutor';
 
 test('normaliza tipos de movimentação incluindo acentos e caixa',()=>{
  assert.equal(normalizarTipoMovimentacao('ENTRADA'),'entrada');
@@ -78,4 +78,11 @@ test('localiza CPF/CNPJ existente com pontuacao no registro e escopo do tenant',
  assert.equal(findByNormalizedDocument(rows as any,'cnpj_cpf','12345678000190',1)?.id,1);
  assert.equal(findByNormalizedDocument(rows as any,'cnpj_cpf','12345678000190',2)?.id,2);
  assert.equal(findByNormalizedDocument(rows as any,'cnpj_cpf','00000000000000',1),null);
+});
+test('resolve existing variation child SKU to its ERP parent, never to the child itself',()=>{
+ const parent={id:100,sku:'PARENT',produto_pai_id:null};const child={id:101,sku:'CHILD-M',produto_pai_id:100};const rows=[parent,child] as any[];
+ assert.equal(resolveExistingVariationParent(rows,'CHILD-M'),parent);
+ assert.equal(resolveExistingVariationParent(rows,'PARENT'),null);
+ assert.equal(resolveExistingVariationParent(rows,'MISSING'),null);
+ assert.equal(resolveExistingVariationParent([{id:101,sku:'CHILD-M',produto_pai_id:999}] as any,'CHILD-M'),null);
 });

@@ -133,7 +133,7 @@ export function reconciliarImportacaoUniversal(
     }
    }
   }
-  for(const [identity,rows] of rowsBySku) if(rows.length>1) divergencias.push({tipo:'duplicado_origem',aba:aba.nome,linhasOrigem:rows,chave:identity,descricao:entidade==='estoque'?'Saldo repetido para a mesma combinação SKU × tamanho × local; resolução manual obrigatória.':'SKU aparece múltiplas vezes na mesma aba; resolução manual obrigatória.',requerAprovacao:true});
+  for(const [identity,rows] of rowsBySku) if(rows.length>1&&entidade!=='movimentacao') divergencias.push({tipo:'duplicado_origem',aba:aba.nome,linhasOrigem:rows,chave:identity,descricao:entidade==='estoque'?'Saldo repetido para a mesma combinação SKU × tamanho × local; resolução manual obrigatória.':'SKU aparece múltiplas vezes na mesma aba; resolução manual obrigatória.',requerAprovacao:true});
 
  }
  const relacionamentosRecon:RelacionamentoRecon[]=[];

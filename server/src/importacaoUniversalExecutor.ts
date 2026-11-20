@@ -51,6 +51,7 @@ function mapSheetRow(row:SheetRow,aba:string,mappings:Mapping[]){
  return mapped;
 }
 function findBySku(products:Row[],value:unknown){const k=normal(value);return k?products.find(p=>normal(p.sku)===k)??null:null;}
+export function resolveExistingVariationParent(products:Row[],childSku:unknown):Row|null{const child=findBySku(products,childSku);if(!child)return null;const parentId=Number(child.produto_pai_id);if(!Number.isInteger(parentId)||parentId<=0)return null;return products.find(p=>Number(p.id)===parentId)??null;}
 export function normalizarTipoMovimentacao(value:unknown):'entrada'|'saida'|'transferencia'|'ajuste'|null{const v=normal(value);if(v==='ENTRADA')return 'entrada';if(v==='SAIDA')return 'saida';if(v==='TRANSFERENCIA')return 'transferencia';if(v==='AJUSTE')return 'ajuste';return null;}
 export function validarQuantidadeMovimentacao(tipoRaw:unknown,quantidadeRaw:unknown){const tipo=normalizarTipoMovimentacao(tipoRaw),quantidade=parseNumber(quantidadeRaw);if(!tipo)throw new HttpError(422,'Tipo de movimentação inválido.');if(quantidade===null||!Number.isFinite(quantidade))throw new HttpError(422,'Quantidade de movimentação inválida.');if(tipo!=='ajuste'&&quantidade<=0)throw new HttpError(422,'Entrada, saída e transferência exigem quantidade positiva.');if(tipo==='ajuste'&&quantidade===0)throw new HttpError(422,'Ajuste com quantidade zero é inválido.');return{tipo,quantidade};}
 export function calcularDeltaSaldo(quantidadeAtual:number,quantidadeAlvo:number){if(!Number.isFinite(quantidadeAtual)||quantidadeAtual<0)throw new HttpError(422,'Saldo atual inválido.');if(!Number.isFinite(quantidadeAlvo)||quantidadeAlvo<0)throw new HttpError(422,'Saldo alvo inválido.');return quantidadeAlvo-quantidadeAtual;}
@@ -154,8 +155,9 @@ export async function executarImportacaoUniversalHandler(req:Request,res:Respons
     }
    }
    const findParentForSheet=(aba:string,row:SheetRow,preferRelation=false):Row|null=>{
-    const direct=mapSheetRow(row,aba,mappings);
-    if(!preferRelation&&direct.sku){const bySku=findBySku(products,direct.sku);if(bySku)return bySku;}
+    const direct=mapSheetRow(row,aba,mappings),directProduct=direct.sku?findBySku(products,direct.sku):null;
+    if(preferRelation&&direct.sku&&directProduct?.produto_pai_id){const existingParent=resolveExistingVariationParent(products,direct.sku);if(existingParent)return existingParent;}
+    if(!preferRelation&&direct.sku&&directProduct)return directProduct;
     for(const rel of relations.filter(r=>r.confirmado)){
      const forward=rel.origemAba===aba,reverse=rel.destinoAba===aba,productSheetCandidate=forward?rel.destinoAba:rel.origemAba;
      const productIsEntity=entities.some((e:any)=>e.aba===productSheetCandidate&&['produto','sku'].includes(String(e.tipo)));if(!(forward||reverse)||!productIsEntity)continue;
@@ -166,7 +168,7 @@ export async function executarImportacaoUniversalHandler(req:Request,res:Respons
      const destMapped=mapSheetRow(match,productSheet,mappings);
      const found=findProductByKey(products,destMapped.sku??destMapped.codigo_barras??rowValue(match,productField));if(found)return found;
     }
-    if(direct.sku)return findBySku(products,direct.sku);
+    if(direct.sku){if(preferRelation&&directProduct?.produto_pai_id)return null;return directProduct;}
     return null;
    };
    for(const item of variationRows){

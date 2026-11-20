@@ -39,6 +39,8 @@ export type DependenciaAba = {
 export type ContextoDependenciasERP = {
   produtosPorSku:Map<string,number>;
   skusPorAba:Map<string,Set<string>>;
+  produtoPaiPorSku?:Map<string,number|null>;
+  produtoIdsERP?:Set<number>;
 };
 export type ReconhecimentoEntidades = {
   entidades: EntidadeDetectada[];
@@ -97,7 +99,8 @@ export function construirModeloDependencias(entidades:EntidadeDetectada[],relaci
   const skusERPResolvidos=[...skusERPdaAba].filter(sku=>contextoERP?.produtosPorSku.get(sku)===1);
   const skusERPComPendencia=[...skusERPdaAba].filter(sku=>contextoERP?.produtosPorSku.get(sku)!==1);
   const resolvidaNoERP=['estoque','preco','movimentacao'].includes(e.tipo)&&candidatos.length===0&&skusERPdaAba.size>0&&skusERPComPendencia.length===0;
-  if(resolvidaNoERP)return{aba:e.aba,tipo:e.tipo,etapa:regra.etapa,etapaLabel:regra.label,paisAlternativos:regra.pais,abasPaiDisponiveis:[],estado:'vinculada',bloqueios:[],nota:regra.nota+' Dependência resolvida pelo snapshot do ERP: '+skusERPResolvidos.length+' SKU(s) único(s) existente(s), sem exigir aba de produto redundante.',resolvidaNoERP:true,skusERPResolvidos:skusERPResolvidos.length,skusERPComPendencia:0};
+  const resolvidaVariacaoNoERP=e.tipo==='variacao'&&skusERPdaAba.size>0&&skusERPComPendencia.length===0&&[...skusERPdaAba].every(sku=>{const parentId=contextoERP?.produtoPaiPorSku?.get(sku);return parentId!==undefined&&parentId!==null&&contextoERP?.produtoIdsERP?.has(Number(parentId))===true;});
+  if(resolvidaNoERP||resolvidaVariacaoNoERP)return{aba:e.aba,tipo:e.tipo,etapa:regra.etapa,etapaLabel:regra.label,paisAlternativos:regra.pais,abasPaiDisponiveis:[],estado:'vinculada',bloqueios:[],nota:regra.nota+' Dependência resolvida pelo snapshot do ERP: '+skusERPResolvidos.length+' SKU(s) único(s) existente(s), sem exigir aba de produto redundante.',resolvidaNoERP:true,skusERPResolvidos:skusERPResolvidos.length,skusERPComPendencia:0};
   const abasPaiDisponiveis=candidatos.map(p=>{
    const links=relacionamentos.filter(r=>(r.origemAba===p.aba&&r.destinoAba===e.aba)||(r.origemAba===e.aba&&r.destinoAba===p.aba));
    return{aba:p.aba,tipo:p.tipo,relacionada:links.length>0,confirmada:links.some((r:any)=>r.confirmado===true),campos:links.map(r=>r.campoOrigem+' ↔ '+r.campoDestino)};
