@@ -7,10 +7,11 @@ import { construirModeloDependencias } from './importacaoUniversalEntidades';
 import { HttpError } from './errors';
 
 
-const CAMPOS_CANONICOS_IMPORTACAO = new Set(['sku','nome','categoria','colecao','cor','tamanho','quantidade','custo','custo_aquisicao','custo_fabricacao','custo_adicional','imposto','margem','preco_venda','preco_atacado','preco_promocional','qtd_min_atacado','codigo_barras','ncm','cest','peso_g','local','local_destino','fornecedor','telefone','email','cnpj_cpf','descricao','composicao','material','modelagem','genero','marca','tipo','condicao','producao','unidade','tags','formato','ativo','codigo_item','codigo_categoria','codigo_industria','variacao_tamanho_id','motivo','tipo_movimento','data','referencia_externa']);
+export const CAMPOS_CANONICOS_IMPORTACAO = new Set(['sku','nome','categoria','colecao','cor','tamanho','quantidade','custo','custo_aquisicao','custo_fabricacao','custo_adicional','imposto','margem','preco_venda','preco_atacado','preco_promocional','qtd_min_atacado','codigo_barras','ncm','cest','peso_g','local','local_destino','fornecedor','telefone','email','cnpj_cpf','descricao','composicao','material','modelagem','genero','marca','tipo','condicao','producao','unidade','tags','formato','ativo','codigo_item','codigo_categoria','codigo_industria','variacao_tamanho_id','motivo','tipo_movimento','data','referencia_externa','preco_atacado_vista','preco_atacado_boleto_30','preco_atacado_boleto_30_60','preco_atacado_boleto_30_60_90','preco_atacado_cartao_debito','preco_atacado_cartao_credito_vista','preco_atacado_cartao_credito_30_60','preco_atacado_cartao_credito_30_60_90','preco_varejo_vista','preco_varejo_vista_min_2_un','preco_varejo_cartao_vista','preco_varejo_cartao_parcelado','margem_bruta_atacado_vista','margem_bruta_varejo_vista','margem_bruta_varejo_min_2_un']);
 const TIPOS_CAMPO_IMPORTACAO = new Set(['texto','numero','percentual','data','booleano','codigo','desconhecido']);
 const TIPOS_ENTIDADE_IMPORTACAO = new Set(['produto','sku','variacao','estoque','preco','movimentacao','cliente','fornecedor','tabela_generica']);
 const TIPOS_BLOQUEADORES_APROVACAO = new Set(['duplicado_origem','conflito_sku','conflito_codigo_barras','ambiguidade','campo_desconhecido','orfao_relacionamento','conflito_dimensional','produto_sem_sku','sku_sem_produto','variacao_sem_produto','estoque_sem_produto','estoque_sem_local','preco_sem_produto','movimentacao_sem_produto','entidade_sem_executor']);
+function normalizarSkuDependenciaERP(v:unknown):string{return Array.from(String(v??'').normalize('NFD')).filter(ch=>ch.charCodeAt(0)<768||ch.charCodeAt(0)>879).join('').trim().toUpperCase();}
 function hashAprovacaoUniversal(id:string,empresaId:number,sha256:string,versao:number,mapeamentoConfirmado:unknown,reconciliacao:unknown):string{
  return createHash('sha256').update(JSON.stringify({id,empresaId,sha256,versao,mapeamentoConfirmado,reconciliacao})).digest('hex');
 }
@@ -146,7 +147,11 @@ export async function reconciliarImportacaoUniversalHandler(req:Request,res:Resp
  if(!confirmado||confirmado.versao!==1||!Array.isArray(confirmado.mapeamentos)||!Array.isArray(confirmado.entidades)) throw new HttpError(409,'Confirme e salve o mapeamento antes de reconciliar.');
  const semanticaConfirmada={...interpretacao.semantica,sugestoes:interpretacao.semantica.sugestoes.map((s:any)=>{const m=confirmado.mapeamentos.find((x:any)=>x.aba===s.aba&&x.colunaOriginal===s.colunaOriginal);return m?{...s,campoCanonico:m.campoCanonico,tipoInferido:m.tipoInferido,requerConfirmacao:false,ignorado:m.ignorado===true}:s;})};
  const entidadesConfirmadas={...interpretacao.entidades,entidades:interpretacao.entidades.entidades.map((e:any)=>{const m=confirmado.entidades.find((x:any)=>x.aba===e.aba);return m?{...e,tipo:m.tipo,requerConfirmacao:false}:e;}),relacionamentos:Array.isArray(confirmado.relacionamentos)?confirmado.relacionamentos:interpretacao.entidades.relacionamentos};
- entidadesConfirmadas.dependencias=construirModeloDependencias(entidadesConfirmadas.entidades,entidadesConfirmadas.relacionamentos as any);
+ const produtosPorSku=new Map<string,number>();
+ for(const produto of produtosERP){const sku=normalizarSkuDependenciaERP(produto.sku);if(!sku)continue;produtosPorSku.set(sku,(produtosPorSku.get(sku)||0)+1);}
+ const skusPorAba=new Map<string,Set<string>>();
+ for(const aba of arquivo.abas){const m=confirmado.mapeamentos.find((x:any)=>x.aba===aba.nome&&x.campoCanonico==='sku'&&x.ignorado!==true);if(!m)continue;const skuValues=(aba.linhas||[]).map((r:any)=>normalizarSkuDependenciaERP(r?.valores?.[m.colunaOriginal]));const skus=new Set<string>(skuValues.filter((sku:string)=>sku.length>0));skusPorAba.set(aba.nome,skus);}
+ entidadesConfirmadas.dependencias=construirModeloDependencias(entidadesConfirmadas.entidades,entidadesConfirmadas.relacionamentos as any,{produtosPorSku,skusPorAba});
  const result=reconciliarImportacaoUniversal(arquivo,semanticaConfirmada,entidadesConfirmadas,produtosERP,saldosERP);
  const versaoAprovacao=Number(row.versao||1)+1;
  const approvalHash=hashAprovacaoUniversal(id,user.empresa_id,String(row.sha256),versaoAprovacao,confirmado,result);
