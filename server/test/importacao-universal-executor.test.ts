@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { calcularDeltaSaldo, normalizarDocumentoImportacao, normalizarTipoMovimentacao, validarQuantidadeMovimentacao } from '../src/importacaoUniversalExecutor';
+import { buildExtraAttributes, calcularDeltaSaldo, findByNormalizedDocument, normalizarDocumentoImportacao, normalizarTipoMovimentacao, validarQuantidadeMovimentacao } from '../src/importacaoUniversalExecutor';
 
 test('normaliza tipos de movimentação incluindo acentos e caixa',()=>{
  assert.equal(normalizarTipoMovimentacao('ENTRADA'),'entrada');
@@ -38,4 +38,23 @@ test('normaliza CPF/CNPJ para chave idempotente sem pontuação',()=>{
  assert.equal(normalizarDocumentoImportacao('  00.111.222/0001-33  '),'00111222000133');
  assert.equal(normalizarDocumentoImportacao(''),'');
  assert.equal(normalizarDocumentoImportacao(null),'');
+});
+
+test('ignora explicitamente colunas mapeadas como Ignorar campo ao montar extras',()=>{
+ const mappings=[
+  {aba:'Produtos',colunaOriginal:'SKU',campoCanonico:'sku',ignorado:false},
+  {aba:'Produtos',colunaOriginal:'Interno',campoCanonico:null,ignorado:true},
+  {aba:'Produtos',colunaOriginal:'Notas',campoCanonico:null,ignorado:false},
+ ];
+ assert.deepEqual(buildExtraAttributes({SKU:'A-1',Interno:'segredo',Notas:'extra'},'Produtos',mappings),{Notas:'extra'});
+});
+
+test('localiza CPF/CNPJ existente com pontuacao no registro e escopo do tenant',()=>{
+ const rows=[
+  {id:1,empresa_id:1,cnpj_cpf:'12.345.678/0001-90',nome:'Tenant A'},
+  {id:2,empresa_id:2,cnpj_cpf:'12345678000190',nome:'Tenant B'},
+ ];
+ assert.equal(findByNormalizedDocument(rows as any,'cnpj_cpf','12345678000190',1)?.id,1);
+ assert.equal(findByNormalizedDocument(rows as any,'cnpj_cpf','12345678000190',2)?.id,2);
+ assert.equal(findByNormalizedDocument(rows as any,'cnpj_cpf','00000000000000',1),null);
 });

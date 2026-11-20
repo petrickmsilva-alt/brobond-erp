@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import type { Request, Response } from 'express';
 import { query as queryDb } from './db';
 import { currentUser } from './auth';
@@ -8,19 +7,20 @@ import { getStore, createRecord, lancarMovimentacaoDentro, escopoDe, type Actor 
 import { validatePayload, parseNumber } from './validate';
 import { validarReferenciasDaEmpresa } from './empresa';
 import type { Row, Tx } from './store';
+import { hashAprovacaoImportacaoUniversal } from './importacaoUniversalHash';
 
 const BLOQUEADORES = new Set(['duplicado_origem','conflito_sku','conflito_codigo_barras','ambiguidade','campo_desconhecido','orfao_relacionamento','conflito_dimensional','produto_sem_sku','sku_sem_produto','variacao_sem_produto','estoque_sem_produto','estoque_sem_local','preco_sem_produto','movimentacao_sem_produto','entidade_sem_executor']);
 const normal=(v:unknown)=>String(v??'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim().toUpperCase();
 export function normalizarDocumentoImportacao(value:unknown):string{return String(value??'').replace(/\D/g,'');}
+export function findByNormalizedDocument(rows:Row[],fieldName:string,documentKey:string,empresaId:number):Row|null{const key=normalizarDocumentoImportacao(documentKey);if(!key)return null;return rows.find(r=>Number(r.empresa_id)===empresaId&&normalizarDocumentoImportacao(r[fieldName])===key)??null;}
 const parseNum=(v:unknown)=>{const n=parseNumber(v);if(n===null)throw new HttpError(422,'Valor numérico inválido na importação.');return n;};
 const field=(r:Resource,n:string)=>r.fields.find(f=>f.name===n);
 type SheetRow={linhaOrigem:number;valores:Record<string,unknown>};
 type Mapping={aba:string;colunaOriginal:string;campoCanonico:string|null;ignorado?:boolean};
 type Relation={origemAba:string;destinoAba:string;campoOrigem:string;campoDestino:string;tipo:string;confirmado?:boolean};
 type Session={id:string;empresa_id:number;usuario_id:number;status:string;versao:number;sha256:string;interpretacao:any;reconciliacao:any;preview:any;inventario_abas:any[];resultado:any};
-function hashAprovacao(id:string,empresaId:number,sha:string,versao:number,mapeamento:unknown,recon:unknown){return createHash('sha256').update(JSON.stringify({id,empresaId,sha256:sha,versao,mapeamentoConfirmado:mapeamento,reconciliacao:recon})).digest('hex');}
 function mapRow(values:Record<string,unknown>,aba:string,mappings:Mapping[]){const out:Record<string,unknown>={};for(const m of mappings)if(m.aba===aba&&m.campoCanonico&&!m.ignorado&&values[m.colunaOriginal]!==undefined)out[m.campoCanonico]=values[m.colunaOriginal];return out;}
-function buildExtraAttributes(values:Record<string,unknown>,aba:string,mappings:Mapping[]){const used=new Set(mappings.filter(m=>m.aba===aba&&m.campoCanonico&&!m.ignorado).map(m=>m.colunaOriginal));const extras:Record<string,unknown>={};for(const [k,v] of Object.entries(values))if(!used.has(k)&&v!==null&&v!==undefined&&String(v).trim()!=='')extras[k]=v;return extras;}
+export function buildExtraAttributes(values:Record<string,unknown>,aba:string,mappings:Mapping[]){const used=new Set(mappings.filter(m=>m.aba===aba&&m.campoCanonico&&!m.ignorado).map(m=>m.colunaOriginal));const ignored=new Set(mappings.filter(m=>m.aba===aba&&m.ignorado===true).map(m=>m.colunaOriginal));const extras:Record<string,unknown>={};for(const [k,v] of Object.entries(values))if(!used.has(k)&&!ignored.has(k)&&v!==null&&v!==undefined&&String(v).trim()!=='')extras[k]=v;return extras;}
 function findByName(rows:Row[],value:unknown){const key=normal(value);if(!key)return null;return rows.find(r=>normal(r.nome)===key||normal(r.codigo)===key||normal(r.razao_social)===key)??null;}
 async function fetchAll(s:any,r:Resource,empresaId:number,tx:Tx):Promise<Row[]>{
  const all:Row[]=[];let page=1;
@@ -92,7 +92,7 @@ export async function executarImportacaoUniversalHandler(req:Request,res:Respons
    if(session.status!=='aprovado')throw new HttpError(409,'Somente sessões aprovadas podem executar. Status atual: '+session.status);
    const interpret=session.interpretacao||{},confirmed=interpret.mapeamentoConfirmado,recon=session.reconciliacao,approval=session.preview?.aprovacao;
    if(!confirmed||!recon||!approval?.hash||!Array.isArray(recon.divergencias))throw new HttpError(409,'Checkpoint de aprovação incompleto. Reconcile e aprove novamente.');
-   const hash=hashAprovacao(session.id,empresaId,String(session.sha256),Number(approval.versao),confirmed,recon);
+   const hash=hashAprovacaoImportacaoUniversal(session.id,empresaId,String(session.sha256),Number(approval.versao),confirmed,recon);
    if(hash!==approval.hash)throw new HttpError(409,'Hash da aprovação não corresponde aos dados persistidos. Reconcile e aprove novamente.');
    const blocking=recon.divergencias.filter((d:any)=>BLOQUEADORES.has(String(d.tipo)));
    const pendingDependencies=(recon.dependencias||[]).filter((d:any)=>['sku','variacao','estoque','preco','movimentacao'].includes(String(d.tipo))&&d.estado==='pendente'&&Array.isArray(d.bloqueios)&&d.bloqueios.length>0);
@@ -263,13 +263,17 @@ export async function executarImportacaoUniversalHandler(req:Request,res:Respons
    }
 
    const genericRows=[...customerRows,...supplierRows];
+   const existingGenericRowsByType=new Map<string,Row[]>();
    for(const item of genericRows){
     const mapped=mapSheetRow(item.row,item.aba,mappings),resource=getResource(item.tipo==='cliente'?'clientes':'fornecedores')!;
     const documentKey=item.tipo==='cliente'?normalizarDocumentoImportacao(mapped.cnpj_cpf):normalizarDocumentoImportacao(mapped.cnpj_cpf??mapped.cnpj);
+    const documentField=item.tipo==='cliente'?'cnpj_cpf':'cnpj';
     const emailKey=String(mapped.email??'').trim().toLowerCase();
-    if(!documentKey&&!emailKey)throw new HttpError(422,`Importação de ${item.tipo} exige documento ou e-mail para garantir idempotência (${item.aba} linha ${item.row.linhaOrigem}).`);
-    const match=documentKey?await s.findOneWhere(resource,{empresa_id:empresaId,[item.tipo==='cliente'?'cnpj_cpf':'cnpj']:documentKey},tx):await s.findOneWhere(resource,{empresa_id:empresaId,email:emailKey},tx);
-    if(match){processResult(item.tipo,item.aba,item.row.linhaOrigem,'ignorados',Number(match.id),'Registro já existente; importação não sobrescreve dados cadastrais automaticamente.');continue;}
+    if(!documentKey&&!emailKey)throw new HttpError(422,'Importacao de '+item.tipo+' exige documento ou e-mail para garantir idempotencia ('+item.aba+' linha '+item.row.linhaOrigem+').');
+    let existingRows=existingGenericRowsByType.get(item.tipo);
+    if(!existingRows){existingRows=await fetchAll(s,resource,empresaId,tx);existingGenericRowsByType.set(item.tipo,existingRows);}
+    const match=documentKey?findByNormalizedDocument(existingRows,documentField,documentKey,empresaId):existingRows.find(r=>Number(r.empresa_id)===empresaId&&String(r.email??'').trim().toLowerCase()===emailKey)??null;
+    if(match){processResult(item.tipo,item.aba,item.row.linhaOrigem,'ignorados',Number(match.id),'Registro ja existente; importacao nao sobrescreve dados cadastrais automaticamente.');continue;}
     const payload:Record<string,unknown>={};
     const allowed=new Set(resource.fields.map(f=>f.name));
     for(const [key,value] of Object.entries(mapped)){
@@ -278,6 +282,7 @@ export async function executarImportacaoUniversalHandler(req:Request,res:Respons
     }
     if(!payload.nome)throw new HttpError(422,`Cadastro ${item.tipo} sem nome (${item.aba} linha ${item.row.linhaOrigem}).`);
     const created=await createRecord(resource,payload,user as Actor,{escopo:escopoDe(user as any),tx});
+    existingRows.push(created);
     await auditImport(s,tx,user as Actor,empresaId,resource,Number(created.id),{sessionId:id,sheet:item.aba,line:item.row.linhaOrigem,sha:sessionMeta.sha,operation:item.tipo+' criado',key:documentKey||emailKey});
     processResult(item.tipo,item.aba,item.row.linhaOrigem,'criados',Number(created.id),documentKey||emailKey);
    }
@@ -305,7 +310,7 @@ export async function retryImportacaoUniversalHandler(req:Request,res:Response):
  const row=result.rows[0];if(row.status!=='falhou')throw new HttpError(409,'Somente uma importação com falha pode ser retomada.');
  const approval=row.preview?.aprovacao,confirmed=row.interpretacao?.mapeamentoConfirmado,recon=row.reconciliacao;
  if(!approval?.hash||!confirmed||!recon)throw new HttpError(409,'Checkpoint de aprovação ausente; faça uma nova reconciliação e aprovação.');
- const hash=hashAprovacao(row.id,empresaId,String(row.sha256),Number(approval.versao),confirmed,recon);
+ const hash=hashAprovacaoImportacaoUniversal(row.id,empresaId,String(row.sha256),Number(approval.versao),confirmed,recon);
  if(hash!==approval.hash)throw new HttpError(409,'A aprovação não corresponde mais aos dados. Reconcile e aprove novamente.');
  const saved=await queryDb(`UPDATE importacao_universal_sessoes SET status='aprovado',erro=NULL,versao=versao+1,atualizado_em=now() WHERE id=$1 AND empresa_id=$2 AND usuario_id=$3 AND status='falhou' AND versao=$4 RETURNING versao`,[id,empresaId,user.id,Number(row.versao)]);
  if(!saved.rows.length)throw new HttpError(409,'Sessão alterada em paralelo; atualize e tente novamente.');

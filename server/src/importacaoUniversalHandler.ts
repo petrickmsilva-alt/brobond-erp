@@ -5,6 +5,7 @@ import { currentUser } from './auth';
 import { analisarArquivoUniversal } from './importacaoUniversalAnalise';
 import { construirModeloDependencias } from './importacaoUniversalEntidades';
 import { HttpError } from './errors';
+import { hashAprovacaoImportacaoUniversal } from './importacaoUniversalHash';
 
 
 export const CAMPOS_CANONICOS_IMPORTACAO = new Set(['sku','nome','categoria','colecao','cor','tamanho','quantidade','custo','custo_aquisicao','custo_fabricacao','custo_adicional','imposto','margem','preco_venda','preco_atacado','preco_promocional','qtd_min_atacado','codigo_barras','ncm','cest','peso_g','local','local_destino','fornecedor','telefone','email','cnpj_cpf','descricao','composicao','material','modelagem','genero','marca','tipo','condicao','producao','unidade','tags','formato','ativo','codigo_item','codigo_categoria','codigo_industria','variacao_tamanho_id','motivo','tipo_movimento','data','referencia_externa','preco_atacado_vista','preco_atacado_boleto_30','preco_atacado_boleto_30_60','preco_atacado_boleto_30_60_90','preco_atacado_cartao_debito','preco_atacado_cartao_credito_vista','preco_atacado_cartao_credito_30_60','preco_atacado_cartao_credito_30_60_90','preco_varejo_vista','preco_varejo_vista_min_2_un','preco_varejo_cartao_vista','preco_varejo_cartao_parcelado','margem_bruta_atacado_vista','margem_bruta_varejo_vista','margem_bruta_varejo_min_2_un']);
@@ -12,9 +13,6 @@ const TIPOS_CAMPO_IMPORTACAO = new Set(['texto','numero','percentual','data','bo
 const TIPOS_ENTIDADE_IMPORTACAO = new Set(['produto','sku','variacao','estoque','preco','movimentacao','cliente','fornecedor','tabela_generica']);
 const TIPOS_BLOQUEADORES_APROVACAO = new Set(['duplicado_origem','conflito_sku','conflito_codigo_barras','ambiguidade','campo_desconhecido','orfao_relacionamento','conflito_dimensional','produto_sem_sku','sku_sem_produto','variacao_sem_produto','estoque_sem_produto','estoque_sem_local','preco_sem_produto','movimentacao_sem_produto','entidade_sem_executor']);
 function normalizarSkuDependenciaERP(v:unknown):string{return Array.from(String(v??'').normalize('NFD')).filter(ch=>ch.charCodeAt(0)<768||ch.charCodeAt(0)>879).join('').trim().toUpperCase();}
-function hashAprovacaoUniversal(id:string,empresaId:number,sha256:string,versao:number,mapeamentoConfirmado:unknown,reconciliacao:unknown):string{
- return createHash('sha256').update(JSON.stringify({id,empresaId,sha256,versao,mapeamentoConfirmado,reconciliacao})).digest('hex');
-}
 export async function salvarMapeamentoImportacaoUniversalHandler(req:Request,res:Response):Promise<void>{
  const user=currentUser(req);
  if(!user||!user.empresa_id||user.empresa_id<=0) throw new HttpError(403,'Usuário sem empresa ativa para mapeamento.');
@@ -154,7 +152,7 @@ export async function reconciliarImportacaoUniversalHandler(req:Request,res:Resp
  entidadesConfirmadas.dependencias=construirModeloDependencias(entidadesConfirmadas.entidades,entidadesConfirmadas.relacionamentos as any,{produtosPorSku,skusPorAba});
  const result=reconciliarImportacaoUniversal(arquivo,semanticaConfirmada,entidadesConfirmadas,produtosERP,saldosERP);
  const versaoAprovacao=Number(row.versao||1)+1;
- const approvalHash=hashAprovacaoUniversal(id,user.empresa_id,String(row.sha256),versaoAprovacao,confirmado,result);
+ const approvalHash=hashAprovacaoImportacaoUniversal(id,user.empresa_id,String(row.sha256),versaoAprovacao,confirmado,result);
  const previewAtual=(row.preview&&typeof row.preview==='object')?row.preview:{};
  const previewAtualizado={...previewAtual,previaConsolidada:result.previaConsolidada,resumoDimensional:result.resumoDimensional,erpSnapshot:{produtos:produtosERP.length,saldos:saldosERP.length},approvalHash,approvalVersion:versaoAprovacao};
  const saved=await queryDb(`UPDATE importacao_universal_sessoes SET reconciliacao=$2::jsonb,preview=$3::jsonb,status='aguardando_aprovacao',versao=versao+1,atualizado_em=now()
@@ -175,7 +173,7 @@ export async function aprovarImportacaoUniversalHandler(req:Request,res:Response
  const confirmado=(row.interpretacao as any)?.mapeamentoConfirmado;
  const resultado=row.reconciliacao as any;
  if(!confirmado||confirmado.versao!==1||!resultado||!Array.isArray(resultado.divergencias))throw new HttpError(409,'Prévia consolidada ou mapeamento confirmado ausente. Reconcile antes de aprovar.');
- const approvalHash=hashAprovacaoUniversal(id,user.empresa_id,String(row.sha256),Number(row.versao),confirmado,resultado);
+ const approvalHash=hashAprovacaoImportacaoUniversal(id,user.empresa_id,String(row.sha256),Number(row.versao),confirmado,resultado);
  if(String(req.body?.hashPreview||'')!==approvalHash||Number(req.body?.versao)!==Number(row.versao))throw new HttpError(409,'A prévia mudou ou o hash de aprovação está desatualizado. Reconcilie novamente.');
  const bloqueadores=resultado.divergencias.filter((d:any)=>TIPOS_BLOQUEADORES_APROVACAO.has(String(d.tipo)));
  const bloqueadoresDependencias=(resultado.dependencias||[]).filter((d:any)=>['sku','variacao','estoque','preco','movimentacao'].includes(String(d.tipo))&&d.estado==='pendente'&&Array.isArray(d.bloqueios)&&d.bloqueios.length>0);
