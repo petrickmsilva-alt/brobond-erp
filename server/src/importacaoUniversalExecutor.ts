@@ -195,12 +195,37 @@ export async function executarImportacaoUniversalHandler(req:Request,res:Respons
     for(const f of priceFields)if(mapped[f]!==undefined&&mapped[f]!==null&&String(mapped[f]).trim()!==''){const target=f==='custo_aquisicao'?'custo':f==='qtd_min_atacado'?'atacado_min_qtd':f;if(field(productosResource,target))data[target]=mapped[f];}
     for(const k of ['custo_fabricacao','custo_adicional','imposto','margem'])if(mapped[k]!==undefined&&!field(productosResource,k))extras[k+'_origem']=mapped[k];
     if(Object.keys(extras).length&&field(productosResource,'atributos_adicionais'))data.atributos_adicionais={...(product.atributos_adicionais&&typeof product.atributos_adicionais==='object'?product.atributos_adicionais:{}),...extras};
-    if(!Object.keys(data).length){processResult(item.tipo,item.aba,item.row.linhaOrigem,'ignorados',Number(product.id),'Nenhum campo de preço reconhecido.');continue;}
-    const validated=validatePayload(productosResource,data,'update');
-    await validarReferenciasDaEmpresa(productosResource,validated,{empresaId,consolidado:false,permitidas:[empresaId]},(target,targetId,empresa,t)=>s.findOneWhere(target,{id:targetId,empresa_id:empresa},t),tx);
-    const updated=await s.update(productosResource,Number(product.id),validated,tx);if(!updated)throw new HttpError(409,'Produto desapareceu durante a atualização de preços.');
-    Object.assign(product,updated);await auditImport(s,tx,user as Actor,empresaId,productosResource,Number(product.id),{sessionId:id,sheet:item.aba,line:item.row.linhaOrigem,sha:sessionMeta.sha,operation:'preço atualizado',key:String(product.sku)});
-    processResult(item.tipo,item.aba,item.row.linhaOrigem,'atualizados',Number(product.id),String(product.sku));
+    const conditionPrices=[
+     {field:'preco_atacado_vista',canal:'atacado',condicao:'atacado_vista',min:1,marginField:'margem_bruta_atacado_vista'},
+     {field:'preco_atacado_boleto_30',canal:'atacado',condicao:'boleto_30',min:1},
+     {field:'preco_atacado_boleto_30_60',canal:'atacado',condicao:'boleto_30_60',min:1},
+     {field:'preco_atacado_boleto_30_60_90',canal:'atacado',condicao:'boleto_30_60_90',min:1},
+     {field:'preco_atacado_cartao_debito',canal:'atacado',condicao:'cartao_debito',min:1},
+     {field:'preco_atacado_cartao_credito_vista',canal:'atacado',condicao:'cartao_credito_vista',min:1},
+     {field:'preco_atacado_cartao_credito_30_60',canal:'atacado',condicao:'cartao_credito_30_60',min:1},
+     {field:'preco_atacado_cartao_credito_30_60_90',canal:'atacado',condicao:'cartao_credito_30_60_90',min:1},
+     {field:'preco_varejo_vista',canal:'varejo',condicao:'varejo_vista',min:1,marginField:'margem_bruta_varejo_vista'},
+     {field:'preco_varejo_vista_min_2_un',canal:'varejo',condicao:'varejo_vista',min:2,marginField:'margem_bruta_varejo_min_2_un'},
+     {field:'preco_varejo_cartao_vista',canal:'varejo',condicao:'cartao_vista',min:1},
+     {field:'preco_varejo_cartao_parcelado',canal:'varejo',condicao:'cartao_parcelado',min:1}
+    ];
+    let conditionRowsUpserted=0;
+    for(const cp of conditionPrices){
+     const raw=mapped[cp.field];if(raw===undefined||raw===null||String(raw).trim()==='')continue;
+     const preco=parseNum(raw);if(preco<0)throw new HttpError(422,`Preço negativo inválido (${cp.field}) em ${item.aba} linha ${item.row.linhaOrigem}.`);
+     const marginRaw=cp.marginField?mapped[cp.marginField]:undefined,margem=marginRaw===undefined||marginRaw===null||String(marginRaw).trim()===''?null:parseNum(marginRaw);
+     await tx.query(`INSERT INTO produto_precos_condicao (empresa_id,produto_id,canal,condicao,preco,origem,criado_por,quantidade_minima,margem_pct,regra_calculo) VALUES ($1,$2,$3,$4,$5,'importacao_universal',$6,$7,$8,$9::jsonb) ON CONFLICT (empresa_id,produto_id,canal,condicao,quantidade_minima) WHERE vigencia_fim IS NULL DO UPDATE SET preco=EXCLUDED.preco,origem=EXCLUDED.origem,atualizado_em=now(),atualizado_por=EXCLUDED.criado_por,margem_pct=EXCLUDED.margem_pct,regra_calculo=EXCLUDED.regra_calculo`,[empresaId,Number(product.id),cp.canal,cp.condicao,preco,user.id,cp.min,margem,JSON.stringify({origemPlanilha:item.aba,linha:item.row.linhaOrigem,campoPreco:cp.field,condicao:cp.condicao,quantidadeMinima:cp.min,marginSource:cp.marginField??null})]);
+     conditionRowsUpserted++;
+    }
+    if(!Object.keys(data).length&&!conditionRowsUpserted){processResult(item.tipo,item.aba,item.row.linhaOrigem,'ignorados',Number(product.id),'Nenhum campo de preço reconhecido.');continue;}
+    if(Object.keys(data).length){
+     const validated=validatePayload(productosResource,data,'update');
+     await validarReferenciasDaEmpresa(productosResource,validated,{empresaId,consolidado:false,permitidas:[empresaId]},(target,targetId,empresa,t)=>s.findOneWhere(target,{id:targetId,empresa_id:empresa},t),tx);
+     const updated=await s.update(productosResource,Number(product.id),validated,tx);if(!updated)throw new HttpError(409,'Produto desapareceu durante a atualização de preços.');
+     Object.assign(product,updated);
+    }
+    await auditImport(s,tx,user as Actor,empresaId,productosResource,Number(product.id),{sessionId:id,sheet:item.aba,line:item.row.linhaOrigem,sha:sessionMeta.sha,operation:'preço/condições atualizados',key:String(product.sku)});
+    processResult(item.tipo,item.aba,item.row.linhaOrigem,'atualizados',Number(product.id),`${String(product.sku)}; ${conditionRowsUpserted} condições comerciais`);
    }
    for(const item of movementRows){
     const mapped=mapSheetRow(item.row,item.aba,mappings),product=findParentForSheet(item.aba,item.row);

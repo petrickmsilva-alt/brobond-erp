@@ -5,7 +5,11 @@ export type CampoCanonico =
   | 'custo' | 'custo_aquisicao' | 'custo_fabricacao' | 'custo_adicional' | 'imposto' | 'margem' | 'preco_venda' | 'preco_atacado' | 'preco_promocional' | 'qtd_min_atacado' | 'codigo_barras' | 'ncm' | 'peso_g'
   | 'local' | 'fornecedor' | 'telefone' | 'email' | 'cnpj_cpf' | 'descricao' | 'composicao'
   | 'material' | 'modelagem' | 'genero' | 'marca' | 'cest' | 'tipo' | 'condicao' | 'producao' | 'unidade' | 'tags' | 'formato' | 'ativo' | 'codigo_item' | 'codigo_categoria' | 'codigo_industria' | 'variacao_tamanho_id' | 'local_destino' | 'motivo'
-  | 'tipo_movimento' | 'data' | 'referencia_externa';
+  | 'tipo_movimento' | 'data' | 'referencia_externa'
+  | 'preco_atacado_vista' | 'preco_atacado_boleto_30' | 'preco_atacado_boleto_30_60' | 'preco_atacado_boleto_30_60_90'
+  | 'preco_atacado_cartao_debito' | 'preco_atacado_cartao_credito_vista' | 'preco_atacado_cartao_credito_30_60' | 'preco_atacado_cartao_credito_30_60_90'
+  | 'preco_varejo_vista' | 'preco_varejo_vista_min_2_un' | 'preco_varejo_cartao_vista' | 'preco_varejo_cartao_parcelado'
+  | 'margem_bruta_atacado_vista' | 'margem_bruta_varejo_vista' | 'margem_bruta_varejo_min_2_un';
 
 export type TipoCampo = 'texto' | 'numero' | 'percentual' | 'data' | 'booleano' | 'codigo' | 'desconhecido';
 
@@ -45,6 +49,21 @@ const DICIONARIO: Record<CampoCanonico, string[]> = {
   preco_atacado: ['preco_atacado','atacado','wholesale_price','preco_wholesale','preco_revenda'],
   preco_promocional: ['preco_promocional','promocao','preco_promo','promotional_price','sale_price'],
   qtd_min_atacado: ['qtd_min_atacado','quantidade_minima_atacado','minimum_wholesale_quantity','minimo_atacado'],
+  preco_atacado_vista: ['preco_atacado_vista','atacado_vista'],
+  preco_atacado_boleto_30: ['preco_atacado_boleto_30','atacado_boleto_30','boleto_30'],
+  preco_atacado_boleto_30_60: ['preco_atacado_boleto_30_60','atacado_boleto_30_60','boleto_30_60'],
+  preco_atacado_boleto_30_60_90: ['preco_atacado_boleto_30_60_90','atacado_boleto_30_60_90','boleto_30_60_90'],
+  preco_atacado_cartao_debito: ['preco_atacado_cartao_debito','atacado_cartao_debito'],
+  preco_atacado_cartao_credito_vista: ['preco_atacado_cartao_credito_vista','atacado_cartao_credito_vista'],
+  preco_atacado_cartao_credito_30_60: ['preco_atacado_cartao_credito_30_60','atacado_cartao_credito_30_60'],
+  preco_atacado_cartao_credito_30_60_90: ['preco_atacado_cartao_credito_30_60_90','atacado_cartao_credito_30_60_90'],
+  preco_varejo_vista: ['preco_varejo_vista','varejo_vista'],
+  preco_varejo_vista_min_2_un: ['preco_varejo_vista_min_2_un','varejo_vista_min_2_un','varejo_2_un'],
+  preco_varejo_cartao_vista: ['preco_varejo_cartao_vista','varejo_cartao_vista','cartao_vista'],
+  preco_varejo_cartao_parcelado: ['preco_varejo_cartao_parcelado','varejo_cartao_parcelado','cartao_parcelado'],
+  margem_bruta_atacado_vista: ['margem_bruta_atacado_vista','margem_atacado_vista'],
+  margem_bruta_varejo_vista: ['margem_bruta_varejo_vista','margem_varejo_vista'],
+  margem_bruta_varejo_min_2_un: ['margem_bruta_varejo_min_2_un','margem_varejo_2_un'],
   codigo_barras: ['codigo_barras','ean','gtin','barcode','bar_code'],
   ncm: ['ncm','classificacao_fiscal'],
   peso_g: ['peso','peso_g','weight','peso_gramas','gramas'],
