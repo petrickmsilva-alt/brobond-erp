@@ -13,6 +13,14 @@ import { hashAprovacaoImportacaoUniversal } from './importacaoUniversalHash';
 const BLOQUEADORES = new Set(['duplicado_origem','conflito_sku','conflito_codigo_barras','ambiguidade','campo_desconhecido','orfao_relacionamento','conflito_dimensional','produto_sem_sku','sku_sem_produto','variacao_sem_produto','estoque_sem_produto','estoque_sem_local','preco_sem_produto','movimentacao_sem_produto','entidade_sem_executor','condicao_pagamento_ausente']);
 const normal=(v:unknown)=>String(v??'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim().toUpperCase();
 export function normalizarDocumentoImportacao(value:unknown):string{return String(value??'').replace(/\D/g,'');}
+export function resolveMappedVariationSize(sizes:Row[],sizeText:unknown,sizeId:unknown,empresaId:number):Row|null{
+ const byText=sizeText===undefined||sizeText===null||String(sizeText).trim()===''?null:sizes.find(t=>normal(t.codigo)===normal(sizeText)||normal(t.nome)===normal(sizeText))??null;
+ const byId=sizeId===undefined||sizeId===null||String(sizeId).trim()===''?null:sizes.find(t=>Number(t.id)===Number(parseNum(sizeId))&&Number(t.empresa_id)===empresaId)??null;
+ if(sizeText!==undefined&&sizeText!==null&&String(sizeText).trim()!==''&&!byText)throw new HttpError(422,'Mapped size text does not exist in the active tenant.');
+ if(sizeId!==undefined&&sizeId!==null&&String(sizeId).trim()!==''&&!byId)throw new HttpError(422,'Mapped size ID is invalid or belongs to another tenant.');
+ if(byText&&byId&&Number(byText.id)!==Number(byId.id))throw new HttpError(422,'Mapped size text and ID conflict.');
+ return byId??byText;
+}
 export function findByNormalizedDocument(rows:Row[],fieldName:string,documentKey:string,empresaId:number):Row|null{const key=normalizarDocumentoImportacao(documentKey);if(!key)return null;return rows.find(r=>Number(r.empresa_id)===empresaId&&normalizarDocumentoImportacao(r[fieldName])===key)??null;}
 const parseNum=(v:unknown)=>{const n=parseNumber(v);if(n===null)throw new HttpError(422,'Valor numérico inválido na importação.');return n;};
 export function normalizarMargemPercentual(valor:unknown):number{const numero=parseNumber(valor);if(numero===null)throw new HttpError(422,'Margem percentual inválida: use percentual de 0 a menor que 100, ou fração Excel.');const percentualExplicito=typeof valor==='string'&&valor.includes('%');const pontosPercentuais=percentualExplicito?numero:(Math.abs(numero)>1?numero:numero*100);if(!Number.isFinite(pontosPercentuais)||pontosPercentuais<0||pontosPercentuais>=100)throw new HttpError(422,'Margem percentual inválida: use percentual de 0 a menor que 100, ou fração Excel.');return Math.round((pontosPercentuais+Number.EPSILON)*1_000_000)/1_000_000;}
@@ -115,7 +123,7 @@ export async function executarImportacaoUniversalHandler(req:Request,res:Respons
    // SKU-only tabs are dependent identifiers; they materialize as child SKUs, not duplicate parent products.
    const variationRows=entityRows.filter(x=>['sku','variacao'].includes(x.tipo));
    const priceRows=entityRows.filter(x=>x.tipo==='preco');
-   const requiredConditionCodes=requiredConditionCodesFromMappedRows(priceRows.map(item=>mapSheetRow(item.row,item.aba,mappings)));
+   const requiredConditionCodes=requiredConditionCodesFromMappedRows([...productRows,...priceRows].map(item=>mapSheetRow(item.row,item.aba,mappings)));
    if(requiredConditionCodes.length){
     const catalog=await tx.query('SELECT codigo FROM condicoes_pagamento WHERE empresa_id=$1 AND ativo=true AND codigo=ANY($2::text[])',[empresaId,requiredConditionCodes]);
     const availableCodes=new Set(catalog.rows.map((r:any)=>String(r.codigo)));
@@ -133,6 +141,17 @@ export async function executarImportacaoUniversalHandler(req:Request,res:Respons
     report[acao]++;report.porEntidade[tipo][acao]++;
     report.linhas.push({entidade:tipo,aba,linha,acao,id:idRegistro??null,detalhe:detalhe??null});
    };
+   const persistConditionPrices=async(item:any,mapped:Record<string,unknown>,product:Row)=>{
+    let count=0;
+    for(const cp of UNIVERSAL_CONDITION_PRICE_FIELDS){
+     const raw=mapped[cp.field];if(raw===undefined||raw===null||String(raw).trim()==='')continue;
+     const preco=parseNum(raw);if(preco<0)throw new HttpError(422,`Negative condition price (${cp.field}) at ${item.aba} row ${item.row.linhaOrigem}.`);
+     const marginRaw=cp.marginField?mapped[cp.marginField]:undefined,margem=marginRaw===undefined||marginRaw===null||String(marginRaw).trim()===''?null:normalizarMargemPercentual(marginRaw);
+     await persistUniversalConditionPrice(tx,{empresaId,produtoId:Number(product.id),canal:cp.canal,condicao:cp.condicao,preco,quantidadeMinima:cp.min,margemPct:margem,criadoPor:Number(user.id),regraCalculo:{origemPlanilha:item.aba,linha:item.row.linhaOrigem,campoPreco:cp.field,condicao:cp.condicao,quantidadeMinima:cp.min,marginSource:cp.marginField??null}});
+     count++;
+    }
+    return count;
+   };
 
    for(const item of productRows){
     const mapped=mapSheetRow(item.row,item.aba,mappings),sku=String(mapped.sku??'').trim();
@@ -147,11 +166,14 @@ export async function executarImportacaoUniversalHandler(req:Request,res:Respons
      const updated=await s.update(productosResource,Number(existing.id),data,tx);
      if(!updated)throw new HttpError(409,`Produto ${sku} deixou de existir durante a importação.`);
      await auditImport(s,tx,user as Actor,empresaId,productosResource,Number(existing.id),{sessionId:id,sheet:item.aba,line:item.row.linhaOrigem,sha:sessionMeta.sha,operation:'produto atualizado',key:sku});
-     Object.assign(existing,updated);processResult(item.tipo,item.aba,item.row.linhaOrigem,'atualizados',Number(existing.id),sku);
+     Object.assign(existing,updated);
+     const conditions=await persistConditionPrices(item,mapped,existing);
+     processResult(item.tipo,item.aba,item.row.linhaOrigem,'atualizados',Number(existing.id),`${sku}; ${conditions} commercial conditions persisted`);
     }else{
      const created=await createRecord(productosResource,payload,user as Actor,{escopo:escopoDe(user as any),tx});
      products.push(created);await auditImport(s,tx,user as Actor,empresaId,productosResource,Number(created.id),{sessionId:id,sheet:item.aba,line:item.row.linhaOrigem,sha:sessionMeta.sha,operation:'produto criado',key:sku});
-     processResult(item.tipo,item.aba,item.row.linhaOrigem,'criados',Number(created.id),sku);
+     const conditions=await persistConditionPrices(item,mapped,created);
+     processResult(item.tipo,item.aba,item.row.linhaOrigem,'criados',Number(created.id),`${sku}; ${conditions} commercial conditions persisted`);
     }
    }
    const findParentForSheet=(aba:string,row:SheetRow,preferRelation=false):Row|null=>{
@@ -175,10 +197,9 @@ export async function executarImportacaoUniversalHandler(req:Request,res:Respons
     const mapped=mapSheetRow(item.row,item.aba,mappings),parent=findParentForSheet(item.aba,item.row,true),sku=String(mapped.sku??'').trim();
     if(!parent||!sku)throw new HttpError(422,`SKU/variação sem SKU ou produto-pai resolvido em ${item.aba} linha ${item.row.linhaOrigem}.`);
     if(normal(sku)===normal(parent.sku)){processResult(item.tipo,item.aba,item.row.linhaOrigem,'ignorados',Number(parent.id),'SKU corresponde ao próprio produto-pai; vínculo de referência, nenhum filho duplicado criado.');continue;}
-    const sizeRaw=mapped.tamanho,size=sizeRaw===undefined||String(sizeRaw).trim()===''?null:tamanhosMap.get(normal(sizeRaw));
-    if(sizeRaw!==undefined&&String(sizeRaw).trim()!==''&&!size)throw new HttpError(422,`Tamanho "${String(sizeRaw)}" não existe no cadastro ERP (linha ${item.row.linhaOrigem}).`);
+    const sizeRaw=mapped.tamanho,size=resolveMappedVariationSize(tamanhos,sizeRaw,mapped.variacao_tamanho_id,empresaId);
     const colorRaw=mapped.cor,color= colorRaw===undefined||String(colorRaw).trim()===''?null:findRef(refs.cores,colorRaw,['nome','codigo']),cor=colorRaw===undefined||String(colorRaw).trim()===''?parent.cor:colorRaw;
-    const chave=[normal(cor),normal(sizeRaw)].filter(Boolean).join('|')||sku;
+    const chave=[normal(cor),normal(size?.codigo??size?.nome??sizeRaw)].filter(Boolean).join('|')||sku;
     const existing=findBySku(products,sku);
     const childPayload:Record<string,unknown>={sku,nome:String(mapped.nome??'').trim()||String(parent.nome??sku),formato:'simples',origem_dados:'importacao',cor:cor??null,cor_id:color?.id??parent.cor_id??null,variacao_tamanho_id:size?.id??null};
     for(const inherited of ['categoria_id','colecao_id','custo','preco_venda','preco_atacado','atacado_min_qtd','marca','descricao','composicao','material','modelagem','genero','tipo','grade_id'])if(parent[inherited]!==undefined&&parent[inherited]!==null)childPayload[inherited]=parent[inherited];
@@ -207,15 +228,7 @@ export async function executarImportacaoUniversalHandler(req:Request,res:Respons
     for(const f of priceFields)if(mapped[f]!==undefined&&mapped[f]!==null&&String(mapped[f]).trim()!==''){const target=f==='custo_aquisicao'?'custo':f==='qtd_min_atacado'?'atacado_min_qtd':f;if(field(productosResource,target))data[target]=mapped[f];}
     for(const k of ['custo_fabricacao','custo_adicional','imposto','margem'])if(mapped[k]!==undefined&&!field(productosResource,k))extras[k+'_origem']=mapped[k];
     if(Object.keys(extras).length&&field(productosResource,'atributos_adicionais'))data.atributos_adicionais={...(product.atributos_adicionais&&typeof product.atributos_adicionais==='object'?product.atributos_adicionais:{}),...extras};
-    const conditionPrices=UNIVERSAL_CONDITION_PRICE_FIELDS;
-    let conditionRowsUpserted=0;
-    for(const cp of conditionPrices){
-     const raw=mapped[cp.field];if(raw===undefined||raw===null||String(raw).trim()==='')continue;
-     const preco=parseNum(raw);if(preco<0)throw new HttpError(422,`Preço negativo inválido (${cp.field}) em ${item.aba} linha ${item.row.linhaOrigem}.`);
-     const marginRaw=cp.marginField?mapped[cp.marginField]:undefined,margem=marginRaw===undefined||marginRaw===null||String(marginRaw).trim()===''?null:normalizarMargemPercentual(marginRaw);
-     await persistUniversalConditionPrice(tx,{empresaId,produtoId:Number(product.id),canal:cp.canal,condicao:cp.condicao,preco,quantidadeMinima:cp.min,margemPct:margem,criadoPor:Number(user.id),regraCalculo:{origemPlanilha:item.aba,linha:item.row.linhaOrigem,campoPreco:cp.field,condicao:cp.condicao,quantidadeMinima:cp.min,marginSource:cp.marginField??null}});
-     conditionRowsUpserted++;
-    }
+    const conditionRowsUpserted=await persistConditionPrices(item,mapped,product);
     const basePriceSafeData=preserveNonzeroBasePrices(product,data);
     if(!Object.keys(basePriceSafeData).length&&!conditionRowsUpserted){processResult(item.tipo,item.aba,item.row.linhaOrigem,'ignorados',Number(product.id),'Nenhum campo de preço reconhecido.');continue;}
     if(Object.keys(basePriceSafeData).length){
