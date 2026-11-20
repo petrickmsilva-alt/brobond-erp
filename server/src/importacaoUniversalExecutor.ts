@@ -15,6 +15,7 @@ const normal=(v:unknown)=>String(v??'').normalize('NFD').replace(/[\u0300-\u036f
 export function normalizarDocumentoImportacao(value:unknown):string{return String(value??'').replace(/\D/g,'');}
 export function findByNormalizedDocument(rows:Row[],fieldName:string,documentKey:string,empresaId:number):Row|null{const key=normalizarDocumentoImportacao(documentKey);if(!key)return null;return rows.find(r=>Number(r.empresa_id)===empresaId&&normalizarDocumentoImportacao(r[fieldName])===key)??null;}
 const parseNum=(v:unknown)=>{const n=parseNumber(v);if(n===null)throw new HttpError(422,'Valor numérico inválido na importação.');return n;};
+export function normalizarMargemPercentual(valor:number):number{const fracao=Math.abs(valor)>1?valor/100:valor;if(!Number.isFinite(fracao)||fracao<0||fracao>=1)throw new HttpError(422,'Margem percentual inválida: use percentual de 0 a menor que 100, ou fração Excel.');return Math.round((fracao*100+Number.EPSILON)*1_000_000)/1_000_000;}
 const field=(r:Resource,n:string)=>r.fields.find(f=>f.name===n);
 type SheetRow={linhaOrigem:number;valores:Record<string,unknown>};
 type Mapping={aba:string;colunaOriginal:string;campoCanonico:string|null;ignorado?:boolean};
@@ -209,7 +210,7 @@ export async function executarImportacaoUniversalHandler(req:Request,res:Respons
     for(const cp of conditionPrices){
      const raw=mapped[cp.field];if(raw===undefined||raw===null||String(raw).trim()==='')continue;
      const preco=parseNum(raw);if(preco<0)throw new HttpError(422,`Preço negativo inválido (${cp.field}) em ${item.aba} linha ${item.row.linhaOrigem}.`);
-     const marginRaw=cp.marginField?mapped[cp.marginField]:undefined,margem=marginRaw===undefined||marginRaw===null||String(marginRaw).trim()===''?null:parseNum(marginRaw);
+     const marginRaw=cp.marginField?mapped[cp.marginField]:undefined,margem=marginRaw===undefined||marginRaw===null||String(marginRaw).trim()===''?null:normalizarMargemPercentual(parseNum(marginRaw));
      await persistUniversalConditionPrice(tx,{empresaId,produtoId:Number(product.id),canal:cp.canal,condicao:cp.condicao,preco,quantidadeMinima:cp.min,margemPct:margem,criadoPor:Number(user.id),regraCalculo:{origemPlanilha:item.aba,linha:item.row.linhaOrigem,campoPreco:cp.field,condicao:cp.condicao,quantidadeMinima:cp.min,marginSource:cp.marginField??null}});
      conditionRowsUpserted++;
     }

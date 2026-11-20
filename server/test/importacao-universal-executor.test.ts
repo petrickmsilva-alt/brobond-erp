@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildExtraAttributes, mergeExtraAttributes, calcularDeltaSaldo, findByNormalizedDocument, normalizarDocumentoImportacao, normalizarTipoMovimentacao, validarQuantidadeMovimentacao } from '../src/importacaoUniversalExecutor';
+import { buildExtraAttributes, mergeExtraAttributes, normalizarMargemPercentual, calcularDeltaSaldo, findByNormalizedDocument, normalizarDocumentoImportacao, normalizarTipoMovimentacao, validarQuantidadeMovimentacao } from '../src/importacaoUniversalExecutor';
 
 test('normaliza tipos de movimentação incluindo acentos e caixa',()=>{
  assert.equal(normalizarTipoMovimentacao('ENTRADA'),'entrada');
@@ -8,6 +8,15 @@ test('normaliza tipos de movimentação incluindo acentos e caixa',()=>{
  assert.equal(normalizarTipoMovimentacao('Transferência'),'transferencia');
  assert.equal(normalizarTipoMovimentacao('ajuste'),'ajuste');
  assert.equal(normalizarTipoMovimentacao('inventário'),null);
+});
+
+test('normaliza margem percentual em fração Excel ou pontos percentuais',()=>{
+ assert.equal(normalizarMargemPercentual(0.35),35);
+ assert.equal(normalizarMargemPercentual(35),35);
+ assert.equal(normalizarMargemPercentual(0.355),35.5);
+ assert.equal(normalizarMargemPercentual(75.5),75.5);
+ assert.throws(()=>normalizarMargemPercentual(100),e=>(e as any)?.status===422);
+ assert.throws(()=>normalizarMargemPercentual(-5),e=>(e as any)?.status===422);
 });
 
 test('valida quantidade positiva para entrada, saída e transferência',()=>{
