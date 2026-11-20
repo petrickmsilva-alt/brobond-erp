@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildExtraAttributes, mergeExtraAttributes, normalizarMargemPercentual, calcularDeltaSaldo, findByNormalizedDocument, normalizarDocumentoImportacao, normalizarTipoMovimentacao, validarQuantidadeMovimentacao, resolveExistingVariationParent } from '../src/importacaoUniversalExecutor';
+import { buildExtraAttributes, mergeExtraAttributes, normalizarMargemPercentual, calcularDeltaSaldo, findByNormalizedDocument, normalizarDocumentoImportacao, normalizarTipoMovimentacao, validarQuantidadeMovimentacao, resolveExistingVariationParent, resolveMappedVariationSize } from '../src/importacaoUniversalExecutor';
 
 test('normaliza tipos de movimentação incluindo acentos e caixa',()=>{
  assert.equal(normalizarTipoMovimentacao('ENTRADA'),'entrada');
@@ -85,4 +85,14 @@ test('resolve existing variation child SKU to its ERP parent, never to the child
  assert.equal(resolveExistingVariationParent(rows,'PARENT'),null);
  assert.equal(resolveExistingVariationParent(rows,'MISSING'),null);
  assert.equal(resolveExistingVariationParent([{id:101,sku:'CHILD-M',produto_pai_id:999}] as any,'CHILD-M'),null);
+});
+
+test('mapped variation size ID resolves directly and remains tenant-scoped',()=>{
+ const sizes=[{id:7,empresa_id:1,codigo:'M',nome:'Medium'},{id:8,empresa_id:2,codigo:'G',nome:'Large'}] as any;
+ assert.equal(resolveMappedVariationSize(sizes,null,7,1)?.id,7);
+ assert.equal(resolveMappedVariationSize(sizes,'M',7,1)?.id,7);
+ assert.equal(resolveMappedVariationSize(sizes,null,null,1),null);
+ assert.throws(()=>resolveMappedVariationSize(sizes,null,8,1),e=>(e as any)?.status===422);
+ assert.throws(()=>resolveMappedVariationSize(sizes,'M',9,1),e=>(e as any)?.status===422);
+ assert.throws(()=>resolveMappedVariationSize(sizes,'M',7,2),e=>(e as any)?.status===422);
 });

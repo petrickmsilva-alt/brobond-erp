@@ -10,6 +10,13 @@ test('preserves existing nonzero base prices and fills only zero or missing fiel
  assert.deepEqual(preserveNonzeroBasePrices({preco_venda:59.9},{preco_venda:59.9}),{});
 });
 
+test('product rows carrying condition prices are included in commercial preflight',()=>{
+ const mappedProduct={sku:'BB-TEST',nome:'Produto teste',preco_atacado_vista:'99.90',preco_atacado_boleto_30:'90.00',preco_atacado_boleto_30_60:'85.00',preco_atacado_boleto_30_60_90:'80.00',preco_atacado_cartao_debito:'98.00',preco_atacado_cartao_credito_vista:'97.00',preco_atacado_cartao_credito_30_60:'94.00',preco_atacado_cartao_credito_30_60_90:'90.00',preco_varejo_vista:'129.90',preco_varejo_vista_min_2_un:'119.90',preco_varejo_cartao_vista:'129.90',preco_varejo_cartao_parcelado:'139.90'};
+ const codes=requiredConditionCodesFromMappedRows([mappedProduct]);
+ assert.equal(codes.length,11);
+ assert.deepEqual(codes,['atacado_vista','boleto_30','boleto_30_60','boleto_30_60_90','cartao_debito','cartao_credito_vista','cartao_credito_30_60','cartao_credito_30_60_90','varejo_vista','cartao_vista','cartao_parcelado'].sort());
+});
+
 test('condition catalog preflight checks only condition codes used by mapped prices',()=>{
  const required=requiredConditionCodesFromMappedRows([{preco_atacado_vista:'99,90',preco_atacado_boleto_30:'80,00',sku:'BB1'},{preco_varejo_vista_min_2_un:'75,00'},{preco_varejo_cartao_vista:''}]);
  assert.deepEqual(required,['atacado_vista','boleto_30','varejo_vista']);
