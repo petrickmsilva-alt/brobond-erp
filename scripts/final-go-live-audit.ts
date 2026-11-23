@@ -340,7 +340,7 @@ const FLUXOS_ESPERADOS: { rota: string; pagina: string }[] = [
   { rota: 'config/impressao/agentes/:machineId/editar', pagina: 'client/src/pages/ImpressaoAgenteEdicaoPage.tsx' },
   { rota: 'webhooks/novo', pagina: 'client/src/pages/WebhookFormPage.tsx' },
   { rota: 'webhooks/:id/editar', pagina: 'client/src/pages/WebhookFormPage.tsx' },
-  { rota: 'importar/:tipo', pagina: 'client/src/pages/ImportarPage.tsx' },
+  { rota: 'importacao-universal', pagina: 'client/src/pages/ImportacaoUniversalPage.tsx' },
   { rota: 'usuarios/novo', pagina: 'client/src/pages/UsuariosPage.tsx' },
   { rota: 'usuarios/:id/editar', pagina: 'client/src/pages/UsuariosPage.tsx' },
 ];

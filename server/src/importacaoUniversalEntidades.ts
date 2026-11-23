@@ -3,7 +3,7 @@ import type { AnaliseSemantica, CampoCanonico, SugestaoCampo } from './importaca
 
 export type EntidadeDetectada = {
   aba: string;
-  tipo: 'produto' | 'sku' | 'variacao' | 'estoque' | 'preco' | 'movimentacao' | 'cliente' | 'fornecedor' | 'tabela_generica';
+  tipo: 'produto' | 'sku' | 'variacao' | 'estoque' | 'preco' | 'movimentacao' | 'cliente' | 'fornecedor' | 'insumo' | 'tabela_generica';
   confianca: number;
   camposRelacionados: CampoCanonico[];
   linhasComDados: number;
@@ -64,12 +64,19 @@ function score(c: CampoCanonico[], ...sets: CampoCanonico[][]): number {
 function classificar(c: CampoCanonico[]): EntidadeDetectada['tipo'] {
   if (c.includes('tipo_movimento') && c.includes('quantidade')) return 'movimentacao';
   if (c.includes('quantidade') && (c.includes('sku') || c.includes('nome')) && (c.includes('tamanho') || c.includes('local'))) return 'estoque';
-  if (c.includes('sku') && (c.includes('cor') || c.includes('tamanho'))) return 'variacao';
+  // SKU, cor ou tamanho, isoladamente, não caracterizam variação: uma aba de
+  // SKUs com atributos continua sendo identificador de produto. A variação
+  // exige hierarquia explícita (SKU pai) ou a tríade Produto + cor + tamanho.
+  if (c.includes('sku_pai') && c.includes('sku')) return 'variacao';
+  if (c.includes('nome') && c.includes('sku') && c.includes('cor') && c.includes('tamanho') && !c.includes('quantidade')) return 'variacao';
+  if (c.includes('custo_medio') && c.includes('unidade')) return 'insumo';
   if (c.includes('sku') && c.includes('nome')) return 'produto';
   const camposPreco=['preco_venda','preco_atacado','preco_promocional','custo','preco_atacado_vista','preco_atacado_boleto_30','preco_atacado_boleto_30_60','preco_atacado_boleto_30_60_90','preco_atacado_cartao_debito','preco_atacado_cartao_credito_vista','preco_atacado_cartao_credito_30_60','preco_atacado_cartao_credito_30_60_90','preco_varejo_vista','preco_varejo_vista_min_2_un','preco_varejo_cartao_vista','preco_varejo_cartao_parcelado','margem_bruta_atacado_vista','margem_bruta_varejo_vista','margem_bruta_varejo_min_2_un'];
   if (c.some(f=>camposPreco.includes(f)) && !c.includes('nome')) return 'preco';
   if (c.includes('sku')) return 'sku';
-  if (c.includes('fornecedor')) return 'fornecedor';
+  if (c.includes('insumo') || (c.includes('custo_medio') && c.includes('fornecedor'))) return 'insumo';
+  if (c.includes('contato') && c.includes('cnpj_cpf')) return 'fornecedor';
+  if (c.includes('fornecedor') && !c.includes('nome')) return 'fornecedor';
   if (c.includes('email') && c.includes('telefone')) return 'cliente';
   if (c.includes('cor') || c.includes('tamanho')) return 'sku';
   return 'tabela_generica';
@@ -125,10 +132,11 @@ export function reconhecerEntidadesUniversal(arquivo: ArquivoInventariado, anali
     const unknown=s.some(x=>x.campoCanonico===null);
     const confidence= type==='produto' ? score(fields,['sku','nome']) :
       type==='estoque' ? score(fields,['quantidade','sku','tamanho']) :
-      type==='variacao' ? score(fields,['sku','cor','tamanho']) :
+      type==='variacao' ? score(fields,['sku_pai','sku','cor','tamanho']) :
+      type==='insumo' ? score(fields,['custo_medio','unidade']) :
       type==='movimentacao' ? score(fields,['tipo_movimento','quantidade']) :
       type==='preco' ? score(fields,['preco_venda','preco_atacado','custo']) : 0.45;
-    const reason=type==='tabela_generica' ? 'Estrutura não corresponde com segurança a uma entidade do ERP; preservada como tabela genérica.' :
+    const reason=type==='variacao' ? 'Classificada como variação apenas com hierarquia explícita (produto pai / SKU pai) ou produto + cor + tamanho sem saldo.' : type==='tabela_generica' ? 'Estrutura não corresponde com segurança a uma entidade do ERP; preservada como tabela genérica.' :
       'Classificação baseada somente nos campos reconhecidos; não autoriza importação automaticamente.';
     return {aba:aba.nome,tipo:type,confianca:confidence,camposRelacionados:fields,linhasComDados:aba.linhas.length,motivo:reason,requerConfirmacao:unknown||confidence<0.9};
   });

@@ -420,9 +420,9 @@ export const FLUXOS_PAGINA = [
   },
   {
     id: 'importacao',
-    nome: 'Importação de planilhas (fluxo de módulo)',
-    rota: 'importar/:tipo',
-    pagina: 'client/src/pages/ImportarPage.tsx',
+    nome: 'Importação Universal (fluxo único)',
+    rota: 'importacao-universal',
+    pagina: 'client/src/pages/ImportacaoUniversalPage.tsx',
     proibido: [/<ImportModal\b/, /components\/ImportModal/],
   },
   {

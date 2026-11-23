@@ -15,7 +15,6 @@ import { finalizarMedicaoTela, iniciarMedicaoTela } from './lib/perf';
 // quando a rota é realmente acessada.
 const ModulePage = lazy(() => import('./pages/ModulePage'));
 const OperacionalDetalhePage = lazy(() => import('./pages/OperacionalDetalhePage'));
-const CargaPoliticaComercialPage = lazy(() => import('./pages/CargaPoliticaComercialPage'));
 const FinanceiroPeriodosPage = lazy(() => import('./pages/FinanceiroPeriodosPage'));
 const FinanceiroExtratoPage = lazy(() => import('./pages/FinanceiroExtratoPage'));
 const FiscalObrigacaoDetalhePage = lazy(() => import('./pages/FiscalObrigacaoDetalhePage'));
@@ -97,7 +96,6 @@ const WebhookFormPage = lazy(() => import('./pages/WebhookFormPage'));
 const EmpresaFormPage = lazy(() => import('./pages/EmpresaFormPage'));
 const NovaFichaPage = lazy(() => import('./pages/NovaFichaPage'));
 const DevolucaoNovaPage = lazy(() => import('./pages/DevolucaoNovaPage'));
-const ImportarPage = lazy(() => import('./pages/ImportarPage'));
 const ImportacaoUniversalPage = lazy(() => import('./pages/ImportacaoUniversalPage'));
 const RecebimentoCompraPage = lazy(() => import('./pages/RecebimentoCompraPage'));
 const ImpressaoTerminalFormPage = lazy(() => import('./pages/ImpressaoTerminalFormPage'));
@@ -533,7 +531,6 @@ export default function App() {
                 </ModuleAccess>
               }
             />
-            <Route path="importar/:tipo" element={<ImportarPage />} />
             <Route path="importacao-universal" element={<AdminOnly><ImportacaoUniversalPage /></AdminOnly>} />
             <Route
               path="compras/:id/receber"
@@ -676,14 +673,6 @@ export default function App() {
             {/* OPERATIONAL CONTROL PLANE — detalhe/aprovação em PÁGINA própria
                 (padrão LISTA → PÁGINA). A aprovação exige sessão do ERP com
                 confirmação humana; o agente MCP não aprova. */}
-            <Route
-              path="carga-politica-comercial"
-              element={
-                <AdminOnly>
-                  <CargaPoliticaComercialPage />
-                </AdminOnly>
-              }
-            />
             <Route
               path="operacional/:id"
               element={

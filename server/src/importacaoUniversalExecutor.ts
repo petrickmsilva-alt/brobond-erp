@@ -1,4 +1,5 @@
 import type { Request, Response } from 'express';
+import { createHash } from 'node:crypto';
 import { query as queryDb } from './db';
 import { currentUser } from './auth';
 import { HttpError } from './errors';
@@ -9,8 +10,9 @@ import { validarReferenciasDaEmpresa } from './empresa';
 import type { Row, Tx } from './store';
 import { UNIVERSAL_CONDITION_PRICE_FIELDS, preserveNonzeroBasePrices, requiredConditionCodesFromMappedRows, missingConditionCodes, persistUniversalConditionPrice } from './importacaoUniversalPrecos';
 import { hashAprovacaoImportacaoUniversal } from './importacaoUniversalHash';
+import { normalizarDestinoImportacao } from './importacaoUniversalDestinos';
 
-const BLOQUEADORES = new Set(['duplicado_origem','conflito_sku','conflito_codigo_barras','ambiguidade','campo_desconhecido','orfao_relacionamento','conflito_dimensional','produto_sem_sku','sku_sem_produto','variacao_sem_produto','estoque_sem_produto','estoque_sem_local','preco_sem_produto','movimentacao_sem_produto','entidade_sem_executor','condicao_pagamento_ausente']);
+const BLOQUEADORES = new Set(['duplicado_origem','conflito_sku','conflito_codigo_barras','ambiguidade','campo_desconhecido','politica_status_invalido','politica_preco_conflitante','limite_carga_excedido','orfao_relacionamento','conflito_dimensional','produto_sem_sku','sku_sem_produto','variacao_sem_produto','estoque_sem_produto','estoque_sem_local','preco_sem_produto','movimentacao_sem_produto','entidade_sem_executor','condicao_pagamento_ausente']);
 const normal=(v:unknown)=>String(v??'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim().toUpperCase();
 export function normalizarDocumentoImportacao(value:unknown):string{return String(value??'').replace(/\D/g,'');}
 export function resolveMappedVariationSize(sizes:Row[],sizeText:unknown,sizeId:unknown,_empresaId:number):Row|null{
@@ -29,7 +31,7 @@ const field=(r:Resource,n:string)=>r.fields.find(f=>f.name===n);
 type SheetRow={linhaOrigem:number;valores:Record<string,unknown>};
 type Mapping={aba:string;colunaOriginal:string;campoCanonico:string|null;ignorado?:boolean};
 type Relation={origemAba:string;destinoAba:string;campoOrigem:string;campoDestino:string;tipo:string;confirmado?:boolean};
-type Session={id:string;empresa_id:number;usuario_id:number;status:string;versao:number;sha256:string;interpretacao:any;reconciliacao:any;preview:any;inventario_abas:any[];resultado:any};
+type Session={id:string;empresa_id:number;usuario_id:number;status:string;versao:number;sha256:string;interpretacao:any;reconciliacao:any;preview:any;inventario_abas:any[];resultado:any;arquivo_original:Buffer|Uint8Array|null;nome_arquivo:string};
 function mapRow(values:Record<string,unknown>,aba:string,mappings:Mapping[]){const out:Record<string,unknown>={};for(const m of mappings)if(m.aba===aba&&m.campoCanonico&&!m.ignorado&&values[m.colunaOriginal]!==undefined)out[m.campoCanonico]=values[m.colunaOriginal];return out;}
 export function buildExtraAttributes(values:Record<string,unknown>,aba:string,mappings:Mapping[]){const used=new Set(mappings.filter(m=>m.aba===aba&&m.campoCanonico&&!m.ignorado).map(m=>m.colunaOriginal));const ignored=new Set(mappings.filter(m=>m.aba===aba&&m.ignorado===true).map(m=>m.colunaOriginal));const extras:Record<string,unknown>={};for(const [k,v] of Object.entries(values))if(!used.has(k)&&!ignored.has(k)&&v!==null&&v!==undefined&&String(v).trim()!=='')extras[k]=v;return extras;}
 export function mergeExtraAttributes(existing:unknown,incoming:Record<string,unknown>):Record<string,unknown>{const preserved=existing&&typeof existing==='object'&&!Array.isArray(existing)?existing as Record<string,unknown>:{};return{...preserved,...incoming};}
@@ -97,7 +99,7 @@ export async function executarImportacaoUniversalHandler(req:Request,res:Respons
  try{
   completed=await s.transaction(async(tx)=>{
    if(!tx)throw new HttpError(503,'Transação PostgreSQL indisponível.');
-   const lock=await tx.query(`SELECT id,empresa_id,usuario_id,status,versao,sha256,interpretacao,reconciliacao,preview,inventario_abas,resultado
+   const lock=await tx.query(`SELECT id,empresa_id,usuario_id,status,versao,sha256,interpretacao,reconciliacao,preview,inventario_abas,resultado,arquivo_original,nome_arquivo
     FROM importacao_universal_sessoes WHERE id=$1 AND empresa_id=$2 AND usuario_id=$3 FOR UPDATE`,[id,empresaId,user.id]);
    if(!lock.rows.length)throw new HttpError(404,'Sessão não encontrada.');
    const session=lock.rows[0] as Session;
@@ -111,9 +113,20 @@ export async function executarImportacaoUniversalHandler(req:Request,res:Respons
    const pendingDependencies=(recon.dependencias||[]).filter((d:any)=>['sku','variacao','estoque','preco','movimentacao'].includes(String(d.tipo))&&d.estado==='pendente'&&Array.isArray(d.bloqueios)&&d.bloqueios.length>0);
    if(blocking.length||pendingDependencies.length)throw new HttpError(409,'Importação bloqueada por divergências ou dependências pendentes.',{bloqueadores:blocking,dependencias:pendingDependencies});
    const started=await tx.query(`UPDATE importacao_universal_sessoes SET status='importando',importacao_iniciada_em=COALESCE(importacao_iniciada_em,now()),atualizado_em=now() WHERE id=$1 AND empresa_id=$2 AND usuario_id=$3 AND status='aprovado' AND versao=$4 RETURNING id`,[id,empresaId,user.id,Number(session.versao)]);if(!started.rows.length)throw new HttpError(409,'A sessão perdeu o gate de execução; nenhuma gravação foi iniciada.');
+   if(normalizarDestinoImportacao(interpret.destino)==='politica_comercial'){
+    const {enfileirarExecucaoPoliticaComercial}=await import('./importacaoUniversalPolitica');
+    const bytes=session.arquivo_original instanceof Buffer?session.arquivo_original:Buffer.from((session as any).arquivo_original||[]);
+    const hash=createHash('sha256').update(bytes).digest('hex');
+    if(hash!==String(session.sha256).trim())throw new HttpError(409,'Arquivo original alterado; execução bloqueada.');
+    const enfileirado=await enfileirarExecucaoPoliticaComercial(user,id,String((session as any).nome_arquivo),bytes.toString('base64'),tx);
+    await tx.query(`UPDATE importacao_universal_sessoes SET versao=versao+1,atualizado_em=now() WHERE id=$1 AND empresa_id=$2`,[id,empresaId]);
+    return {alreadyCompleted:false,aguardandoJob:true,jobId:enfileirado.jobId,
+     result:{version:1,sessionId:id,jobId:enfileirado.jobId,status:'processando',summary:{total:0,created:0,updated:0,skipped:0},atomic:true,idempotent:true},
+     versao:Number(session.versao)+1};
+   }
    const mappings:Mapping[]=confirmed.mapeamentos||[],entities:any[]=confirmed.entidades||[],relations:Relation[]=confirmed.relacionamentos||[];
    const rowsBySheet=new Map<string,SheetRow[]>((session.inventario_abas||[]).map((a:any)=>[String(a.nome),Array.isArray(a.linhas)?a.linhas:[]]));
-   const types=['produto','sku','variacao','preco','estoque','movimentacao','cliente','fornecedor','tabela_generica'];
+   const types=['produto','sku','variacao','preco','estoque','movimentacao','cliente','fornecedor','insumo','tabela_generica'];
    const report:{total:number;criados:number;atualizados:number;ignorados:number;porEntidade:Record<string,{criados:number;atualizados:number;ignorados:number}>;linhas:any[];iniciadoEm:string;finalizadoEm?:string}={total:0,criados:0,atualizados:0,ignorados:0,porEntidade:{},linhas:[],iniciadoEm:new Date().toISOString()};
    for(const t of types)report.porEntidade[t]={criados:0,atualizados:0,ignorados:0};
    const sessionMeta={id,sha:String(session.sha256)};
@@ -133,7 +146,7 @@ export async function executarImportacaoUniversalHandler(req:Request,res:Respons
    }
    const stockRows=entityRows.filter(x=>x.tipo==='estoque');
    const movementRows=entityRows.filter(x=>x.tipo==='movimentacao');
-   const customerRows=entityRows.filter(x=>x.tipo==='cliente'),supplierRows=entityRows.filter(x=>x.tipo==='fornecedor');
+   const customerRows=entityRows.filter(x=>x.tipo==='cliente'),supplierRows=entityRows.filter(x=>x.tipo==='fornecedor'),inputRows=entityRows.filter(x=>x.tipo==='insumo');
    const products=await fetchAll(s,productosResource,empresaId,tx);
    const refs={categorias:await fetchAll(s,getResource('categorias')!,empresaId,tx),colecoes:await fetchAll(s,getResource('colecoes')!,empresaId,tx),cores:await fetchAll(s,getResource('cores')!,empresaId,tx),fornecedores:await fetchAll(s,getResource('fornecedores')!,empresaId,tx)};
    const tamanhos=await fetchAll(s,getResource('tamanhos')!,empresaId,tx),locais=await fetchAll(s,getResource('locais')!,empresaId,tx);
@@ -273,32 +286,39 @@ export async function executarImportacaoUniversalHandler(req:Request,res:Respons
     if(delta!==0){
      await lancarMovimentacaoDentro({tipo:'ajuste',produto_id:Number(product.id),tamanho_id:sizeId,local:String(local.nome),local_id:Number(local.id),quantidade:delta,motivo:`Importação universal — saldo absoluto ${target}; anterior ${current}`},user as Actor,tx,escopoDe(user as any));
     }
+    if(mapped.estoque_min!==undefined&&String(mapped.estoque_min).trim()!==''){
+     const minimo=parseNumber(mapped.estoque_min);
+     if(minimo===null||minimo<0)throw new HttpError(422,`Estoque mínimo inválido (${item.aba} linha ${item.row.linhaOrigem}).`);
+     const atualizado=await s.findOneWhere(stockResource,{empresa_id:empresaId,produto_id:Number(product.id),tamanho_id:sizeId,local_id:Number(local.id)},tx);
+     if(atualizado)await s.update(stockResource,Number(atualizado.id),{estoque_min:minimo},tx);
+    }
     processResult(item.tipo,item.aba,item.row.linhaOrigem,delta===0?'ignorados':'atualizados',cell?.id===undefined?undefined:Number(cell.id),`Saldo ajustado ${current} → ${target} (delta ${delta})`);
    }
 
-   const genericRows=[...customerRows,...supplierRows];
+   const genericRows=[...customerRows,...supplierRows,...inputRows];
    const existingGenericRowsByType=new Map<string,Row[]>();
    for(const item of genericRows){
-    const mapped=mapSheetRow(item.row,item.aba,mappings),resource=getResource(item.tipo==='cliente'?'clientes':'fornecedores')!;
-    const documentKey=item.tipo==='cliente'?normalizarDocumentoImportacao(mapped.cnpj_cpf):normalizarDocumentoImportacao(mapped.cnpj_cpf??mapped.cnpj);
+    const mapped=mapSheetRow(item.row,item.aba,mappings),resource=getResource(item.tipo==='cliente'?'clientes':item.tipo==='fornecedor'?'fornecedores':'insumos')!;
+    const documentKey=item.tipo==='cliente'?normalizarDocumentoImportacao(mapped.cnpj_cpf):item.tipo==='fornecedor'?normalizarDocumentoImportacao(mapped.cnpj_cpf??mapped.cnpj):'';
     const documentField=item.tipo==='cliente'?'cnpj_cpf':'cnpj';
     const emailKey=String(mapped.email??'').trim().toLowerCase();
-    if(!documentKey&&!emailKey)throw new HttpError(422,'Importacao de '+item.tipo+' exige documento ou e-mail para garantir idempotencia ('+item.aba+' linha '+item.row.linhaOrigem+').');
+    const inputNameKey=item.tipo==='insumo'?normal(mapped.nome):'';
+    if(!documentKey&&!emailKey&&!inputNameKey)throw new HttpError(422,'Importacao de '+item.tipo+' exige documento, e-mail ou nome para garantir idempotencia ('+item.aba+' linha '+item.row.linhaOrigem+').');
     let existingRows=existingGenericRowsByType.get(item.tipo);
     if(!existingRows){existingRows=await fetchAll(s,resource,empresaId,tx);existingGenericRowsByType.set(item.tipo,existingRows);}
-    const match=documentKey?findByNormalizedDocument(existingRows,documentField,documentKey,empresaId):existingRows.find(r=>Number(r.empresa_id)===empresaId&&String(r.email??'').trim().toLowerCase()===emailKey)??null;
+    const match=documentKey?findByNormalizedDocument(existingRows,documentField,documentKey,empresaId):inputNameKey?existingRows.find(r=>Number(r.empresa_id)===empresaId&&normal(r.nome)===inputNameKey)??null:existingRows.find(r=>Number(r.empresa_id)===empresaId&&String(r.email??'').trim().toLowerCase()===emailKey)??null;
     if(match){processResult(item.tipo,item.aba,item.row.linhaOrigem,'ignorados',Number(match.id),'Registro ja existente; importacao nao sobrescreve dados cadastrais automaticamente.');continue;}
     const payload:Record<string,unknown>={};
     const allowed=new Set(resource.fields.map(f=>f.name));
     for(const [key,value] of Object.entries(mapped)){
-     const target=key==='cnpj_cpf'&&item.tipo==='fornecedor'?'cnpj':key;
+     const target=key==='cnpj_cpf'&&item.tipo==='fornecedor'?'cnpj':key==='tipo_cliente'&&item.tipo==='cliente'?'tipo':key;
      if(allowed.has(target)&&value!==undefined&&value!==null&&String(value).trim()!=='')payload[target]=value;
     }
     if(!payload.nome)throw new HttpError(422,`Cadastro ${item.tipo} sem nome (${item.aba} linha ${item.row.linhaOrigem}).`);
     const created=await createRecord(resource,payload,user as Actor,{escopo:escopoDe(user as any),tx});
     existingRows.push(created);
     await auditImport(s,tx,user as Actor,empresaId,resource,Number(created.id),{sessionId:id,sheet:item.aba,line:item.row.linhaOrigem,sha:sessionMeta.sha,operation:item.tipo+' criado',key:documentKey||emailKey});
-    processResult(item.tipo,item.aba,item.row.linhaOrigem,'criados',Number(created.id),documentKey||emailKey);
+    processResult(item.tipo,item.aba,item.row.linhaOrigem,'criados',Number(created.id),documentKey||emailKey||inputNameKey);
    }
    for(const item of entityRows.filter(x=>x.tipo==='tabela_generica'))processResult(item.tipo,item.aba,item.row.linhaOrigem,'ignorados',undefined,'Tabela genérica: dados mantidos no arquivo original; destino ERP não definido.');
    report.finalizadoEm=new Date().toISOString();
@@ -308,10 +328,10 @@ export async function executarImportacaoUniversalHandler(req:Request,res:Respons
    if(!saved.rows.length)throw new HttpError(409,'A sessão não pôde finalizar por alteração concorrente. A transação foi revertida.');
    return{alreadyCompleted:false,result:resultPayload,versao:Number(saved.rows[0].versao)};
   });
-  res.json({id,status:completed.alreadyCompleted?'concluido':'concluido',idempotente:completed.alreadyCompleted===true,resultado:completed.result,versao:completed.versao,gravacaoAtomica:true});
+  res.json({id,status:completed.aguardandoJob?'processando':'concluido',idempotente:completed.alreadyCompleted===true,resultado:completed.result,versao:completed.versao,gravacaoAtomica:true,jobId:completed.jobId??null});
  }catch(error:any){
   const message=String(error?.message||error).slice(0,4000);
-  await queryDb(`UPDATE importacao_universal_sessoes SET status='falhou',erro=$4,resultado=COALESCE(resultado,'{}'::jsonb)||$5::jsonb,atualizado_em=now() WHERE id=$1 AND empresa_id=$2 AND usuario_id=$3 AND status='aprovado'`,[id,empresaId,user.id,message,JSON.stringify({version:1,atomicRollback:true,failedAt:new Date().toISOString(),error:message})]).catch(()=>undefined);
+  await queryDb(`UPDATE importacao_universal_sessoes SET status='falhou',erro=$4,resultado=COALESCE(resultado,'{}'::jsonb)||$5::jsonb,atualizado_em=now() WHERE id=$1 AND empresa_id=$2 AND usuario_id=$3 AND status IN ('aprovado','importando')`,[id,empresaId,user.id,message,JSON.stringify({version:1,atomicRollback:true,failedAt:new Date().toISOString(),error:message})]).catch(()=>undefined);
   throw error instanceof HttpError?error:new HttpError(500,'Importação universal falhou. A transação foi revertida.',{detalhe:message});
  }
 }

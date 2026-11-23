@@ -41,7 +41,7 @@ function req(actor: Actor, options: { params?: Record<string, unknown>; query?: 
 }
 
 function response(): { res: any; out: Captured } {
-  const out: Captured = { headers: {} };
+  const out: Captured = { headers: {}, status: 200 };
   const res: any = {
     json: (body: unknown) => { out.json = body; return res; },
     status: (code: number) => { out.status = code; return res; },
@@ -123,15 +123,31 @@ test('E4.2: referências cruzadas A → B → A não leem, escrevem, ajustam sal
   const { produtoTamanhos, productDetail } = await import('../../src/detail');
   const { exportarRecurso } = await import('../../src/export');
   const { relatorio } = await import('../../src/relatorios');
-  const { previewImportacao, confirmarImportacao, modeloImportacao } = await import('../../src/importacao');
+  const {
+    analisarImportacaoUniversalHandler,
+    salvarMapeamentoImportacaoUniversalHandler,
+    reconciliarImportacaoUniversalHandler,
+    aprovarImportacaoUniversalHandler,
+    modeloImportacaoUniversalHandler,
+  } = await import('../../src/importacaoUniversalHandler');
   const { statusLoja, produtosLoja, importarPedidosLoja, sincronizarEstoqueLoja } = await import('../../src/loja');
 
   const sufixo = `${Date.now()}-${process.pid}`;
   const adminBase = { id: 0, name: 'Admin E4.2', perfil: 'admin' as const };
   const empresaA = Number((await createRecord(RESOURCES.empresas, { nome: `E42 A ${sufixo}` }, adminBase)).id);
   const empresaB = Number((await createRecord(RESOURCES.empresas, { nome: `E42 B ${sufixo}` }, adminBase)).id);
-  const A: Actor = { id: 0, name: 'Ator A E4.2', email: 'e42-a@example.test', perfil: 'admin', empresa_id: empresaA, empresas: [empresaA] };
-  const B: Actor = { id: 0, name: 'Ator B E4.2', email: 'e42-b@example.test', perfil: 'admin', empresa_id: empresaB, empresas: [empresaB] };
+  const A: Actor = { id: 0, name: 'Ator A E4.2', email: `e42-a-${sufixo}@example.test`, perfil: 'admin', empresa_id: empresaA, empresas: [empresaA] };
+  const B: Actor = { id: 0, name: 'Ator B E4.2', email: `e42-b-${sufixo}@example.test`, perfil: 'admin', empresa_id: empresaB, empresas: [empresaB] };
+  // O motor universal persiste a sessão com FK para usuarios; os atores diretos
+  // deste teste precisam, por isso, de usuários reais no banco descartável.
+  for (const [ator, empresa] of [[A, empresaA], [B, empresaB]] as const) {
+    const usuario = await query(
+      `INSERT INTO usuarios (nome, email, senha_hash, perfil, ativo, empresa_id, pode_consolidar, trocar_senha, senha_provisoria, senha_definida_em)
+       VALUES ($1, $2, $3, 'admin', true, $4, false, false, false, now()) RETURNING id`,
+      [ator.name, ator.email, `hash-teste-${sufixo}`, empresa],
+    );
+    ator.id = Number(usuario.rows[0].id);
+  }
   const s = getStore();
 
   const nomeLocal = `E42 Homônimo ${sufixo}`;
@@ -303,18 +319,64 @@ test('E4.2: referências cruzadas A → B → A não leem, escrevem, ajustam sal
   assert.equal(Number(saldoInsumoB?.quantidade), 3);
   assert.equal(Number((await s.insumoStock(Number(insumoA.id), undefined, empresaA))), 0);
 
-  // Importação: preview busca SKU/local apenas dentro da empresa. Confirmação
-  // forjada com IDs de B recebe 404 e a transação não grava linhas/saldos.
-  const preview = await call(previewImportacao, req(A, { body: { tipo: 'estoque', nome: 'e42.csv', conteudo: `produto;tamanho;local;quantidade\n${String(produtoB.sku)};;${nomeLocal};99` } }));
-  assert.equal(preview.json.validas, 0);
-  assert.ok(preview.json.erros.length > 0);
+  // Importação: o motor universal resolve SKU/local somente no tenant ativo.
+  // SKU de B enviado por A não pode ser aprovado nem gravar saldo/movimento.
+  const csvEstrangeiro = `produto;tamanho;local;quantidade\n${String(produtoB.sku)};;${nomeLocal};99`;
+  const analiseImportacao = await call(
+    analisarImportacaoUniversalHandler,
+    req(A, { body: {
+      nomeArquivo: `e42-${sufixo}.csv`, mimeType: 'text/csv',
+      arquivoBase64: Buffer.from(csvEstrangeiro, 'utf8').toString('base64'), destino: 'estoque',
+    } }),
+    response().res,
+  );
+  assert.equal(analiseImportacao.status, 201, `análise universal falhou: ${JSON.stringify(analiseImportacao.json)}`);
+  const sessaoImportacao = String(analiseImportacao.json.id);
+  const analise = analiseImportacao.json.analise;
+  const mapeamentos = analise.semantica.sugestoes.map((s: any) => ({
+    aba: s.aba,
+    colunaOriginal: s.colunaOriginal,
+    campoCanonico: s.colunaOriginal === 'produto' ? 'sku' : (s.campoCanonico ?? null),
+    tipo: s.tipoInferido,
+  }));
+  const mapeado = await call(
+    salvarMapeamentoImportacaoUniversalHandler,
+    req(A, { params: { id: sessaoImportacao }, body: {
+      mapeamentos,
+      entidades: analise.entidades.entidades.map((e: any) => ({ aba: e.aba, tipo: 'estoque' })),
+      relacionamentos: [],
+    } }),
+    response().res,
+  );
+  assert.equal(mapeado.status, 200, `mapeamento universal falhou: ${JSON.stringify(mapeado.json)}`);
   const stockCountBeforeImport = await total(query, 'SELECT count(*)::int AS n FROM estoques WHERE empresa_id=$1 AND produto_id=$2', [empresaA, produtoAId]);
   const movCountBeforeImport = await total(query, 'SELECT count(*)::int AS n FROM movimentacoes WHERE empresa_id=$1 AND produto_id=$2', [empresaA, produtoAId]);
-  await expect404(() => confirmarImportacao(req(A, { body: { tipo: 'estoque', linhas: [{ produto_id: produtoBId, tamanho_id: null, local: nomeLocal, local_id: localBId, quantidade: 99 }] } }), response().res));
+  const reconciliado = await call(
+    reconciliarImportacaoUniversalHandler,
+    req(A, { params: { id: sessaoImportacao }, body: {} }),
+    response().res,
+  );
+  assert.equal(reconciliado.status, 200, `reconciliação universal falhou: ${JSON.stringify(reconciliado.json)}`);
+  const divergencias = reconciliado.json.reconciliacao.divergencias;
+  assert.ok(
+    Array.isArray(divergencias) && divergencias.some((d: any) => d.tipo === 'estoque_sem_produto'),
+    `o SKU de outra empresa deve bloquear a importação: ${JSON.stringify(divergencias)}`,
+  );
+  await assert.rejects(
+    () => call(
+      aprovarImportacaoUniversalHandler,
+      req(A, { params: { id: sessaoImportacao }, body: {
+        hashPreview: reconciliado.json.approvalHash, versao: reconciliado.json.approvalVersion,
+      } }),
+      response().res,
+    ),
+    (error: any) => error?.status === 409,
+    'aprovação com SKU de outra empresa deve ser recusada',
+  );
   assert.equal(await total(query, 'SELECT count(*)::int AS n FROM estoques WHERE empresa_id=$1 AND produto_id=$2', [empresaA, produtoAId]), stockCountBeforeImport);
   assert.equal(await total(query, 'SELECT count(*)::int AS n FROM movimentacoes WHERE empresa_id=$1 AND produto_id=$2', [empresaA, produtoAId]), movCountBeforeImport);
-  const modelo = await call(modeloImportacao, req(B, { query: { tipo: 'estoque' } }));
-  assert.match(String(modelo.output), /produto;tamanho;local;quantidade/);
+  const modelo = await call(modeloImportacaoUniversalHandler, req(B, { query: { destino: 'estoque' } }), response().res);
+  assert.match(String(modelo.output), /sku;tamanho;local;quantidade/);
 
   // Relatórios e exports: JSON, CSV e XLSX da A não contêm SKU, produto, saldo,
   // local ou movimentos privados de B; a exportação de B continua íntegra.

@@ -161,6 +161,42 @@ async function http(baseUrl: string, method: string, route: string, token?: stri
   return { status: response.status, body: parsed, bytes, text, headers: response.headers };
 }
 
+
+/** Executa o fluxo real da ÚNICA interface de importação (motor universal). */
+async function importarSaldoUniversal(
+  baseUrl: string,
+  token: string,
+  linha: Record<string, unknown>,
+  nome: string,
+): Promise<HttpResult> {
+  const colunas = Object.keys(linha);
+  const csv = `produto;tamanho;local;quantidade\n${colunas.map((c) => String(linha[c] ?? '')).join(';')}`;
+  const analise = await http(baseUrl, 'POST', '/importacao-universal/analisar', token, {
+    nomeArquivo: nome, mimeType: 'text/csv', arquivoBase64: Buffer.from(csv, 'utf8').toString('base64'), destino: 'estoque',
+  });
+  if (analise.status !== 201) return analise;
+  const sessao = String(analise.body.id);
+  const mapeamentos = analise.body.analise.semantica.sugestoes.map((s: any) => ({
+    aba: s.aba,
+    colunaOriginal: s.colunaOriginal,
+    campoCanonico: s.colunaOriginal === 'produto' ? 'sku' : (s.campoCanonico ?? null),
+    tipo: s.tipoInferido,
+  }));
+  const mapeado = await http(baseUrl, 'POST', `/importacao-universal/sessoes/${sessao}/mapeamento`, token, {
+    mapeamentos,
+    entidades: analise.body.analise.entidades.entidades.map((e: any) => ({ aba: e.aba, tipo: 'estoque' })),
+    relacionamentos: [],
+  });
+  if (mapeado.status !== 200) return mapeado;
+  const reconciliacao = await http(baseUrl, 'POST', `/importacao-universal/sessoes/${sessao}/reconciliar`, token, {});
+  if (reconciliacao.status !== 200) return reconciliacao;
+  const aprovacao = await http(baseUrl, 'POST', `/importacao-universal/sessoes/${sessao}/aprovar`, token, {
+    hashPreview: reconciliacao.body.approvalHash,
+    versao: reconciliacao.body.approvalVersion,
+  });
+  if (aprovacao.status !== 200) return aprovacao;
+  return http(baseUrl, 'POST', `/importacao-universal/sessoes/${sessao}/executar`, token, {});
+}
 function statusIs(response: HttpResult, expected: number, context: string): void {
   assert.equal(response.status, expected, `${context}: HTTP ${response.status}, esperado ${expected}; body=${response.text.slice(0, 1200)}`);
   expectedStatusEvidence.push(`${context}: observado ${response.status}, esperado ${expected}`);
@@ -503,22 +539,15 @@ test('E4.2 aceite real: HTTP + autenticação + middleware + Express + serviços
 
   // Importação bem-sucedida: preview e confirmação HTTP, referências resolvidas
   // na empresa ativa, empresa_id persistido e célula/tamanho conferidos no PG.
-  const csv = `produto;tamanho;local;quantidade\n${String(produtoImportacaoA.sku)};${tamanhoCode};${nomeRenomeadoA};11`;
-  const preview = await http(baseUrl, 'POST', '/importar/preview', tokenA, { tipo: 'estoque', nome: 'saldo-e42.csv', conteudo: csv });
-  statusIs(preview, 200, 'preview HTTP da importação de saldo A');
-  assert.equal(Number(preview.body?.validas), 1);
-  assert.equal(preview.body?.erros?.length, 0);
-  const linhaImportada = preview.body?.amostra?.[0];
-  assert.equal(Number(linhaImportada?.empresa_id), empresaA);
-  assert.equal(Number(linhaImportada?.produto_id), produtoImportacaoAId);
-  assert.equal(Number(linhaImportada?.local_id), localAId);
-  assert.equal(Number(linhaImportada?.tamanho_id), Number(tamanho.id));
-  const confirmacao = await http(baseUrl, 'POST', '/importar/confirmar', tokenA, {
-    tipo: 'estoque', linhas: preview.body.amostra,
-  });
-  statusIs(confirmacao, 200, 'confirmar importação de saldo A');
-  assert.equal(Number(confirmacao.body?.importados), 1);
-  assert.equal(Number(confirmacao.body?.pulados), 0);
+  const confirmacao = await importarSaldoUniversal(baseUrl, tokenA, {
+    produto: String(produtoImportacaoA.sku), tamanho: tamanhoCode, local: nomeRenomeadoA, quantidade: 11,
+  }, 'saldo-e42.csv');
+  statusIs(confirmacao, 200, 'importação universal de saldo A');
+  assert.equal(
+    Number(confirmacao.body?.resultado?.summary?.created ?? 0) + Number(confirmacao.body?.resultado?.summary?.updated ?? 0),
+    1,
+    'a execução universal deve contabilizar exatamente uma linha de saldo criada/atualizada',
+  );
   const importadoNoBanco = await query(
     'SELECT empresa_id, produto_id, tamanho_id, local_id, quantidade FROM estoques WHERE empresa_id = $1 AND produto_id = $2 AND tamanho_id = $3 AND local_id = $4',
     [empresaA, produtoImportacaoAId, Number(tamanho.id), localAId],
@@ -527,11 +556,11 @@ test('E4.2 aceite real: HTTP + autenticação + middleware + Express + serviços
   assert.equal(Number(importadoNoBanco.rows[0]?.empresa_id), empresaA);
   assert.equal(Number(importadoNoBanco.rows[0]?.quantidade), 11);
   const importMovement = await query(
-    "SELECT count(*)::int AS n FROM movimentacoes WHERE empresa_id = $1 AND produto_id = $2 AND tipo = 'ajuste' AND motivo = 'Importação de saldo inicial'",
+    "SELECT count(*)::int AS n FROM movimentacoes WHERE empresa_id = $1 AND produto_id = $2 AND tipo = 'ajuste'",
     [empresaA, produtoImportacaoAId],
   );
   assert.equal(Number(importMovement.rows[0]?.n), 1, 'importação também deve persistir seu movimento no mesmo tenant');
-  importEvidence.push(`HTTP preview/confirm importou 1 linha; PostgreSQL confirmou empresa_id=${Number(importadoNoBanco.rows[0]?.empresa_id)} (autenticada A=${empresaA}), produto_id=${produtoImportacaoAId}, tamanho_id=${Number(importadoNoBanco.rows[0]?.tamanho_id)}, local_id=${localAId}, quantidade=${Number(importadoNoBanco.rows[0]?.quantidade)}; rejeições estrangeiras ficam cobertas por snapshots zero-write.`);
+  importEvidence.push(`Motor universal importou 1 linha; PostgreSQL confirmou empresa_id=${Number(importadoNoBanco.rows[0]?.empresa_id)} (autenticada A=${empresaA}), produto_id=${produtoImportacaoAId}, tamanho_id=${Number(importadoNoBanco.rows[0]?.tamanho_id)}, local_id=${localAId}, quantidade=${Number(importadoNoBanco.rows[0]?.quantidade)}; rejeições estrangeiras ficam cobertas por snapshots zero-write.`);
 
   const inventarioA = await create(baseUrl, '/inventarios', tokenA, {
     local_id: localAId, empresa_id: empresaB, observacoes: 'E4.2 HTTP A',
@@ -592,9 +621,9 @@ test('E4.2 aceite real: HTTP + autenticação + middleware + Express + serviços
   await assertNoPartialWrite(ids, () => http(baseUrl, 'POST', '/pdv/caixas', tokenB, {
     numero: `${caixaNumero}-X`, valor_abertura: 0, local_id: localAId, empresa_id: empresaB,
   }), 404, 'B abre caixa em local A', noForeignText);
-  await assertNoPartialWrite(ids, () => http(baseUrl, 'POST', '/importar/confirmar', tokenB, {
-    tipo: 'estoque', linhas: [{ empresa_id: empresaA, produto_id: produtoAId, tamanho_id: null, local_id: localBId, local: nomeRenomeadoB, quantidade: 3 }],
-  }), 404, 'importação B rejeita produto estrangeiro sem escrita parcial', noForeignText);
+  await assertNoPartialWrite(ids, () => importarSaldoUniversal(baseUrl, tokenB, {
+    produto: String(produtoA.sku), tamanho: '', local: nomeRenomeadoB, quantidade: 3,
+  }, 'saldo-estrangeiro-b.csv'), 422, 'importação B rejeita produto estrangeiro sem escrita parcial', noForeignText);
 
   const gradeB = await http(baseUrl, 'GET', '/estoques/grade?f.empresa_id=' + empresaA, tokenB);
   statusIs(gradeB, 200, 'grade de estoque B ignora f.empresa_id estrangeiro');
@@ -650,9 +679,9 @@ test('E4.2 aceite real: HTTP + autenticação + middleware + Express + serviços
     tipo: 'entrada', produto_id: produtoAId, tamanho_id: null, quantidade: 3, local_id: localBId, empresa_id: empresaA,
   }), 404, 'A referencia local B na escrita', noForeignTextB);
   await assertNoPartialWrite(ids, () => http(baseUrl, 'PUT', `/produtos/${produtoBId}`, tokenA, { nome: 'tentativa estrangeira', empresa_id: empresaA }), 404, 'A altera produto B', noForeignTextB);
-  await assertNoPartialWrite(ids, () => http(baseUrl, 'POST', '/importar/confirmar', tokenA, {
-    tipo: 'estoque', linhas: [{ empresa_id: empresaB, produto_id: produtoBId, tamanho_id: null, local_id: localAId, local: nomeRenomeadoA, quantidade: 4 }],
-  }), 404, 'importação A rejeita produto estrangeiro sem escrita parcial', noForeignTextB);
+  await assertNoPartialWrite(ids, () => importarSaldoUniversal(baseUrl, tokenA, {
+    produto: String(produtoB.sku), tamanho: '', local: nomeRenomeadoA, quantidade: 4,
+  }, 'saldo-estrangeiro-a.csv'), 409, 'importação A rejeita produto estrangeiro sem escrita parcial', noForeignTextB);
 
   const itemsUrl = `/inventarios/${inventarioAId}/itens`;
   const itemSemTamanho = itensInventarioA.body.find((item: any) => Number(item.produto_id) === produtoAId && item.tamanho_id == null);

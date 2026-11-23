@@ -1,7 +1,7 @@
 import type { ArquivoInventariado, AbaInventariada } from './importacaoUniversalLeitura';
 
 export type CampoCanonico =
-  | 'sku' | 'nome' | 'categoria' | 'colecao' | 'cor' | 'tamanho' | 'quantidade'
+  | 'sku' | 'sku_pai' | 'nome' | 'razao_social' | 'pessoa' | 'tipo_cliente' | 'contato' | 'insumo' | 'custo_medio' | 'estoque_min' | 'categoria' | 'colecao' | 'cor' | 'tamanho' | 'quantidade'
   | 'custo' | 'custo_aquisicao' | 'custo_fabricacao' | 'custo_adicional' | 'imposto' | 'margem' | 'preco_venda' | 'preco_atacado' | 'preco_promocional' | 'qtd_min_atacado' | 'codigo_barras' | 'ncm' | 'peso_g'
   | 'local' | 'fornecedor' | 'telefone' | 'email' | 'cnpj_cpf' | 'descricao' | 'composicao'
   | 'material' | 'modelagem' | 'genero' | 'marca' | 'cest' | 'tipo' | 'condicao' | 'producao' | 'unidade' | 'tags' | 'formato' | 'ativo' | 'codigo_item' | 'codigo_categoria' | 'codigo_industria' | 'variacao_tamanho_id' | 'local_destino' | 'motivo'
@@ -32,14 +32,22 @@ export type AnaliseSemantica = {
 };
 
 const DICIONARIO: Record<CampoCanonico, string[]> = {
-  sku: ['sku','codigo_sku','referencia','ref','cod_produto','codigo_produto','product_code','item_code','codigo_item','codigo'],
+  sku: ['sku','codigo_sku','referencia','ref','cod_produto','codigo_produto','product_code','item_code','codigo_item'],
+  sku_pai: ['sku_pai','produto_pai','sku_produto_pai','parent_sku','codigo_pai','sku_master'],
+  razao_social: ['razao_social','razão_social','company_name','razao'],
+  pessoa: ['pessoa','tipo_pessoa','pessoa_fisica_juridica','pf_pj'],
+  tipo_cliente: ['tipo_cliente','cliente_tipo','tipo_cliente_loja'],
+  contato: ['contato','contact','nome_contato','responsavel'],
+  insumo: ['insumo','input','materia_prima','matéria_prima','material_insumo'],
+  custo_medio: ['custo_medio','custo_médio','average_cost','custo_unitario_medio','preco_custo'],
+  estoque_min: ['estoque_min','minimo','minimo_estoque','estoque_minimo','qtd_minima','safety_stock'],
   nome: ['nome','produto','descricao_produto','name','product_name','item','artigo','modelo'],
   categoria: ['categoria','category','grupo','grupo_produto','tipo_produto'],
   colecao: ['colecao','collection','linha','linha_produto','temporada'],
   cor: ['cor','color','colour','variant_color','cor_variacao'],
   tamanho: ['tamanho','size','tam','grade_tamanho','variant_size'],
   quantidade: ['quantidade','qtd','qty','quantity','saldo','estoque','stock','units','unidades'],
-  custo: ['custo','cost','custo_unitario','unit_cost','custo_medio','custo_total'],
+  custo: ['custo','cost','custo_unitario','unit_cost','custo_total'],
   custo_aquisicao: ['custo_aquisicao','custo_compra','purchase_cost','acquisition_cost','valor_compra'],
   custo_fabricacao: ['custo_fabricacao','manufacturing_cost','custo_producao','production_cost'],
   custo_adicional: ['custo_adicional','additional_cost','frete','embalagem','custo_extra'],

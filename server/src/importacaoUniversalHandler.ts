@@ -6,12 +6,13 @@ import { analisarArquivoUniversal } from './importacaoUniversalAnalise';
 import { construirModeloDependencias } from './importacaoUniversalEntidades';
 import { HttpError } from './errors';
 import { hashAprovacaoImportacaoUniversal } from './importacaoUniversalHash';
+import { destinoImportacao, modeloCsvDestino, normalizarDestinoImportacao } from './importacaoUniversalDestinos';
 
 
-export const CAMPOS_CANONICOS_IMPORTACAO = new Set(['sku','nome','categoria','colecao','cor','tamanho','quantidade','custo','custo_aquisicao','custo_fabricacao','custo_adicional','imposto','margem','preco_venda','preco_atacado','preco_promocional','qtd_min_atacado','codigo_barras','ncm','cest','peso_g','local','local_destino','fornecedor','telefone','email','cnpj_cpf','descricao','composicao','material','modelagem','genero','marca','tipo','condicao','producao','unidade','tags','formato','ativo','codigo_item','codigo_categoria','codigo_industria','variacao_tamanho_id','motivo','tipo_movimento','data','referencia_externa','preco_atacado_vista','preco_atacado_boleto_30','preco_atacado_boleto_30_60','preco_atacado_boleto_30_60_90','preco_atacado_cartao_debito','preco_atacado_cartao_credito_vista','preco_atacado_cartao_credito_30_60','preco_atacado_cartao_credito_30_60_90','preco_varejo_vista','preco_varejo_vista_min_2_un','preco_varejo_cartao_vista','preco_varejo_cartao_parcelado','margem_bruta_atacado_vista','margem_bruta_varejo_vista','margem_bruta_varejo_min_2_un']);
+export const CAMPOS_CANONICOS_IMPORTACAO = new Set(['sku','sku_pai','nome','razao_social','pessoa','tipo_cliente','contato','insumo','custo_medio','estoque_min','categoria','colecao','cor','tamanho','quantidade','custo','custo_aquisicao','custo_fabricacao','custo_adicional','imposto','margem','preco_venda','preco_atacado','preco_promocional','qtd_min_atacado','codigo_barras','ncm','cest','peso_g','local','local_destino','fornecedor','telefone','email','cnpj_cpf','descricao','composicao','material','modelagem','genero','marca','tipo','condicao','producao','unidade','tags','formato','ativo','codigo_item','codigo_categoria','codigo_industria','variacao_tamanho_id','motivo','tipo_movimento','data','referencia_externa','preco_atacado_vista','preco_atacado_boleto_30','preco_atacado_boleto_30_60','preco_atacado_boleto_30_60_90','preco_atacado_cartao_debito','preco_atacado_cartao_credito_vista','preco_atacado_cartao_credito_30_60','preco_atacado_cartao_credito_30_60_90','preco_varejo_vista','preco_varejo_vista_min_2_un','preco_varejo_cartao_vista','preco_varejo_cartao_parcelado','margem_bruta_atacado_vista','margem_bruta_varejo_vista','margem_bruta_varejo_min_2_un']);
 const TIPOS_CAMPO_IMPORTACAO = new Set(['texto','numero','percentual','data','booleano','codigo','desconhecido']);
-const TIPOS_ENTIDADE_IMPORTACAO = new Set(['produto','sku','variacao','estoque','preco','movimentacao','cliente','fornecedor','tabela_generica']);
-const TIPOS_BLOQUEADORES_APROVACAO = new Set(['duplicado_origem','conflito_sku','conflito_codigo_barras','ambiguidade','campo_desconhecido','orfao_relacionamento','conflito_dimensional','produto_sem_sku','sku_sem_produto','variacao_sem_produto','estoque_sem_produto','estoque_sem_local','preco_sem_produto','movimentacao_sem_produto','entidade_sem_executor','condicao_pagamento_ausente']);
+const TIPOS_ENTIDADE_IMPORTACAO = new Set(['produto','sku','variacao','estoque','preco','movimentacao','cliente','fornecedor','insumo','tabela_generica']);
+const TIPOS_BLOQUEADORES_APROVACAO = new Set(['duplicado_origem','conflito_sku','conflito_codigo_barras','ambiguidade','campo_desconhecido','politica_status_invalido','politica_preco_conflitante','limite_carga_excedido','orfao_relacionamento','conflito_dimensional','produto_sem_sku','sku_sem_produto','variacao_sem_produto','estoque_sem_produto','estoque_sem_local','preco_sem_produto','movimentacao_sem_produto','entidade_sem_executor','condicao_pagamento_ausente']);
 function normalizarSkuDependenciaERP(v:unknown):string{return Array.from(String(v??'').normalize('NFD')).filter(ch=>ch.charCodeAt(0)<768||ch.charCodeAt(0)>879).join('').trim().toUpperCase();}
 export async function salvarMapeamentoImportacaoUniversalHandler(req:Request,res:Response):Promise<void>{
  const user=currentUser(req);
@@ -114,8 +115,8 @@ export async function analisarImportacaoUniversalHandler(req:Request,res:Respons
    inventario_abas=$2::jsonb,interpretacao=$3::jsonb,preview=$4::jsonb,atualizado_em=now()
    WHERE id=$1 AND empresa_id=$5 AND usuario_id=$6`,
    [id,JSON.stringify(analise.arquivo.abas.map(a=>({nome:a.nome,indice:a.indice,totalLinhas:a.totalLinhas,totalColunas:a.totalColunas,linhaCabecalho:a.linhaCabecalho,cabecalhos:a.cabecalhos,vazia:a.vazia,linhas:a.linhas}))),
-    JSON.stringify({semantica:analise.semantica,entidades:analise.entidades}),JSON.stringify({resumo:analise.resumo,bloqueios:analise.bloqueios}),user.empresa_id,user.id]);
-  res.status(201).json({id,status:'aguardando_mapeamento',analise});
+    JSON.stringify({destino:normalizarDestinoImportacao(req.body?.destino),semantica:analise.semantica,entidades:analise.entidades}),JSON.stringify({resumo:analise.resumo,bloqueios:analise.bloqueios}),user.empresa_id,user.id]);
+  res.status(201).json({id,status:'aguardando_mapeamento',destino:destinoImportacao(req.body?.destino),analise});
  }catch(err){
   await queryDb(`UPDATE importacao_universal_sessoes SET status='falhou',erro=$2,atualizado_em=now()
    WHERE id=$1 AND empresa_id=$3 AND usuario_id=$4`,[id,String((err as Error)?.message||err).slice(0,4000),user.empresa_id,user.id]).catch(()=>undefined);
@@ -128,7 +129,7 @@ export async function reconciliarImportacaoUniversalHandler(req:Request,res:Resp
  if(!user||!user.empresa_id||user.empresa_id<=0) throw new HttpError(403,'Usuário sem empresa ativa para reconciliação.');
  const id=String(req.params?.id||'');
  if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) throw new HttpError(400,'ID de sessão inválido.');
- const session=await queryDb(`SELECT id,status,versao,nome_arquivo,mime_type,tamanho_bytes,sha256,inventario_abas,interpretacao,preview FROM importacao_universal_sessoes
+ const session=await queryDb(`SELECT id,status,versao,nome_arquivo,mime_type,tamanho_bytes,sha256,inventario_abas,interpretacao,preview,arquivo_original FROM importacao_universal_sessoes
   WHERE id=$1 AND empresa_id=$2 AND usuario_id=$3 LIMIT 1`,[id,user.empresa_id,user.id]);
  if(!session.rows.length) throw new HttpError(404,'Sessão de importação não encontrada.');
  const row=session.rows[0];
@@ -166,15 +167,24 @@ export async function reconciliarImportacaoUniversalHandler(req:Request,res:Resp
  const skusPorAba=new Map<string,Set<string>>();
  for(const aba of arquivo.abas){const m=confirmado.mapeamentos.find((x:any)=>x.aba===aba.nome&&x.campoCanonico==='sku'&&x.ignorado!==true);if(!m)continue;const skuValues=(aba.linhas||[]).map((r:any)=>normalizarSkuDependenciaERP(r?.valores?.[m.colunaOriginal]));const skus=new Set<string>(skuValues.filter((sku:string)=>sku.length>0));skusPorAba.set(aba.nome,skus);}
  entidadesConfirmadas.dependencias=construirModeloDependencias(entidadesConfirmadas.entidades,entidadesConfirmadas.relacionamentos as any,{produtosPorSku,skusPorAba,produtoPaiPorSku,produtoIdsERP});
- const result=reconciliarImportacaoUniversal(arquivo,semanticaConfirmada,entidadesConfirmadas,produtosERP,saldosERP,activeConditionCodes);
+ let result:any=reconciliarImportacaoUniversal(arquivo,semanticaConfirmada,entidadesConfirmadas,produtosERP,saldosERP,activeConditionCodes);
+ let previaAdapter:any=null;
+ if(normalizarDestinoImportacao(interpretacao.destino)==='politica_comercial'){
+  const {reconciliarPoliticaComercial}=await import('./importacaoUniversalPolitica');
+  const bytes=row.arquivo_original instanceof Buffer?row.arquivo_original:Buffer.from(row.arquivo_original||[]);
+  const hashLocal=createHash('sha256').update(bytes).digest('hex');
+  if(hashLocal!==String(row.sha256).trim())throw new HttpError(409,'O arquivo original não corresponde ao SHA-256 registrado.');
+  const adapter=await reconciliarPoliticaComercial(bytes,String(row.nome_arquivo),String(row.sha256));
+  result=adapter.resultado;previaAdapter=adapter.previaAdapter;
+ }
  const versaoAprovacao=Number(row.versao||1)+1;
  const approvalHash=hashAprovacaoImportacaoUniversal(id,user.empresa_id,String(row.sha256),versaoAprovacao,confirmado,result);
  const previewAtual=(row.preview&&typeof row.preview==='object')?row.preview:{};
- const previewAtualizado={...previewAtual,previaConsolidada:result.previaConsolidada,resumoDimensional:result.resumoDimensional,erpSnapshot:{produtos:produtosERP.length,saldos:saldosERP.length,condicoesPagamento:activeConditionCodes.length},approvalHash,approvalVersion:versaoAprovacao};
+ const previewAtualizado={...previewAtual,previaConsolidada:result.previaConsolidada,resumoDimensional:result.resumoDimensional,erpSnapshot:{produtos:produtosERP.length,saldos:saldosERP.length,condicoesPagamento:activeConditionCodes.length},approvalHash,approvalVersion:versaoAprovacao,...(previaAdapter?{previaAdapter}:{})};
  const saved=await queryDb(`UPDATE importacao_universal_sessoes SET reconciliacao=$2::jsonb,preview=$3::jsonb,status='aguardando_aprovacao',versao=versao+1,atualizado_em=now()
   WHERE id=$1 AND empresa_id=$4 AND usuario_id=$5 AND versao=$6 AND status IN ('aguardando_mapeamento','aguardando_aprovacao') RETURNING versao`,[id,JSON.stringify(result),JSON.stringify(previewAtualizado),user.empresa_id,user.id,Number(row.versao||1)]);
  if(!saved.rows.length)throw new HttpError(409,'Sessão mudou durante a reconciliação. Atualize a sessão e reconcilie novamente.');
- res.json({id,status:'aguardando_aprovacao',reconciliacao:result,approvalHash,approvalVersion:versaoAprovacao,erpSnapshot:{produtos:produtosERP.length,saldos:saldosERP.length,condicoesPagamento:activeConditionCodes.length}});
+ res.json({id,status:'aguardando_aprovacao',reconciliacao:result,approvalHash,approvalVersion:versaoAprovacao,erpSnapshot:{produtos:produtosERP.length,saldos:saldosERP.length,condicoesPagamento:activeConditionCodes.length},...(previaAdapter?{previaAdapter}:{})});
 }
 
 export async function aprovarImportacaoUniversalHandler(req:Request,res:Response):Promise<void>{
@@ -213,5 +223,32 @@ export async function consultarImportacaoUniversalHandler(req:Request,res:Respon
  const row=result.rows[0];const bytes=row.arquivo_original instanceof Buffer?row.arquivo_original:Buffer.from(row.arquivo_original||[]);
  const hashAtual=createHash('sha256').update(bytes).digest('hex');if(hashAtual!==String(row.sha256).trim())throw new HttpError(409,'O arquivo original não corresponde ao SHA-256 registrado. A sessão não pode ser retomada.');
  const analise=await analisarArquivoUniversal({nomeArquivo:String(row.nome_arquivo),bytes,maxBytes:MAX_BYTES});
- const safe={...row};delete safe.arquivo_original;res.json({...safe,analise});
+ const safe={...row};delete safe.arquivo_original;res.json({...safe,destino:destinoImportacao((row.interpretacao as any)?.destino),analise});
+}
+
+
+/** Modelo de colunas canônicas do destino escolhido — mesmo catálogo da interface. */
+export function modeloImportacaoUniversalHandler(req: Request, res: Response): void {
+  const actor = currentUser(req);
+  if (!actor) throw new HttpError(403, 'Usuário sem sessão ativa.');
+  const destino = destinoImportacao(req.query?.destino);
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="modelo-importacao-${destino.id}.csv"`);
+  res.end(modeloCsvDestino(destino.id));
+}
+
+
+/** Status leve para acompanhamento de execuções assíncronas do adaptador. */
+export async function statusImportacaoUniversalHandler(req: Request, res: Response): Promise<void> {
+  const user = currentUser(req);
+  if (!user || !user.empresa_id || user.empresa_id <= 0) throw new HttpError(403, 'Usuário sem empresa ativa.');
+  const id = String(req.params?.id || '');
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) throw new HttpError(400, 'ID de sessão inválido.');
+  const result = await queryDb(
+    `SELECT id, status, versao, resultado, erro, importacao_iniciada_em, importacao_finalizada_em
+       FROM importacao_universal_sessoes WHERE id=$1 AND empresa_id=$2 AND usuario_id=$3 LIMIT 1`,
+    [id, user.empresa_id, user.id]
+  );
+  if (!result.rows.length) throw new HttpError(404, 'Sessão de importação não encontrada.');
+  res.json(result.rows[0]);
 }
