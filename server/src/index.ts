@@ -73,7 +73,7 @@ import { listarEventosTerceirizacao, registrarEventoTerceirizacao } from './terc
 import { relatorio } from './relatorios';
 import { exportarRecurso } from './export';
 import { confirmarImportacao, modeloImportacao, previewImportacao } from './importacao';
-import { analisarImportacaoUniversalHandler, salvarMapeamentoImportacaoUniversalHandler, consultarImportacaoUniversalHandler, reconciliarImportacaoUniversalHandler, aprovarImportacaoUniversalHandler } from './importacaoUniversalHandler';
+import { analisarImportacaoUniversalHandler, recuperarSessaoImportacaoUniversalHandler, salvarMapeamentoImportacaoUniversalHandler, consultarImportacaoUniversalHandler, reconciliarImportacaoUniversalHandler, aprovarImportacaoUniversalHandler } from './importacaoUniversalHandler';
 import { executarImportacaoUniversalHandler, retryImportacaoUniversalHandler } from './importacaoUniversalExecutor';
 import { previewCarga, iniciarJobCarga, statusJobCarga, processarFilaCargaComercial } from './cargaPoliticaComercial';
 import {
@@ -1731,6 +1731,7 @@ app.get('/api/rastreabilidade/documento', wrap(trilhaDocumento));
 app.get('/api/relatorios/:nome', wrap(async (req, res) => relatorio(req, res, req.params.nome)));
 app.post('/api/importar/preview', wrap(previewImportacao));
 // Universal Data Ingestion Engine — upload preservado e análise multi-aba, sem gravação nos cadastros ERP.
+app.post('/api/importacao-universal/sessoes/recuperar', requireRole('admin','gerente'), wrap(recuperarSessaoImportacaoUniversalHandler));
 app.post('/api/importacao-universal/analisar', requireRole('admin','gerente'), wrap(analisarImportacaoUniversalHandler));
 app.post('/api/importacao-universal/sessoes/:id/mapeamento', requireRole('admin','gerente'), wrap(salvarMapeamentoImportacaoUniversalHandler));
 app.get('/api/importacao-universal/sessoes/:id', requireRole('admin','gerente'), wrap(consultarImportacaoUniversalHandler));

@@ -70,6 +70,19 @@ export async function salvarMapeamentoImportacaoUniversalHandler(req:Request,res
 const MAX_BYTES=2.5*1024*1024;
 const ALLOWED_EXT=new Set(['xlsx','xlsm','csv']);
 
+export async function recuperarSessaoImportacaoUniversalHandler(req:Request,res:Response):Promise<void>{
+ const user=currentUser(req);
+ if(!user||!user.empresa_id||user.empresa_id<=0) throw new HttpError(403,'Usuário sem empresa ativa para recuperação de importação.');
+ const sha=String(req.body?.sha256||'').trim().toLowerCase();
+ if(!/^[0-9a-f]{64}$/.test(sha)) throw new HttpError(400,'SHA-256 do arquivo inválido.');
+ const result=await queryDb(
+  `SELECT id,status,nome_arquivo,sha256,versao,criado_em,atualizado_em FROM importacao_universal_sessoes WHERE empresa_id=$1 AND usuario_id=$2 AND sha256=$3 LIMIT 1`,
+  [user.empresa_id,user.id,sha]
+ );
+ if(!result.rows.length){res.json({found:false});return;}
+ const row=result.rows[0];
+ res.json({found:true,id:String(row.id),status:String(row.status),nomeArquivo:String(row.nome_arquivo),sha256:String(row.sha256).trim(),versao:Number(row.versao),criadoEm:row.criado_em,atualizadoEm:row.atualizado_em});
+}
 export async function analisarImportacaoUniversalHandler(req:Request,res:Response):Promise<void>{
  const user=currentUser(req);
  if(!user||!user.empresa_id||user.empresa_id<=0) throw new HttpError(403,'Usuário sem empresa ativa para importação.');

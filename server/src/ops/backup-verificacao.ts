@@ -184,8 +184,19 @@ export async function verificarComRestauracao(opts: OpcoesVerificacao): Promise<
     base.problemas.push(`restauração falhou: ${e?.message ?? e}`);
     return base;
   } finally {
+    // Feche o pool antes do descarte e remova apenas sessões residuais do banco
+    // temporário. DROP ... WITH (FORCE) pode interromper conexões ainda em
+    // trânsito e fazer o teste reportar "terminating connection due to administrator command".
     await alvo?.end().catch(() => undefined);
-    await admin.query(`DROP DATABASE IF EXISTS "${nome}" WITH (FORCE)`).catch(() => undefined);
+    await admin.query(
+      `SELECT pg_terminate_backend(pid)
+         FROM pg_stat_activity
+        WHERE datname = $1 AND pid <> pg_backend_pid()`,
+      [nome],
+    ).catch(() => undefined);
+    // Sem FORCE: se ainda houver sessão, o descarte falha sem interromper
+    // silenciosamente uma conexão. O banco é efêmero e isolado por nome.
+    await admin.query(`DROP DATABASE IF EXISTS "${nome}"`).catch(() => undefined);
     await admin.end().catch(() => undefined);
   }
 }
