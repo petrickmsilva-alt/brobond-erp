@@ -18,9 +18,9 @@
 //     com os parâmetros de entrada da própria planilha, com conferências;
 //   • idempotente por SKU e faixa de quantidade; reconstrói células físicas.
 //
-// Endpoints:
-//   POST /api/carga/politica-comercial/preview   { conteudo, nome }  → prévia
-//   POST /api/carga/politica-comercial/confirmar { conteudo, nome }  → grava
+// Execução: adaptador de destino do MOTOR UNIVERSAL DE INGESTÃO.
+//   Prévia, reconciliação, aprovação e auditoria vivem em /api/importacao-universal/*.
+//   A fila durável abaixo é apenas o mecanismo assíncrono do adaptador.
 //
 // O parse é deliberadamente específico do LEIAUTE desta planilha (nomes de
 // coluna e linha de cabeçalho fixos): um importador genérico perderia os
@@ -29,7 +29,6 @@
 // ============================================================================
 import type { Request, Response } from 'express';
 import ExcelJS from 'exceljs';
-import JSZip from 'jszip';
 import { HttpError } from './errors';
 import { EMPRESA_PADRAO, empresaDoAtorAudit } from './empresa';
 import { RESOURCES } from './resources';
@@ -40,6 +39,9 @@ import { isValidGtin } from './ean';
 import { round2 } from './utils';
 import { createHash, randomUUID } from 'node:crypto';
 import { query as queryDb } from './db';
+import { carregarWorkbookUniversal } from './importacaoUniversalLeitura';
+import { sanitizarXlsx } from './xlsxSanitizer';
+export { sanitizarXlsx };
 import { validatePayload } from './validate';
 import type { Payload, Row, Tx } from './store';
 
@@ -364,37 +366,6 @@ export function extrairCodigosBarras(wb: ExcelJS.Workbook): { mapa: Map<string, 
  * A tabela é só formatação (autofiltro/estilo de faixa); removê-la não altera
  * NENHUM valor de célula, que é tudo o que a carga lê.
  */
-export async function sanitizarXlsx(buf: Buffer): Promise<Buffer> {
-  let zip: JSZip;
-  try {
-    zip = await JSZip.loadAsync(buf);
-  } catch {
-    // Não é um zip válido: devolve como veio e deixa o ExcelJS dar o erro claro.
-    return buf;
-  }
-  for (const name of Object.keys(zip.files)) {
-    if (/^xl\/tables\//.test(name)) {
-      delete zip.files[name];
-      continue;
-    }
-    if (/^xl\/worksheets\/sheet\d+\.xml$/.test(name)) {
-      const x = await zip.files[name].async('string');
-      zip.file(name, x.replace(/<tableParts[\s\S]*?<\/tableParts>/g, '').replace(/<tableParts[^>]*\/>/g, ''));
-      continue;
-    }
-    if (/^xl\/worksheets\/_rels\//.test(name)) {
-      const x = await zip.files[name].async('string');
-      zip.file(name, x.replace(/<Relationship[^>]*\/table[^"]*"[^>]*\/>/gi, ''));
-      continue;
-    }
-  }
-  const ct = zip.files['[Content_Types].xml'];
-  if (ct) {
-    const x = await ct.async('string');
-    zip.file('[Content_Types].xml', x.replace(/<Override[^>]*PartName="\/xl\/tables\/[^"]*"[^>]*\/>/gi, ''));
-  }
-  return zip.generateAsync({ type: 'nodebuffer' });
-}
 
 /** Carrega um workbook XLSX a partir do conteúdo base64 do corpo. */
 export async function abrirWorkbook(conteudo: string, nome: string): Promise<ExcelJS.Workbook> {
@@ -402,10 +373,8 @@ export async function abrirWorkbook(conteudo: string, nome: string): Promise<Exc
   if (!c) throw new HttpError(400, 'Envie o conteúdo do arquivo XLSX em base64.');
   if (String(nome ?? '').toLowerCase().endsWith('.csv')) throw new HttpError(400, `Use a planilha XLSX com a aba "${ABA_FONTE}".`);
   try {
-    const buf = Buffer.from(c.replace(/^data:[^,]+,/, ''), 'base64');
-    const wb = new ExcelJS.Workbook();
-    await wb.xlsx.load((await sanitizarXlsx(buf)) as any);
-    return wb;
+    // Leitura compartilhada com o núcleo: o adaptador não possui leitor próprio.
+    return await carregarWorkbookUniversal({ nomeArquivo: nome, bytes: Buffer.from(c.replace(/^data:[^,]+,/, ''), 'base64') });
   } catch (e: any) {
     if (e instanceof HttpError) throw e;
     throw new HttpError(400, `Não foi possível ler o XLSX: ${e?.message || 'arquivo inválido'}`);
@@ -2019,8 +1988,15 @@ export function extrairInventarioPlanilha(wb: ExcelJS.Workbook, plano: Plano): I
  * Lê o arquivo do corpo e devolve a leitura unificada (todas as fontes de
  * cadastro), o plano mesclado, a reconciliação das abas e os códigos de barras.
  */
-export async function lerPlano(body: Record<string, unknown>): Promise<{ leitura: Leitura; plano: Plano; reconciliacao: Reconciliacao; inventario: InventarioPlanilha; barcodes: { validos: number; concat: number; invalidos: number } }> {
-  const wb = await abrirWorkbook(String(body?.conteudo ?? ''), String(body?.nome ?? ''));
+export type PlanoCarregado = { leitura: Leitura; plano: Plano; reconciliacao: Reconciliacao; inventario: InventarioPlanilha; barcodes: { validos: number; concat: number; invalidos: number } };
+
+/** Carrega o workbook pelo leitor central e constrói o plano do adaptador. */
+export async function lerPlanoDosBytes(bytes: Buffer, nome: string): Promise<PlanoCarregado> {
+  const wb = await carregarWorkbookUniversal({ nomeArquivo: nome, bytes });
+  return construirPlanoDoWorkbook(wb);
+}
+
+export function construirPlanoDoWorkbook(wb: ExcelJS.Workbook): PlanoCarregado {
   const wsPrincipal = abaFonte(wb);
   const principal = extrairLinhas(wsPrincipal, FONTES_CADASTRO[0]);
   if (!principal.linhas.length) {
@@ -2047,6 +2023,12 @@ export async function lerPlano(body: Record<string, unknown>): Promise<{ leitura
   return { leitura: principal, plano, reconciliacao, inventario, barcodes: { validos: mapa.size, concat, invalidos } };
 }
 
+export async function lerPlano(body: Record<string, unknown>): Promise<PlanoCarregado> {
+  const conteudo = String(body?.conteudo ?? '').trim();
+  if (!conteudo) throw new HttpError(400, 'Envie o conteúdo do arquivo XLSX em base64.');
+  return lerPlanoDosBytes(Buffer.from(conteudo.replace(/^data:[^,]+,/, ''), 'base64'), String(body?.nome ?? ''));
+}
+
 export function validarPlanoParaCarga(plano: Plano): void {
   if (plano.itens.length > LIMITE_CARGA) {
     throw new HttpError(413, `A carga aceita no máximo ${LIMITE_CARGA} linhas por vez. Divida a planilha.`);
@@ -2059,38 +2041,42 @@ export function validarPlanoParaCarga(plano: Plano): void {
   }
 }
 
+export function construirPreviaPlano({ leitura, plano, reconciliacao, inventario }: PlanoCarregado) {
+  return {
+    aba: leitura.aba,
+    total: plano.validacoes.registros,
+    validacoes: plano.validacoes,
+    reconciliacao,
+    inventario: {
+      local_nome: inventario.local_nome,
+      total_skus: inventario.total_skus,
+      total_unidades: inventario.total_unidades,
+      total_celulas: inventario.total_celulas,
+      skus_sem_saldo: inventario.skus_sem_saldo,
+      por_fonte: inventario.por_fonte,
+      saldos_negativos_limitados_a_zero: inventario.saldos_negativos,
+    },
+    familias: plano.familias.map((f) => ({ nome: f.nome, sku: f.sku, categoria_master: f.categoria_master, colecao: f.colecao, itens: f.itens, tamanhos: f.tamanhos, cores: f.cores })),
+    amostra: plano.itens.slice(0, 200).map((it) => ({
+      linha: it.linha, fonte: it.fonte, item: it.item, sku: it.codigo_industria, pai_sku: it.pai_sku,
+      categoria_master: it.categoria_master, colecao: it.colecao, cor: it.cor, tamanho: it.tamanho,
+      codigo_barras: it.codigo_barras, acao: it.acao, erros: it.erros,
+      unidade: it.unidade, fornecedor: it.fornecedor || null, atributos_adicionais: it.atributos_adicionais,
+      precos: it.precos, precos_conflitantes: it.precos_conflitantes,
+    })),
+    limite: LIMITE_CARGA,
+    truncado: plano.itens.length > LIMITE_CARGA,
+    nao_gravado: 'Prévia apenas: nenhum produto, variação, preço ou estoque foi gravado. Na confirmação, as células físicas anteriores serão substituídas pelas quantidades reconciliadas desta planilha no local único LOJA.'
+  };
+}
+
+/** Wrapper usado apenas pelos testes do adaptador; a rota pública foi removida. */
 export async function previewCarga(req: Request, res: Response) {
   const actor = currentUser(req);
   exigirGestor(actor);
   checkAccess(RESOURCES.produtos, actor, 'create');
   try {
-    const { leitura, plano, reconciliacao, inventario } = await lerPlano((req.body || {}) as Record<string, unknown>);
-    res.json({
-      aba: leitura.aba,
-      total: plano.validacoes.registros,
-      validacoes: plano.validacoes,
-      reconciliacao,
-      inventario: {
-        local_nome: inventario.local_nome,
-        total_skus: inventario.total_skus,
-        total_unidades: inventario.total_unidades,
-        total_celulas: inventario.total_celulas,
-        skus_sem_saldo: inventario.skus_sem_saldo,
-        por_fonte: inventario.por_fonte,
-        saldos_negativos_limitados_a_zero: inventario.saldos_negativos,
-      },
-      familias: plano.familias.map((f) => ({ nome: f.nome, sku: f.sku, categoria_master: f.categoria_master, colecao: f.colecao, itens: f.itens, tamanhos: f.tamanhos, cores: f.cores })),
-      amostra: plano.itens.slice(0, 200).map((it) => ({
-        linha: it.linha, fonte: it.fonte, item: it.item, sku: it.codigo_industria, pai_sku: it.pai_sku,
-        categoria_master: it.categoria_master, colecao: it.colecao, cor: it.cor, tamanho: it.tamanho,
-        codigo_barras: it.codigo_barras, acao: it.acao, erros: it.erros,
-        unidade: it.unidade, fornecedor: it.fornecedor || null, atributos_adicionais: it.atributos_adicionais,
-        precos: it.precos, precos_conflitantes: it.precos_conflitantes,
-      })),
-      limite: LIMITE_CARGA,
-      truncado: plano.itens.length > LIMITE_CARGA,
-      nao_gravado: 'Prévia apenas: nenhum produto, variação, preço ou estoque foi gravado. Na confirmação, as células físicas anteriores serão substituídas pelas quantidades reconciliadas desta planilha no local único LOJA.'
-    });
+    res.json(construirPreviaPlano(await lerPlano((req.body || {}) as Record<string, unknown>)));
   } catch (e) {
     throw toHttpError(e, RESOURCES.produtos);
   }
@@ -2789,18 +2775,16 @@ function hashPedidoCarga(body: Record<string, unknown>): string {
   return createHash('sha256').update(JSON.stringify(body)).digest('hex');
 }
 
-export async function iniciarJobCarga(req: Request, res: Response) {
-  const actor = currentUser(req);
+export async function enfileirarCargaPoliticaComercial(actor: any, body: Record<string, unknown>, tx?: Tx) {
   exigirGestor(actor);
   checkAccess(RESOURCES.produtos, actor, 'create');
-  const body = (req.body || {}) as Record<string, unknown>;
   if (typeof body.conteudo !== 'string' || !body.conteudo || typeof body.nome !== 'string' || !body.nome) {
     throw new HttpError(400, 'Envie a planilha oficial para iniciar o processamento.');
   }
-  if (body.conteudo.length > 28 * 1024 * 1024) throw new HttpError(413, 'A planilha excede o limite de conteúdo permitido.');
   const empresaId = escopoDe(actor).empresaId;
   const hash = hashPedidoCarga(body);
-  const inserted = await queryDb(
+  const executor = tx ?? { query: (sql: string, params: unknown[]) => queryDb(sql, params) };
+  const inserted = await executor.query(
     `INSERT INTO carga_politica_comercial_jobs
       (id, empresa_id, usuario_id, idempotency_hash, payload)
      VALUES ($1,$2,$3,$4,$5::jsonb)
@@ -2819,7 +2803,14 @@ export async function iniciarJobCarga(req: Request, res: Response) {
      RETURNING id, status, created_at`,
     [randomUUID(), empresaId, actor.id, hash, JSON.stringify(body)]
   );
-  res.status(202).json({ job_id: inserted.rows[0].id, status: inserted.rows[0].status, created_at: inserted.rows[0].created_at });
+  return { jobId: String(inserted.rows[0].id), status: String(inserted.rows[0].status), criadoEm: inserted.rows[0].created_at };
+}
+
+/** Wrapper usado apenas pelos testes da fila; a rota pública foi removida. */
+export async function iniciarJobCarga(req: Request, res: Response) {
+  const actor = currentUser(req);
+  const enfileirado = await enfileirarCargaPoliticaComercial(actor, (req.body || {}) as Record<string, unknown>);
+  res.status(202).json({ job_id: enfileirado.jobId, status: enfileirado.status, created_at: enfileirado.criadoEm });
 }
 
 export async function statusJobCarga(req: Request, res: Response) {
@@ -2953,6 +2944,18 @@ export async function processarFilaCargaComercial(): Promise<void> {
       if (concluido.rowCount !== 1) {
         throw new Error('A reserva da carga foi perdida antes da confirmação; a transação será revertida.');
       }
+      // A sessão do motor universal é a única fonte de estado acompanhada pela
+      // interface. O job é apenas o mecanismo durável de execução do adaptador.
+      const sessaoId = String((job.payload as any)?.sessao_id ?? '');
+      if (/^[0-9a-f-]{36}$/i.test(sessaoId)) {
+        await tx!.query(
+          `UPDATE importacao_universal_sessoes
+              SET status='concluido', resultado=$2::jsonb, importacao_finalizada_em=now(),
+                  atualizado_em=now(), erro=NULL, versao=versao+1
+            WHERE id=$1 AND empresa_id=$3 AND status='importando'`,
+          [sessaoId, JSON.stringify({ version: 1, sessionId: sessaoId, jobId: job.id, summary: { total: Number(dados.produtos ?? 0) + Number(dados.variacoes ?? 0) + Number(dados.ignorados ?? 0), created: Number(dados.produtos ?? 0) + Number(dados.variacoes ?? 0), updated: Number(dados.precos_versionados ?? 0), skipped: Number(dados.ignorados ?? 0) }, ...resultado }), empresaJob]
+        );
+      }
     }, { isolation: 'read committed' });
   } catch (error) {
     const detalhe = error instanceof Error ? error.message : String(error);
@@ -2981,6 +2984,15 @@ export async function processarFilaCargaComercial(): Promise<void> {
            finished_at = now(), heartbeat_at = now(), lease_token = NULL
          WHERE id = $1 AND status = 'running' AND lease_token = $3`,
         [job.id, message.slice(0, 1500), workerToken]
+      ).catch(() => undefined);
+    }
+    const sessaoId = String((job?.payload as any)?.sessao_id ?? '');
+    if (/^[0-9a-f-]{36}$/i.test(sessaoId)) {
+      await queryDb(
+        `UPDATE importacao_universal_sessoes SET status='falhou', erro=$2, atualizado_em=now(),
+           resultado=COALESCE(resultado,'{}'::jsonb)||$3::jsonb
+         WHERE id=$1 AND empresa_id=$4 AND status='importando'`,
+        [sessaoId, message.slice(0, 1500), JSON.stringify({ atomicRollback: true, failedAt: new Date().toISOString(), error: message.slice(0, 1500) }), Number(job?.empresa_id)]
       ).catch(() => undefined);
     }
   } finally {

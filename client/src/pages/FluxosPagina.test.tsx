@@ -16,7 +16,7 @@ import EmpresaFormPage from './EmpresaFormPage';
 import NovaFichaPage from './NovaFichaPage';
 import DevolucaoNovaPage from './DevolucaoNovaPage';
 import WebhookFormPage from './WebhookFormPage';
-import ImportarPage from './ImportarPage';
+import ImportacaoUniversalPage from './ImportacaoUniversalPage';
 import { ToastProvider } from '../components/ui';
 import { api } from '../lib/api';
 
@@ -222,11 +222,11 @@ describe('WebhookFormPage — cadastro em página', () => {
   });
 });
 
-describe('ImportarPage — tipo inválido é recusado na página', () => {
-  it('mostra os tipos aceitos quando a rota não existe', async () => {
-    montar(<ImportarPage />, '/importar/planilha-magica');
-    expect(await screen.findByText(/Não existe importação para/)).toBeInTheDocument();
-    // Nenhuma chamada ao servidor: o tipo é validado antes.
+describe('Importação Universal — único ponto de entrada', () => {
+  it('destino desconhecido cai na detecção automática sem chamar o servidor', async () => {
+    montar(<ImportacaoUniversalPage />, '/importacao-universal?destino=planilha-magica', '/importacao-universal');
+    expect(await screen.findByLabelText('Destino da importação')).toHaveValue('universal');
+    expect(screen.getByText('Detecção automática')).toBeInTheDocument();
     expect(apiPost).not.toHaveBeenCalled();
   });
 });

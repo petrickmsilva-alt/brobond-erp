@@ -72,10 +72,9 @@ import { getMedidasGrade, resumoMedidasGrades, saveMedidasGrade } from './medida
 import { listarEventosTerceirizacao, registrarEventoTerceirizacao } from './terceirizacao';
 import { relatorio } from './relatorios';
 import { exportarRecurso } from './export';
-import { confirmarImportacao, modeloImportacao, previewImportacao } from './importacao';
-import { analisarImportacaoUniversalHandler, recuperarSessaoImportacaoUniversalHandler, salvarMapeamentoImportacaoUniversalHandler, consultarImportacaoUniversalHandler, reconciliarImportacaoUniversalHandler, aprovarImportacaoUniversalHandler } from './importacaoUniversalHandler';
+import { analisarImportacaoUniversalHandler, recuperarSessaoImportacaoUniversalHandler, salvarMapeamentoImportacaoUniversalHandler, consultarImportacaoUniversalHandler, reconciliarImportacaoUniversalHandler, aprovarImportacaoUniversalHandler, modeloImportacaoUniversalHandler, statusImportacaoUniversalHandler } from './importacaoUniversalHandler';
 import { executarImportacaoUniversalHandler, retryImportacaoUniversalHandler } from './importacaoUniversalExecutor';
-import { previewCarga, iniciarJobCarga, statusJobCarga, processarFilaCargaComercial } from './cargaPoliticaComercial';
+import { processarFilaCargaComercial } from './cargaPoliticaComercial';
 import {
   aplicarPrecoFicha,
   cancelarOrdem,
@@ -1729,24 +1728,19 @@ app.get('/api/rastreabilidade/documento', wrap(trilhaDocumento));
 
 // Fase 5 — relatórios, importação e exportação
 app.get('/api/relatorios/:nome', wrap(async (req, res) => relatorio(req, res, req.params.nome)));
-app.post('/api/importar/preview', wrap(previewImportacao));
 // Universal Data Ingestion Engine — upload preservado e análise multi-aba, sem gravação nos cadastros ERP.
 app.post('/api/importacao-universal/sessoes/recuperar', requireRole('admin','gerente'), wrap(recuperarSessaoImportacaoUniversalHandler));
+app.get('/api/importacao-universal/modelo', wrap(modeloImportacaoUniversalHandler));
 app.post('/api/importacao-universal/analisar', requireRole('admin','gerente'), wrap(analisarImportacaoUniversalHandler));
 app.post('/api/importacao-universal/sessoes/:id/mapeamento', requireRole('admin','gerente'), wrap(salvarMapeamentoImportacaoUniversalHandler));
+app.get('/api/importacao-universal/sessoes/:id/status', requireRole('admin','gerente'), wrap(statusImportacaoUniversalHandler));
 app.get('/api/importacao-universal/sessoes/:id', requireRole('admin','gerente'), wrap(consultarImportacaoUniversalHandler));
 app.post('/api/importacao-universal/sessoes/:id/reconciliar', requireRole('admin','gerente'), wrap(reconciliarImportacaoUniversalHandler));
 app.post('/api/importacao-universal/sessoes/:id/aprovar', requireRole('admin','gerente'), wrap(aprovarImportacaoUniversalHandler));
 app.post('/api/importacao-universal/sessoes/:id/executar', requireRole('admin','gerente'), wrap(executarImportacaoUniversalHandler));
 app.post('/api/importacao-universal/sessoes/:id/retomar', requireRole('admin','gerente'), wrap(retryImportacaoUniversalHandler));
-app.post('/api/importar/confirmar', wrap(confirmarImportacao));
-app.get('/api/importar/modelo', wrap(modeloImportacao));
-// Carga oficial da política comercial (planilha-base do cadastro mestre).
-// Prévia antes de gravar; a confirmação RE-LÊ o arquivo e é idempotente.
-app.post('/api/carga/politica-comercial/preview', wrap(previewCarga));
-app.post('/api/carga/politica-comercial/confirmar', wrap(iniciarJobCarga));
-app.post('/api/carga/politica-comercial/jobs', wrap(iniciarJobCarga));
-app.get('/api/carga/politica-comercial/jobs/:id', wrap(statusJobCarga));
+// Carga oficial da política comercial: adaptador acionado pelo motor universal;
+// a fila durável abaixo é infraestrutura interna, sem rota própria.
 app.get('/api/:resource/export', wrap(async (req, res) => exportarRecurso(req, res, req.params.resource)));
 
 // Fase 6 — backup (admin)

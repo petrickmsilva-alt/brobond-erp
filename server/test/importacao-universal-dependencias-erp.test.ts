@@ -76,9 +76,9 @@ test('ERP unique SKU resolution is limited to stock, price, and movement update 
  }
 });
 test('variation-only sheet resolves existing child SKUs to a valid ERP parent',()=>{
- const file:ArquivoInventariado={nome:'variacoes.csv',sha256:'a'.repeat(64),tamanhoBytes:3,tipo:'csv',abas:[{nome:'Variacoes',indice:0,totalLinhas:2,totalColunas:3,linhaCabecalho:1,cabecalhos:['sku','cor','tamanho'],vazia:false,celulas:[],linhas:[{linhaOrigem:2,valores:{sku:'CHILD-M',cor:'Azul',tamanho:'M'}}]}]};
+ const file:ArquivoInventariado={nome:'variacoes.csv',sha256:'a'.repeat(64),tamanhoBytes:3,tipo:'csv',abas:[{nome:'Variacoes',indice:0,totalLinhas:2,totalColunas:3,linhaCabecalho:1,cabecalhos:['sku','sku_pai','cor','tamanho'],vazia:false,celulas:[],linhas:[{linhaOrigem:2,valores:{sku:'CHILD-M',sku_pai:'PARENT',cor:'Azul',tamanho:'M'}}]}]};
  const sem=confirmedSemantic(file),entities=reconhecerEntidadesUniversal(file,sem);
- assert.equal(entities.entidades[0]?.tipo,'variacao');
+ assert.equal(entities.entidades[0]?.tipo,'variacao','hierarquia explícita por SKU pai');
  const erpCounts=new Map([['CHILD-M',1]]),sourceSkus=new Map([['Variacoes',new Set(['CHILD-M'])]]),parentBySku=new Map([['CHILD-M',100]]),erpIds=new Set([100,101]);
  const deps=construirModeloDependencias(entities.entidades,[],contexto(erpCounts,sourceSkus,parentBySku,erpIds));
  const dep=deps.find(d=>d.aba==='Variacoes');
@@ -88,7 +88,7 @@ test('variation-only sheet resolves existing child SKUs to a valid ERP parent',(
 });
 
 test('variation dependency remains blocked when ERP child parent is missing or invalid',()=>{
- const file:ArquivoInventariado={nome:'variacoes.csv',sha256:'b'.repeat(64),tamanhoBytes:3,tipo:'csv',abas:[{nome:'Variacoes',indice:0,totalLinhas:2,totalColunas:3,linhaCabecalho:1,cabecalhos:['sku','cor','tamanho'],vazia:false,celulas:[],linhas:[{linhaOrigem:2,valores:{sku:'CHILD-M',cor:'Azul',tamanho:'M'}}]}]};
+ const file:ArquivoInventariado={nome:'variacoes.csv',sha256:'b'.repeat(64),tamanhoBytes:3,tipo:'csv',abas:[{nome:'Variacoes',indice:0,totalLinhas:2,totalColunas:3,linhaCabecalho:1,cabecalhos:['sku','sku_pai','cor','tamanho'],vazia:false,celulas:[],linhas:[{linhaOrigem:2,valores:{sku:'CHILD-M',sku_pai:'PARENT',cor:'Azul',tamanho:'M'}}]}]};
  const sem=confirmedSemantic(file),entities=reconhecerEntidadesUniversal(file,sem);
  const invalidContexts=[
   {parents:new Map<string,number|null>([['CHILD-M',null]]),ids:new Set<number>([101])},
@@ -98,4 +98,12 @@ test('variation dependency remains blocked when ERP child parent is missing or i
   const deps=construirModeloDependencias(entities.entidades,[],contexto(new Map([['CHILD-M',1]]),new Map([['Variacoes',new Set(['CHILD-M'])]]),invalid.parents,invalid.ids));
   const dep=deps[0];assert.equal(dep?.estado,'pendente');assert.equal(dep?.resolvidaNoERP,false);assert.ok(dep?.bloqueios.length>0);
  }
+});
+
+
+test('SKU com cor e tamanho não é classificado automaticamente como variação',()=>{
+ const file:ArquivoInventariado={nome:'skus.csv',sha256:'d'.repeat(64),tamanhoBytes:3,tipo:'csv',abas:[{nome:'SKUs',indice:0,totalLinhas:2,totalColunas:3,linhaCabecalho:1,cabecalhos:['sku','cor','tamanho'],vazia:false,celulas:[],linhas:[{linhaOrigem:2,valores:{sku:'CHILD-M',cor:'Azul',tamanho:'M'}}]}]};
+ const ent=reconhecerEntidadesUniversal(file,confirmedSemantic(file));
+ assert.equal(ent.entidades[0]?.tipo,'sku');
+ assert.ok(ent.entidades[0]?.requerConfirmacao===true||ent.entidades[0]?.confianca<0.9);
 });

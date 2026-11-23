@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import ExcelJS from 'exceljs';
+import { sanitizarXlsx } from './xlsxSanitizer';
 import { parseCSV } from './csv';
 
 export type CelulaOriginal = {
@@ -127,14 +128,44 @@ function inventariarMatriz(nome: string, indice: number, matriz: unknown[][], ce
   };
 }
 
-export async function inventariarArquivoUniversal(opts: OpcoesLeituraUniversal): Promise<ArquivoInventariado> {
+export type ArquivoUniversalValidado = {
+  bytes: Buffer;
+  sha256: string;
+  ext: string;
+  maxCelulas: number;
+};
+
+/**
+ * Único ponto de validação/carga de arquivos do ERP. Usado pelo inventário
+ * universal e pelos adaptadores de destino que precisam do workbook original
+ * (por exemplo, a política comercial), sem implementar leitor paralelo.
+ */
+export function validarArquivoUniversal(opts: OpcoesLeituraUniversal): ArquivoUniversalValidado {
   const bytes = Buffer.from(opts.bytes);
   const maxBytes = opts.maxBytes ?? MAX_BYTES_PADRAO;
-  const maxCelulas = opts.maxCelulas ?? MAX_CELULAS_PADRAO;
   if (!bytes.length) throw new Error('Arquivo vazio.');
   if (bytes.length > maxBytes) throw new Error(`Arquivo excede o limite de ${maxBytes} bytes.`);
-  const ext = opts.nomeArquivo.toLowerCase().split('.').pop();
-  const sha256 = createHash('sha256').update(bytes).digest('hex');
+  const ext = opts.nomeArquivo.toLowerCase().split('.').pop() ?? '';
+  return {
+    bytes,
+    sha256: createHash('sha256').update(bytes).digest('hex'),
+    ext,
+    maxCelulas: opts.maxCelulas ?? MAX_CELULAS_PADRAO,
+  };
+}
+
+export async function carregarWorkbookUniversal(opts: OpcoesLeituraUniversal): Promise<ExcelJS.Workbook> {
+  const validado = validarArquivoUniversal(opts);
+  if (!['xlsx', 'xlsm'].includes(validado.ext)) throw new Error('Formato não suportado. Envie XLSX, XLSM ou CSV.');
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load((await sanitizarXlsx(validado.bytes)) as unknown as Parameters<typeof workbook.xlsx.load>[0]);
+  return workbook;
+}
+
+export async function inventariarArquivoUniversal(opts: OpcoesLeituraUniversal): Promise<ArquivoInventariado> {
+  const validado = validarArquivoUniversal(opts);
+  const { bytes, sha256, ext } = validado;
+  const maxCelulas = validado.maxCelulas;
   if (ext === 'csv') {
     const text = bytes.toString('utf8').replace(/^\uFEFF/, '');
     const parsed = parseCSV(text);
@@ -154,7 +185,7 @@ export async function inventariarArquivoUniversal(opts: OpcoesLeituraUniversal):
   }
   if (ext !== 'xlsx' && ext !== 'xlsm') throw new Error('Formato não suportado. Envie XLSX, XLSM ou CSV.');
   const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(bytes as unknown as Parameters<typeof workbook.xlsx.load>[0]);
+  await workbook.xlsx.load((await sanitizarXlsx(bytes)) as unknown as Parameters<typeof workbook.xlsx.load>[0]);
   let cellCount = 0;
   const sheets: AbaInventariada[] = workbook.worksheets.map((ws, idx) => {
     const matrix: unknown[][] = [];

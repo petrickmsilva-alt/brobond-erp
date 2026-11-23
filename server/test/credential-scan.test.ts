@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 // O valor antigo só é permitido em listas de bloqueio e em testes negativos.
@@ -19,7 +19,7 @@ const root = fileURLToPath(new URL('../../', import.meta.url));
 const forbidden = ['brobond' + '123'];
 
 test('senha legada não reaparece fora de listas de bloqueio e testes negativos documentados', () => {
-  const files = execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], { cwd: root }).toString().split('\0').filter(Boolean);
+  const files = execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], { cwd: root }).toString().split('\0').filter((path) => Boolean(path) && existsSync(`${root}/${path}`));
   const violations: string[] = [];
   for (const path of files) {
     if (allowed.has(path)) continue;
@@ -33,7 +33,7 @@ test('senha legada não reaparece fora de listas de bloqueio e testes negativos 
 });
 
 test('varredura de padrões de credencial em arquivos rastreados', () => {
-  const files = execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], { cwd: root }).toString().split('\0').filter(Boolean);
+  const files = execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], { cwd: root }).toString().split('\0').filter((path) => Boolean(path) && existsSync(`${root}/${path}`));
   const patterns: Array<{ name: string; re: RegExp }> = [
     { name: 'aws-access-key', re: /AKIA[0-9A-Z]{16}/ },
     { name: 'github-pat', re: /ghp_[A-Za-z0-9]{20,}/ },

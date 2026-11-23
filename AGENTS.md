@@ -79,7 +79,7 @@ O `postgresql-client-16` do PGDG depende de `sensible-utils` (só resolvido com 
 
 ## Carga da política comercial (migration 0117)
 
-- O importador (`server/src/cargaPoliticaComercial.ts`) lê TODAS as abas de **cadastro**,
+- O adaptador de destino (`server/src/cargaPoliticaComercial.ts`, acionado pelo motor universal) lê TODAS as abas de **cadastro** com o leitor central (`importacaoUniversalLeitura.ts`),
   não só a principal: `FONTES_CADASTRO` cobre "Política Comercial Completa" (canônica),
   "BASE CONTROLE DE ESTOQUE" (SKUs `1001P`…) e "Política Comercial Roupas (2)" (fornecedor).
   As abas de **movimentação** (entrada, saída, venda diária, situação de estoque) NUNCA viram
@@ -261,9 +261,9 @@ credencial ao agente e sem execução arbitrária. Módulo: `modules/operational
 
 ## Carga da Política Comercial — fila durável (migration 0126)
 
-A confirmação da carga não pode depender de uma requisição HTTP aberta durante a importação. A rota de confirmação enfileira uma operação e a tela acompanha o resultado pelo identificador persistido.
+A confirmação da carga não pode depender de uma requisição HTTP aberta durante a importação. A execução é enfileirada pelo adaptador `importacaoUniversalPolitica.ts` **dentro do pipeline do motor universal**; não existe rota própria de carga nem tela própria. A interface única (`/importacao-universal?destino=politica_comercial`) acompanha `GET /api/importacao-universal/sessoes/:id/status`.
 
-- **Rotas:** POST /api/carga/politica-comercial/confirmar e POST /api/carga/politica-comercial/jobs enfileiram; GET /api/carga/politica-comercial/jobs/:id consulta. A consulta é restrita ao usuário e à empresa autenticados; empresa/usuário nunca vêm do payload.
+- **Rotas:** apenas `/api/importacao-universal/*`. As antigas rotas `/api/carga/politica-comercial/*` e `/api/importar/*` foram removidas; a fila `carga_politica_comercial_jobs` é infraestrutura interna do adaptador.
 - **Persistência:** carga_politica_comercial_jobs existe na migration 0126_carga_politica_comercial_jobs.sql e no espelho db/schema.sql. Não registrar essa tabela no CRUD genérico: é infraestrutura interna da fila.
 - **Worker:** só inicia depois de banco/migrações prontos; varre a fila a cada 5 segundos. A claim usa FOR UPDATE SKIP LOCKED, um índice parcial limita a uma carga ativa por empresa e cada execução recebe um lease_token UUID. O worker revalida o vínculo em usuario_empresas (ou a empresa padrão) e reconstrói empresa_sessao a partir do empresa_id persistido no job; não usa o escopo padrão do cadastro do usuário para substituir a empresa do enqueue.
 - **Recuperação:** heartbeat começa imediatamente após a claim e renova a cada 15 segundos. Lease sem heartbeat por 2 minutos pode ser retomado. Toda renovação e conclusão compara o token; worker antigo não consegue confirmar depois que outra instância assumiu o lease.
