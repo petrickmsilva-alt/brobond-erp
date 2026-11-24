@@ -26,21 +26,27 @@ API ficar pronta: uma migração que falha num banco real derruba o deploy. Uma 
    `schema.sql`, declarado DEPOIS das tabelas que referencia (`empresas` nasce no meio do
    arquivo), e `db/bootstrap.sql` é regerado por `scripts/gerar-bootstrap.mjs`.
 
-Incorreto (0127 como proposta no PR #160 — jobs `running` antigos não têm `lease_token`):
+Incorreto (situação apontada na revisão do PR #160: jobs `running` criados pela 0126 não
+têm `lease_token`, então o CHECK validado reprova a migração inteira):
 
 ```sql
-ALTER TABLE carga_politica_comercial_jobs ADD COLUMN IF NOT EXISTS lease_token uuid;
+ALTER TABLE carga_politica_comercial_jobs ADD COLUMN IF NOT EXISTS lease_token UUID;
 ALTER TABLE carga_politica_comercial_jobs ADD CONSTRAINT carga_politica_comercial_jobs_lease_ck
   CHECK ((status = 'running' AND lease_token IS NOT NULL) OR (status <> 'running' AND lease_token IS NULL));
 ```
 
-Correto:
+Correto (reconciliar as linhas legadas antes, ou adiar a validação, sempre guardado):
 
 ```sql
-ALTER TABLE carga_politica_comercial_jobs ADD COLUMN IF NOT EXISTS lease_token uuid;
-UPDATE carga_politica_comercial_jobs SET status = 'failed', lease_token = NULL
- WHERE status = 'running' AND lease_token IS NULL;   -- reconcilia o legado antes
--- ... e só então adiciona o CHECK guardado por IF NOT EXISTS em pg_constraint
+ALTER TABLE carga_politica_comercial_jobs ADD COLUMN IF NOT EXISTS lease_token UUID;
+DO $migration$ BEGIN
+  -- 1) backfill/reconciliação explícita das linhas antigas que violariam a regra, ou
+  -- 2) ADD CONSTRAINT ... NOT VALID, validando só depois da reconciliação
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'carga_politica_comercial_jobs_lease_ck') THEN
+    ALTER TABLE carga_politica_comercial_jobs ADD CONSTRAINT carga_politica_comercial_jobs_lease_ck
+      CHECK (...) NOT VALID;
+  END IF;
+END $migration$;
 ```
 
 Não precisa reportar o que os testes já travam: sincronia de `db/bootstrap.sql`
