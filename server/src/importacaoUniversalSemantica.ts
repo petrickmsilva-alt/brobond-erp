@@ -1,7 +1,7 @@
 import type { ArquivoInventariado, AbaInventariada } from './importacaoUniversalLeitura';
 
 export type CampoCanonico =
-  | 'sku' | 'sku_pai' | 'nome' | 'razao_social' | 'pessoa' | 'tipo_cliente' | 'contato' | 'insumo' | 'custo_medio' | 'estoque_min' | 'categoria' | 'colecao' | 'cor' | 'tamanho' | 'quantidade'
+  | 'sku' | 'sku_pai' | 'sku_base' | 'referencia_comercial' | 'familia_id' | 'politica_comercial' | 'nome' | 'razao_social' | 'pessoa' | 'tipo_cliente' | 'contato' | 'insumo' | 'custo_medio' | 'estoque_min' | 'categoria' | 'colecao' | 'cor' | 'tamanho' | 'quantidade'
   | 'custo' | 'custo_aquisicao' | 'custo_fabricacao' | 'custo_adicional' | 'imposto' | 'margem' | 'preco_venda' | 'preco_atacado' | 'preco_promocional' | 'qtd_min_atacado' | 'codigo_barras' | 'ncm' | 'peso_g'
   | 'local' | 'fornecedor' | 'telefone' | 'email' | 'cnpj_cpf' | 'descricao' | 'composicao'
   | 'material' | 'modelagem' | 'genero' | 'marca' | 'cest' | 'tipo' | 'condicao' | 'producao' | 'unidade' | 'tags' | 'formato' | 'ativo' | 'codigo_item' | 'codigo_categoria' | 'codigo_industria' | 'variacao_tamanho_id' | 'local_destino' | 'motivo'
@@ -34,6 +34,13 @@ export type AnaliseSemantica = {
 const DICIONARIO: Record<CampoCanonico, string[]> = {
   sku: ['sku','codigo_sku','referencia','ref','cod_produto','codigo_produto','product_code','item_code','codigo_item'],
   sku_pai: ['sku_pai','produto_pai','sku_produto_pai','parent_sku','codigo_pai','sku_master'],
+  // Identidade de FAMÍLIA. Ficam separados de `sku` de propósito: `sku` é o
+  // identificador da linha (variante), enquanto estes campos identificam o
+  // produto-pai. São a evidência forte usada pelo resolvedor de hierarquia.
+  sku_base: ['sku_base','codigo_base','cod_base','base_sku','codigo_produto_base','sku_master_base','codigo_sku_base'],
+  referencia_comercial: ['referencia_comercial','codigo_referencia','cod_ref','ref_comercial','referencia_base','referencia_familia','product_reference','referencia_do_produto'],
+  familia_id: ['familia_id','id_familia','codigo_familia','family_id','chave_familia','grupo_variacao','variation_family','family_key'],
+  politica_comercial: ['politica_comercial','politica','regra_comercial','commercial_policy'],
   razao_social: ['razao_social','razão_social','company_name','razao'],
   pessoa: ['pessoa','tipo_pessoa','pessoa_fisica_juridica','pf_pj'],
   tipo_cliente: ['tipo_cliente','cliente_tipo','tipo_cliente_loja'],

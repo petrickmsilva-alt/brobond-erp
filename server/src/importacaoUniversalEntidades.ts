@@ -1,5 +1,6 @@
 import type { ArquivoInventariado } from './importacaoUniversalLeitura';
 import type { AnaliseSemantica, CampoCanonico, SugestaoCampo } from './importacaoUniversalSemantica';
+import { TIPOS_CATALOGO_HIERARQUIA, type ResumoHierarquiaAba } from './importacaoUniversalHierarquia';
 
 export type EntidadeDetectada = {
   aba: string;
@@ -35,6 +36,9 @@ export type DependenciaAba = {
   resolvidaNoERP:boolean;
   skusERPResolvidos:number;
   skusERPComPendencia:number;
+  /** Família construída a partir dos próprios registros (uma aba / um CSV). */
+  resolvidaNaOrigem:boolean;
+  hierarquia?:ResumoHierarquiaAba;
 };
 export type ContextoDependenciasERP = {
   produtosPorSku:Map<string,number>;
@@ -81,6 +85,18 @@ function classificar(c: CampoCanonico[]): EntidadeDetectada['tipo'] {
   if (c.includes('cor') || c.includes('tamanho')) return 'sku';
   return 'tabela_generica';
 }
+/**
+ * Tipos canônicos por aba, derivados do MESMO classificador do núcleo. O
+ * resolvedor de hierarquia usa este mapa para nunca interpretar uma aba de
+ * estoque/movimentação como catálogo de produtos com variações.
+ */
+export function tiposPorAbaDaAnalise(
+  arquivo: ArquivoInventariado,
+  analise: AnaliseSemantica,
+): Record<string, EntidadeDetectada['tipo']> {
+  return Object.fromEntries(arquivo.abas.map((aba) => [aba.nome, classificar(camposDaAba(aba.nome, analise))]));
+}
+
 function rowsWith(arquivo: ArquivoInventariado, sheet: string, key: string): Set<string> {
   const aba = arquivo.abas.find(a=>a.nome===sheet);
   if (!aba) return new Set();
@@ -89,7 +105,12 @@ function rowsWith(arquivo: ArquivoInventariado, sheet: string, key: string): Set
   return new Set(aba.linhas.map(r=>String(r.valores[col]??'').trim().toUpperCase()).filter(v=>v.length>0));
 }
 
-export function construirModeloDependencias(entidades:EntidadeDetectada[],relacionamentos:RelacionamentoSugerido[],contextoERP?:ContextoDependenciasERP):DependenciaAba[]{
+export function construirModeloDependencias(
+ entidades:EntidadeDetectada[],
+ relacionamentos:RelacionamentoSugerido[],
+ contextoERP?:ContextoDependenciasERP,
+ hierarquiasPorAba?:Record<string,ResumoHierarquiaAba>,
+):DependenciaAba[]{
  const regras:Record<string,{etapa:number|null;label:string;pais:EntidadeDetectada['tipo'][];nota:string}>={
   produto:{etapa:1,label:'Produto base',pais:[],nota:'Entidade raiz: atributos comerciais e de catálogo formam o produto-pai.'},
   sku:{etapa:2,label:'SKU / identificador',pais:['produto'],nota:'O SKU deve identificar e apontar para o produto-pai, sem duplicar o cadastro do produto.'},
@@ -98,16 +119,37 @@ export function construirModeloDependencias(entidades:EntidadeDetectada[],relaci
   preco:{etapa:5,label:'Preço (componente)',pais:['produto','variacao'],nota:'Preço depende de produto ou variação; não deve criar produto isoladamente.'},
   movimentacao:{etapa:6,label:'Movimentação',pais:['estoque','variacao','produto'],nota:'Movimentação depende de produto/variação e saldo/local; nunca gera cadastro independente.'},
  };
+ const base=(aba:string,tipo:EntidadeDetectada['tipo'])=>({aba,tipo,etapa:null as number|null,paisAlternativos:[] as EntidadeDetectada['tipo'][],abasPaiDisponiveis:[] as DependenciaAba['abasPaiDisponiveis'],resolvidaNoERP:false,skusERPResolvidos:0,skusERPComPendencia:0,resolvidaNaOrigem:false});
  return entidades.map(e=>{
-  const regra=regras[e.tipo];if(!regra)return{aba:e.aba,tipo:e.tipo,etapa:null,etapaLabel:'Entidade independente',paisAlternativos:[],abasPaiDisponiveis:[],estado:'independente',bloqueios:[],nota:'Entidade fora da cadeia Produto → SKU → Variação → Estoque; preservada como entidade separada.',resolvidaNoERP:false,skusERPResolvidos:0,skusERPComPendencia:0};
-  if(!regra.pais.length)return{aba:e.aba,tipo:e.tipo,etapa:regra.etapa,etapaLabel:regra.label,paisAlternativos:[],abasPaiDisponiveis:[],estado:'raiz',bloqueios:[],nota:regra.nota,resolvidaNoERP:false,skusERPResolvidos:0,skusERPComPendencia:0};
+  const regra=regras[e.tipo];
+  if(!regra)return{...base(e.aba,e.tipo),etapaLabel:'Entidade independente',estado:'independente' as const,bloqueios:[],nota:'Entidade fora da cadeia Produto → SKU → Variação → Estoque; preservada como entidade separada.'};
+  if(!regra.pais.length)return{...base(e.aba,e.tipo),etapa:regra.etapa,etapaLabel:regra.label,estado:'raiz' as const,bloqueios:[],nota:regra.nota};
+
+  // ------------------------------------------------------------------
+  // HIERARQUIA NA PRÓPRIA ORIGEM: um único CSV/aba com SKU, cor, tamanho e
+  // evidência estrutural de família NÃO exige aba separada de produto-pai.
+  // O resolvedor (`importacaoUniversalHierarquia`) já validou referência,
+  // código-base, SKU-base, nome normalizado e padrões de SKU; quando a
+  // hierarquia é inequívoca a dependência é resolvida automaticamente.
+  // Conflitos reais ficam na prévia e afetam somente as linhas conflitantes.
+  // ------------------------------------------------------------------
+  const hierarquia=hierarquiasPorAba?.[e.aba];
+  if(hierarquia?.aplicavel&&hierarquia.resolvida&&TIPOS_CATALOGO_HIERARQUIA.has(e.tipo)){
+   return{...base(e.aba,e.tipo),etapa:regra.etapa,etapaLabel:regra.label,paisAlternativos:regra.pais,
+    estado:'vinculada' as const,bloqueios:[],
+    nota:regra.nota+' Família resolvida na própria origem: '+hierarquia.familias+' família(s), '+hierarquia.variantes+' variante(s) e '+hierarquia.independentes+' produto(s) independente(s). Evidência: '+(hierarquia.evidencias.join(', ')||'sem evidência de família')+'. Não é necessária aba de produto-pai.',
+    resolvidaNaOrigem:true,hierarquia};
+  }
+
   const candidatos=entidades.filter(p=>p.aba!==e.aba&&regra.pais.includes(p.tipo));
   const skusERPdaAba=contextoERP?.skusPorAba.get(e.aba)??new Set<string>();
   const skusERPResolvidos=[...skusERPdaAba].filter(sku=>contextoERP?.produtosPorSku.get(sku)===1);
   const skusERPComPendencia=[...skusERPdaAba].filter(sku=>contextoERP?.produtosPorSku.get(sku)!==1);
   const resolvidaNoERP=['estoque','preco','movimentacao'].includes(e.tipo)&&candidatos.length===0&&skusERPdaAba.size>0&&skusERPComPendencia.length===0;
   const resolvidaVariacaoNoERP=e.tipo==='variacao'&&skusERPdaAba.size>0&&skusERPComPendencia.length===0&&[...skusERPdaAba].every(sku=>{const parentId=contextoERP?.produtoPaiPorSku?.get(sku);return parentId!==undefined&&parentId!==null&&contextoERP?.produtoIdsERP?.has(Number(parentId))===true;});
-  if(resolvidaNoERP||resolvidaVariacaoNoERP)return{aba:e.aba,tipo:e.tipo,etapa:regra.etapa,etapaLabel:regra.label,paisAlternativos:regra.pais,abasPaiDisponiveis:[],estado:'vinculada',bloqueios:[],nota:regra.nota+' Dependência resolvida pelo snapshot do ERP: '+skusERPResolvidos.length+' SKU(s) único(s) existente(s), sem exigir aba de produto redundante.',resolvidaNoERP:true,skusERPResolvidos:skusERPResolvidos.length,skusERPComPendencia:0};
+  if(resolvidaNoERP||resolvidaVariacaoNoERP)return{...base(e.aba,e.tipo),etapa:regra.etapa,etapaLabel:regra.label,paisAlternativos:regra.pais,
+   estado:'vinculada' as const,bloqueios:[],resolvidaNoERP:true,skusERPResolvidos:skusERPResolvidos.length,
+   nota:regra.nota+' Dependência resolvida pelo snapshot do ERP: '+skusERPResolvidos.length+' SKU(s) único(s) existente(s), sem exigir aba de produto redundante.'};
   const abasPaiDisponiveis=candidatos.map(p=>{
    const links=relacionamentos.filter(r=>(r.origemAba===p.aba&&r.destinoAba===e.aba)||(r.origemAba===e.aba&&r.destinoAba===p.aba));
    return{aba:p.aba,tipo:p.tipo,relacionada:links.length>0,confirmada:links.some((r:any)=>r.confirmado===true),campos:links.map(r=>r.campoOrigem+' ↔ '+r.campoDestino)};
@@ -120,11 +162,15 @@ export function construirModeloDependencias(entidades:EntidadeDetectada[],relaci
   else if(!abasPaiDisponiveis.some(p=>p.confirmada))bloqueios.push('Vínculo com aba pai precisa ser confirmado explicitamente.');
   if(abasPaiDisponiveis.some(p=>p.confirmada&&relacionamentos.some((r:any)=>((r.origemAba===p.aba&&r.destinoAba===e.aba)||(r.origemAba===e.aba&&r.destinoAba===p.aba))&&Number(r.valoresEmComum||0)===0)))bloqueios.push('Há vínculo confirmado sem valores coincidentes; revisar a chave antes de avançar.');
   const estado:DependenciaAba['estado']=abasPaiDisponiveis.some(p=>p.confirmada)?'vinculada':'pendente';
-  return{aba:e.aba,tipo:e.tipo,etapa:regra.etapa,etapaLabel:regra.label,paisAlternativos:regra.pais,abasPaiDisponiveis,estado,bloqueios,nota:regra.nota,resolvidaNoERP:false,skusERPResolvidos:0,skusERPComPendencia:contextoERP?skusERPComPendencia.length:0};
+  return{...base(e.aba,e.tipo),etapa:regra.etapa,etapaLabel:regra.label,paisAlternativos:regra.pais,abasPaiDisponiveis,estado,bloqueios,nota:regra.nota,skusERPComPendencia:contextoERP?skusERPComPendencia.length:0,...(hierarquia?{hierarquia}:{})};
  });
 }
 
-export function reconhecerEntidadesUniversal(arquivo: ArquivoInventariado, analise: AnaliseSemantica): ReconhecimentoEntidades {
+export function reconhecerEntidadesUniversal(
+  arquivo: ArquivoInventariado,
+  analise: AnaliseSemantica,
+  hierarquiasPorAba?:Record<string,ResumoHierarquiaAba>,
+): ReconhecimentoEntidades {
   const entidades: EntidadeDetectada[] = arquivo.abas.map(aba => {
     const fields=camposDaAba(aba.nome,analise);
     const type=classificar(fields);
@@ -157,5 +203,6 @@ export function reconhecerEntidadesUniversal(arquivo: ArquivoInventariado, anali
   if(entidades.some(e=>e.tipo==='tabela_generica')) alertas.push('Uma ou mais abas não puderam ser classificadas com segurança; nenhum campo desconhecido será descartado.');
   if(relacionamentos.length) alertas.push('Relacionamentos entre abas foram sugeridos por valores em comum; confirme antes de vincular registros.');
   if(analise.camposDesconhecidos.length) alertas.push('Campos desconhecidos encontrados: devem ser mantidos e revisados manualmente.');
-  return {entidades,relacionamentos,dependencias:construirModeloDependencias(entidades,relacionamentos),alertas};
+  if(Object.values(hierarquiasPorAba||{}).some(h=>h.aplicavel&&h.resolvida)) alertas.push('Hierarquia produto-pai × variação resolvida a partir dos próprios registros; nenhuma aba separada de produto-pai é exigida.');
+  return {entidades,relacionamentos,dependencias:construirModeloDependencias(entidades,relacionamentos,undefined,hierarquiasPorAba),alertas};
 }
