@@ -7,6 +7,7 @@ import { CronLeaseLostError, assertCurrentLeaseAlive, currentCronLease, leaseHel
 import { HttpError } from './errors';
 import { COLUNAS_AUTENTICACAO, columnsOf, getResource, type Resource } from './resources';
 import { alvosDeBusca, campoPorDigitos, digitosDe, idDoTermo, termosDeBusca } from './busca';
+import { montarPredicadoBuscaIndexada } from './buscaSql';
 import { hashCadeiaAuditoria, normalizarPayloadAuditoria, verificarCadeiaAuditoria } from './auditChain';
 import { valorizarEstoque } from './valorizacao';
 import {
@@ -337,6 +338,14 @@ function searchClause(r: Resource, qtext: string | undefined, params: unknown[],
   }
   const term = (qtext || '').trim();
   if (!term) return conds.length ? `WHERE ${conds.join(' AND ')}` : '';
+  // Recursos grandes usam predicados compostos indexáveis e UNION ALL por alvo.
+  // Isso preserva os campos locais e referências sem um OR heterogêneo que
+  // inviabilize o BitmapOr do PostgreSQL.
+  const predicadoIndexado = montarPredicadoBuscaIndexada(r, term, params, refs, filter);
+  if (predicadoIndexado !== null) {
+    if (predicadoIndexado) conds.push(predicadoIndexado);
+    return conds.length ? `WHERE ${conds.join(' AND ')}` : '';
+  }
   // Cada termo é um AND; dentro do termo, OR entre os campos pesquisáveis. Os
   // alvos vêm de `searchFields` (ou, sem ele, de todo campo com `search: true`)
   // e só entram no SQL nomes de coluna reais — o valor é sempre parâmetro.
