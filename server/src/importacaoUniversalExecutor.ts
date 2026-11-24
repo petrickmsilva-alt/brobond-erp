@@ -11,6 +11,7 @@ import type { Row, Tx } from './store';
 import { UNIVERSAL_CONDITION_PRICE_FIELDS, preserveNonzeroBasePrices, requiredConditionCodesFromMappedRows, missingConditionCodes, persistUniversalConditionPrice } from './importacaoUniversalPrecos';
 import { hashAprovacaoImportacaoUniversal } from './importacaoUniversalHash';
 import { normalizarDestinoImportacao } from './importacaoUniversalDestinos';
+import { TIPOS_CATALOGO_HIERARQUIA } from './importacaoUniversalHierarquia';
 
 const BLOQUEADORES = new Set(['duplicado_origem','conflito_sku','conflito_codigo_barras','ambiguidade','campo_desconhecido','politica_status_invalido','politica_preco_conflitante','limite_carga_excedido','orfao_relacionamento','conflito_dimensional','produto_sem_sku','sku_sem_produto','variacao_sem_produto','estoque_sem_produto','estoque_sem_local','preco_sem_produto','movimentacao_sem_produto','entidade_sem_executor','condicao_pagamento_ausente']);
 const normal=(v:unknown)=>String(v??'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim().toUpperCase();
@@ -71,7 +72,7 @@ function findRef(rows:Row[],value:unknown,keys:string[]=['nome','codigo','descri
  const k=normal(value);return k?rows.find(r=>keys.some(key=>normal(r[key])===k))??null:null;
 }
 function cleanEmpty(obj:Record<string,unknown>){for(const [k,v] of Object.entries(obj))if(v===''||v===undefined||v===null)delete obj[k];return obj;}
-function productImportPayload(m:Record<string,unknown>,extras:Record<string,unknown>,r:Resource,refs:{categorias:Row[];colecoes:Row[];cores:Row[];fornecedores:Row[]}){
+export function productImportPayload(m:Record<string,unknown>,extras:Record<string,unknown>,r:Resource,refs:{categorias:Row[];colecoes:Row[];cores:Row[];fornecedores:Row[]}){
  const payload=payloadProduto(m,extras,refs,r);
  if(m.formato!==undefined&&m.formato!==null&&String(m.formato).trim()!==''&&field(r,'formato'))payload.formato=m.formato;
  if(m.ativo!==undefined&&m.ativo!==null&&String(m.ativo).trim()!==''&&field(r,'ativo'))payload.ativo=m.ativo;
@@ -82,6 +83,16 @@ function productImportPayload(m:Record<string,unknown>,extras:Record<string,unkn
  if(m.tipo!==undefined&&m.tipo!==null&&String(m.tipo).trim()!==''&&field(r,'tipo'))payload.tipo=m.tipo;
  if(m.variacao_tamanho_id!==undefined&&field(r,'variacao_tamanho_id'))payload.variacao_tamanho_id=m.variacao_tamanho_id;
  const preservados={...extras};for(const [key,rows] of [['categoria',refs.categorias],['colecao',refs.colecoes],['cor',refs.cores],['fornecedor',refs.fornecedores]] as const)if(m[key]!==undefined&&!findByName(rows,m[key]))preservados[key+'_origem']=m[key];for(const k of ['custo_fabricacao','custo_adicional','imposto','margem'])if(m[k]!==undefined&&!field(r,k))preservados[k+'_origem']=m[k];
+ // Preserva TODO campo canônico mapeado que não tem coluna própria no ERP
+ // (referência comercial, código-base, família, EAN auxiliar, política
+ // comercial, condições de preço, quantidade de origem, descrição livre…).
+ // Nada é descartado em silêncio na materialização de pais e variantes.
+ const controles=new Set(['sku','sku_pai','nome','razao_social','pessoa','tipo_cliente','contato','insumo','custo_medio','tipo','categoria','colecao','cor','fornecedor','email','telefone','cnpj_cpf','variacao_tamanho_id','ativo','formato']);
+ for(const [key,value] of Object.entries(m)){
+  if(field(r,key)||controles.has(key)||key.endsWith('_origem'))continue;
+  if(value===undefined||value===null||String(value).trim()==='')continue;
+  preservados[key+'_origem']=value;
+ }
  if(field(r,'atributos_adicionais'))payload.atributos_adicionais=preservados;
  return cleanEmpty(payload);
 }
@@ -132,21 +143,45 @@ export async function executarImportacaoUniversalHandler(req:Request,res:Respons
    const sessionMeta={id,sha:String(session.sha256)};
    const entityRows=entities.flatMap(e=>types.includes(String(e.tipo))?(rowsBySheet.get(String(e.aba))||[]).map(row=>({aba:String(e.aba),tipo:String(e.tipo),row})):[]);
    report.total=entityRows.length;
+   // Plano de hierarquia aprovado: pais + variantes resolvidos a partir dos
+   // próprios registros. As linhas cobertas por ele NÃO passam pelos laços
+   // genéricos (evita criar produto duas vezes) e são materializadas abaixo.
+   const planoHierarquia=((recon as any)?.hierarquia??(confirmed as any)?.hierarquia??null) as any;
+   const chaveLinha=(aba:string,linha:number)=>`${aba}::${linha}`;
+   const tipoEntidadePorAba=new Map<string,string>(entities.map((e:any)=>[String(e.aba),String(e.tipo)]));
+   const chavesHierarquia=new Set<string>();
+   const familiasHierarquia:any[]=Array.isArray(planoHierarquia?.familias)?planoHierarquia.familias:[];
+   const independentesHierarquia:any[]=Array.isArray(planoHierarquia?.independentes)?planoHierarquia.independentes:[];
+   const abasHierarquia=new Set<string>(Object.entries(planoHierarquia?.porAba??{})
+    .filter(([aba,r]:any)=>r?.aplicavel&&r?.resolvida&&TIPOS_CATALOGO_HIERARQUIA.has(tipoEntidadePorAba.get(aba)??''))
+    .map(([aba])=>aba));
+   for(const familia of familiasHierarquia){
+    if(!abasHierarquia.has(familia.aba))continue;
+    for(const variante of familia.variantes??[])if(abasHierarquia.has(variante.aba))chavesHierarquia.add(chaveLinha(variante.aba,variante.linha));
+    for(const linhaPai of familia.linhasPai??[])if(abasHierarquia.has(linhaPai.aba))chavesHierarquia.add(chaveLinha(linhaPai.aba,linhaPai.linha));
+   }
+   for(const ind of independentesHierarquia)if(abasHierarquia.has(ind.aba))chavesHierarquia.add(chaveLinha(ind.aba,ind.linha));
+   const linhaCobertaPelaHierarquia=(x:any)=>TIPOS_CATALOGO_HIERARQUIA.has(x.tipo)
+    &&abasHierarquia.has(x.aba)&&chavesHierarquia.has(chaveLinha(x.aba,x.row.linhaOrigem));
+   const linhasHierarquia=entityRows.filter(linhaCobertaPelaHierarquia);
+   const linhasNormais=entityRows.filter(x=>!linhaCobertaPelaHierarquia(x));
+   const itemPorChave=new Map<string,any>(linhasHierarquia.map(x=>[chaveLinha(x.aba,x.row.linhaOrigem),x]));
+   const itemDaHierarquia=(aba:string,linha:number):any=>itemPorChave.get(chaveLinha(aba,linha))??{aba,tipo:'produto',row:(rowsBySheet.get(aba)??[]).find(r=>r.linhaOrigem===linha)};
    const productosResource=getResource('produtos')!,stockResource=getResource('estoques')!,movementResource=getResource('movimentacoes')!;
-   const productRows=entityRows.filter(x=>x.tipo==='produto');
+   const productRows=linhasNormais.filter(x=>x.tipo==='produto');
    // SKU-only tabs are dependent identifiers; they materialize as child SKUs, not duplicate parent products.
-   const variationRows=entityRows.filter(x=>['sku','variacao'].includes(x.tipo));
-   const priceRows=entityRows.filter(x=>x.tipo==='preco');
-   const requiredConditionCodes=requiredConditionCodesFromMappedRows([...productRows,...priceRows].map(item=>mapSheetRow(item.row,item.aba,mappings)));
+   const variationRows=linhasNormais.filter(x=>['sku','variacao'].includes(x.tipo));
+   const priceRows=linhasNormais.filter(x=>x.tipo==='preco');
+   const requiredConditionCodes=requiredConditionCodesFromMappedRows([...productRows,...priceRows,...linhasHierarquia].map(item=>mapSheetRow(item.row,item.aba,mappings)));
    if(requiredConditionCodes.length){
     const catalog=await tx.query('SELECT codigo FROM condicoes_pagamento WHERE empresa_id=$1 AND ativo=true AND codigo=ANY($2::text[])',[empresaId,requiredConditionCodes]);
     const availableCodes=new Set(catalog.rows.map((r:any)=>String(r.codigo)));
     const missing=missingConditionCodes(requiredConditionCodes,availableCodes);
     if(missing.length)throw new HttpError(409,'Condicoes comerciais ausentes/inativas no cadastro da empresa: '+missing.join(', ')+'. Cadastre ou ative os codigos antes de aprovar a previa.',{condicoesAusentes:missing});
    }
-   const stockRows=entityRows.filter(x=>x.tipo==='estoque');
-   const movementRows=entityRows.filter(x=>x.tipo==='movimentacao');
-   const customerRows=entityRows.filter(x=>x.tipo==='cliente'),supplierRows=entityRows.filter(x=>x.tipo==='fornecedor'),inputRows=entityRows.filter(x=>x.tipo==='insumo');
+   const stockRows=linhasNormais.filter(x=>x.tipo==='estoque');
+   const movementRows=linhasNormais.filter(x=>x.tipo==='movimentacao');
+   const customerRows=linhasNormais.filter(x=>x.tipo==='cliente'),supplierRows=linhasNormais.filter(x=>x.tipo==='fornecedor'),inputRows=linhasNormais.filter(x=>x.tipo==='insumo');
    const products=await fetchAll(s,productosResource,empresaId,tx);
    const refs={categorias:await fetchAll(s,getResource('categorias')!,empresaId,tx),colecoes:await fetchAll(s,getResource('colecoes')!,empresaId,tx),cores:await fetchAll(s,getResource('cores')!,empresaId,tx),fornecedores:await fetchAll(s,getResource('fornecedores')!,empresaId,tx)};
    const tamanhos=await fetchAll(s,getResource('tamanhos')!,empresaId,tx),locais=await fetchAll(s,getResource('locais')!,empresaId,tx);
@@ -167,11 +202,20 @@ export async function executarImportacaoUniversalHandler(req:Request,res:Respons
     return count;
    };
 
-   for(const item of productRows){
-    const mapped=mapSheetRow(item.row,item.aba,mappings),sku=String(mapped.sku??'').trim();
-    if(!sku||!String(mapped.nome??'').trim())throw new HttpError(422,`Produto/SKU incompleto em ${item.aba} linha ${item.row.linhaOrigem}: SKU e nome são obrigatórios.`);
+   /**
+    * Gravação canônica de produto (simples, pai ou linha independente).
+    * Compartilhada pelo catálogo comum e pela materialização da hierarquia:
+    * mesmas validações, mesma auditoria, mesma idempotência por SKU.
+    */
+   const gravarProduto=async(item:any,mapped:Record<string,unknown>,opcoes:{sku?:string;nome?:string;formato?:string;semCodigoBarras?:boolean;condicoes?:boolean}={})=>{
+    const sku=opcoes.sku??String(mapped.sku??'').trim();
+    if(!sku||!String(mapped.nome??opcoes.nome??'').trim())throw new HttpError(422,`Produto/SKU incompleto em ${item.aba} linha ${item.row.linhaOrigem}: SKU e nome são obrigatórios.`);
     const fontesCusto=['custo','custo_aquisicao','custo_fabricacao'].filter(k=>mapped[k]!==undefined&&mapped[k]!==null&&String(mapped[k]).trim()!=='');if(fontesCusto.length>1)throw new HttpError(422,`Mais de uma coluna de custo foi mapeada para o mesmo produto (${item.aba} linha ${item.row.linhaOrigem}); resolva a ambiguidade antes de importar.`);
     const payload=productImportPayload(mapped,buildExtraAttributes(item.row.valores,item.aba,mappings),productosResource,refs);
+    if(opcoes.sku)payload.sku=sku;
+    if(opcoes.nome)payload.nome=opcoes.nome;
+    if(opcoes.formato)payload.formato=opcoes.formato;
+    if(opcoes.semCodigoBarras)delete payload.codigo_barras;
     const existing=findBySku(products,sku);
     if(existing){
      if(payload.atributos_adicionais&&existing.atributos_adicionais&&typeof existing.atributos_adicionais==='object')payload.atributos_adicionais={...existing.atributos_adicionais,...payload.atributos_adicionais};
@@ -181,15 +225,19 @@ export async function executarImportacaoUniversalHandler(req:Request,res:Respons
      if(!updated)throw new HttpError(409,`Produto ${sku} deixou de existir durante a importação.`);
      await auditImport(s,tx,user as Actor,empresaId,productosResource,Number(existing.id),{sessionId:id,sheet:item.aba,line:item.row.linhaOrigem,sha:sessionMeta.sha,operation:'produto atualizado',key:sku});
      Object.assign(existing,updated);
-     const conditions=await persistConditionPrices(item,mapped,existing);
+     const conditions=opcoes.condicoes===false?0:await persistConditionPrices(item,mapped,existing);
      processResult(item.tipo,item.aba,item.row.linhaOrigem,'atualizados',Number(existing.id),`${sku}; ${conditions} commercial conditions persisted`);
-    }else{
-     const created=await createRecord(productosResource,payload,user as Actor,{escopo:escopoDe(user as any),tx});
-     products.push(created);await auditImport(s,tx,user as Actor,empresaId,productosResource,Number(created.id),{sessionId:id,sheet:item.aba,line:item.row.linhaOrigem,sha:sessionMeta.sha,operation:'produto criado',key:sku});
-     const conditions=await persistConditionPrices(item,mapped,created);
-     processResult(item.tipo,item.aba,item.row.linhaOrigem,'criados',Number(created.id),`${sku}; ${conditions} commercial conditions persisted`);
+     return existing;
     }
-   }
+    const created=await createRecord(productosResource,payload,user as Actor,{escopo:escopoDe(user as any),tx});
+    products.push(created);
+    await auditImport(s,tx,user as Actor,empresaId,productosResource,Number(created.id),{sessionId:id,sheet:item.aba,line:item.row.linhaOrigem,sha:sessionMeta.sha,operation:'produto criado',key:sku});
+    const conditions=opcoes.condicoes===false?0:await persistConditionPrices(item,mapped,created);
+    processResult(item.tipo,item.aba,item.row.linhaOrigem,'criados',Number(created.id),`${sku}; ${conditions} commercial conditions persisted`);
+    return created;
+   };
+
+   for(const item of productRows)await gravarProduto(item,mapSheetRow(item.row,item.aba,mappings));
    const findParentForSheet=(aba:string,row:SheetRow,preferRelation=false):Row|null=>{
     const direct=mapSheetRow(row,aba,mappings),directProduct=direct.sku?findBySku(products,direct.sku):null;
     if(preferRelation&&direct.sku&&directProduct?.produto_pai_id){const existingParent=resolveExistingVariationParent(products,direct.sku);if(existingParent)return existingParent;}
@@ -207,6 +255,97 @@ export async function executarImportacaoUniversalHandler(req:Request,res:Respons
     if(direct.sku){if(preferRelation&&directProduct?.produto_pai_id)return null;return directProduct;}
     return null;
    };
+   // ==================================================================
+   // MATERIALIZAÇÃO DA HIERARQUIA (núcleo universal)
+   // Família resolvida ⇒ 1 produto-pai + 1 produto filho por combinação
+   // válida de cor × tamanho, com SKU, EAN, códigos, custo, preços e
+   // condições comerciais preservados. Idempotente por SKU e por vínculo.
+   // Conflitos reais aparecem na prévia e só as linhas afetadas são
+   // ignoradas — a importação das demais famílias não é bloqueada.
+   // ==================================================================
+   for(const familia of familiasHierarquia){
+    const linhasFamilia=[...(familia.variantes??[]),...(familia.linhasPai??[])];
+    if(!linhasFamilia.length||!linhasFamilia.every((l:any)=>abasHierarquia.has(l.aba)))continue;
+    const primeira=familia.variantes?.[0];
+    const primeiroItem=primeira?itemDaHierarquia(primeira.aba,primeira.linha):null;
+    const linhaPai=familia.linhasPai?.[0];
+    const itemPai=linhaPai?itemDaHierarquia(linhaPai.aba,linhaPai.linha):primeiroItem;
+    const ignorarFamilia=(motivo:string)=>{
+     for(const v of familia.variantes??[])processResult(itemDaHierarquia(v.aba,v.linha)?.tipo??'produto',v.aba,v.linha,'ignorados',undefined,`Família ${familia.chave}: ${motivo}`);
+     for(const l of familia.linhasPai??[])processResult(itemDaHierarquia(l.aba,l.linha)?.tipo??'produto',l.aba,l.linha,'ignorados',undefined,`Família ${familia.chave}: ${motivo}`);
+    };
+    if(!familia.resolvida){ignorarFamilia('conflito de família na prévia; corrija a evidência e reimporte. '+(familia.conflitos??[]).map((c:any)=>c.descricao).join(' '));continue;}
+    if(!itemPai?.row||!primeiroItem?.row){ignorarFamilia('linha de origem não localizada no inventário aprovado.');continue;}
+    let pai:Row|null=findBySku(products,familia.pai.sku);
+    if(pai&&pai.produto_pai_id!=null&&Number(pai.produto_pai_id)>0){ignorarFamilia(`SKU ${familia.pai.sku} já é variação de outro produto no ERP.`);continue;}
+    if(!pai){
+     const mappedPai=mapSheetRow(itemPai.row,itemPai.aba,mappings);
+     pai=await gravarProduto(itemPai,mappedPai,{
+      sku:familia.pai.sku,nome:familia.pai.nome,formato:'variacao',
+      semCodigoBarras:familia.pai.origem==='inferido',
+      condicoes:familia.pai.origem==='linha',
+     });
+    }else{
+     if(String(pai.formato)!=='variacao')await s.update(productosResource,Number(pai.id),{formato:'variacao'},tx);
+     if(linhaPai){
+      const mappedPai=mapSheetRow(itemPai.row,itemPai.aba,mappings);
+      const payloadPai=productImportPayload(mappedPai,buildExtraAttributes(itemPai.row.valores,itemPai.aba,mappings),productosResource,refs);
+      payloadPai.sku=familia.pai.sku;payloadPai.nome=familia.pai.nome;payloadPai.formato='variacao';
+      if(familia.pai.origem==='inferido')delete payloadPai.codigo_barras;
+      if(payloadPai.atributos_adicionais&&pai.atributos_adicionais&&typeof pai.atributos_adicionais==='object')payloadPai.atributos_adicionais={...pai.atributos_adicionais,...payloadPai.atributos_adicionais};
+      const atualizado=await s.update(productosResource,Number(pai.id),validatePayload(productosResource,preserveNonzeroBasePrices(pai,payloadPai),'update'),tx);
+      Object.assign(pai,atualizado??{});
+      if(familia.pai.origem==='linha')await persistConditionPrices(itemPai,mappedPai,pai);
+     }
+     processResult('produto',itemPai.aba,itemPai.row.linhaOrigem,'atualizados',Number(pai.id),`Produto-pai ${familia.pai.sku} identificado/reutilizado; ${familia.totalVariantes} variante(s).`);
+    }
+    for(const v of familia.variantes??[]){
+     const item=itemDaHierarquia(v.aba,v.linha);
+     if(!item?.row){processResult('produto',v.aba,v.linha,'ignorados',undefined,'Linha de variante não localizada no inventário aprovado.');continue;}
+     if(v.requerCorrecao){processResult(item.tipo,v.aba,v.linha,'ignorados',undefined,`Conflito de vínculo: ${(v.conflitos??[]).join(' ')||'família ambígua'}`);continue;}
+     const mapped=mapSheetRow(item.row,item.aba,mappings);
+     if(normal(v.sku)===normal(pai.sku)){processResult(item.tipo,v.aba,v.linha,'ignorados',Number(pai.id),'SKU corresponde ao próprio produto-pai; nenhum filho duplicado.');continue;}
+     const size=resolveMappedVariationSize(tamanhos,mapped.tamanho,mapped.variacao_tamanho_id,empresaId);
+     const colorRaw=mapped.cor;
+     const color=(colorRaw===undefined||String(colorRaw).trim()==='')?null:findRef(refs.cores,colorRaw,['nome','codigo']);
+     const payload=productImportPayload(mapped,buildExtraAttributes(item.row.valores,item.aba,mappings),productosResource,refs);
+     payload.sku=v.sku;
+     payload.nome=String(mapped.nome??'').trim()||v.nome||String(pai.nome??v.sku);
+     payload.formato='variacao';
+     payload.cor=colorRaw===undefined||String(colorRaw).trim()===''?(pai.cor??null):String(colorRaw).trim();
+     payload.cor_id=color?.id??pai.cor_id??null;
+     delete payload.variacao_tamanho_id; // campo readonly: aplicado no vínculo abaixo
+     const chave=v.chaveVariacao||[normal(payload.cor),normal(size?.codigo??size?.nome??mapped.tamanho)].filter(Boolean).join('|')||v.sku;
+     const existing=findBySku(products,v.sku);
+     if(existing&&existing.produto_pai_id!=null&&Number(existing.produto_pai_id)>0&&Number(existing.produto_pai_id)!==Number(pai.id)){
+      processResult(item.tipo,v.aba,v.linha,'ignorados',Number(existing.id),`SKU ${v.sku} já é filho de outro produto no ERP; conflito exibido na prévia.`);continue;
+     }
+     let child:Row;
+     if(existing){
+      if(payload.atributos_adicionais&&existing.atributos_adicionais&&typeof existing.atributos_adicionais==='object')payload.atributos_adicionais=mergeExtraAttributes(existing.atributos_adicionais,payload.atributos_adicionais as Record<string,unknown>);
+      const data=validatePayload(productosResource,preserveNonzeroBasePrices(existing,payload),'update');
+      const updated=await s.update(productosResource,Number(existing.id),data,tx);
+      if(!updated)throw new HttpError(409,`Variação ${v.sku} não pôde ser atualizada.`);
+      const linked=await s.update(productosResource,Number(existing.id),{produto_pai_id:Number(pai.id),variacao_chave:chave,variacao_tamanho_id:size?.id??null},tx);
+      Object.assign(existing,updated,linked??{});child=existing;
+     }else{
+      child=await createRecord(productosResource,payload,user as Actor,{escopo:escopoDe(user as any),tx});
+      child=(await s.update(productosResource,Number(child.id),{produto_pai_id:Number(pai.id),variacao_chave:chave,variacao_tamanho_id:size?.id??null},tx))??child;
+      products.push(child);
+     }
+     const conditions=await persistConditionPrices(item,mapped,child);
+     await auditImport(s,tx,user as Actor,empresaId,productosResource,Number(child.id),{sessionId:id,sheet:v.aba,line:v.linha,sha:sessionMeta.sha,operation:'variação criada/atualizada',key:v.sku});
+     processResult(item.tipo,v.aba,v.linha,existing?'atualizados':'criados',Number(child.id),`${v.sku} → pai ${familia.pai.sku}; ${chave}; EAN ${String(mapped.codigo_barras??'—')}; ${conditions} condição(ões) comercial(is)`);
+    }
+   }
+   // Produtos sem evidência de família continuam independentes (cenário D).
+   for(const ind of independentesHierarquia){
+    if(!abasHierarquia.has(ind.aba))continue;
+    const item=itemDaHierarquia(ind.aba,ind.linha);
+    if(!item?.row)continue;
+    if(!ind.sku){processResult(item.tipo,ind.aba,ind.linha,'ignorados',undefined,'Produto independente sem SKU na origem.');continue;}
+    await gravarProduto(item,mapSheetRow(item.row,item.aba,mappings),{sku:ind.sku,nome:ind.nome||ind.sku});
+   }
    for(const item of variationRows){
     const mapped=mapSheetRow(item.row,item.aba,mappings),parent=findParentForSheet(item.aba,item.row,true),sku=String(mapped.sku??'').trim();
     if(!parent||!sku)throw new HttpError(422,`SKU/variação sem SKU ou produto-pai resolvido em ${item.aba} linha ${item.row.linhaOrigem}.`);
@@ -320,7 +459,7 @@ export async function executarImportacaoUniversalHandler(req:Request,res:Respons
     await auditImport(s,tx,user as Actor,empresaId,resource,Number(created.id),{sessionId:id,sheet:item.aba,line:item.row.linhaOrigem,sha:sessionMeta.sha,operation:item.tipo+' criado',key:documentKey||emailKey});
     processResult(item.tipo,item.aba,item.row.linhaOrigem,'criados',Number(created.id),documentKey||emailKey||inputNameKey);
    }
-   for(const item of entityRows.filter(x=>x.tipo==='tabela_generica'))processResult(item.tipo,item.aba,item.row.linhaOrigem,'ignorados',undefined,'Tabela genérica: dados mantidos no arquivo original; destino ERP não definido.');
+   for(const item of linhasNormais.filter(x=>x.tipo==='tabela_generica'))processResult(item.tipo,item.aba,item.row.linhaOrigem,'ignorados',undefined,'Tabela genérica: dados mantidos no arquivo original; destino ERP não definido.');
    report.finalizadoEm=new Date().toISOString();
    await s.audit({usuario_id:user.id,usuario:user.name,acao:'importar',recurso:'importacao_universal_sessoes',registro_id:null,descricao:'Importação universal concluída atomically',empresa_id:empresaId,dados:{sessionId:id,fileSha256:sessionMeta.sha,totais:report.porEntidade,summary:{total:report.total,created:report.criados,updated:report.atualizados,skipped:report.ignorados}}},tx);
    const resultPayload={version:1,sessionId:id,fileSha256:sessionMeta.sha,summary:{total:report.total,created:report.criados,updated:report.atualizados,skipped:report.ignorados},entities:report.porEntidade,rows:report.linhas,startedAt:report.iniciadoEm,finishedAt:report.finalizadoEm,atomic:true,idempotent:true};

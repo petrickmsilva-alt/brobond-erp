@@ -4,12 +4,13 @@ import { query as queryDb } from './db';
 import { currentUser } from './auth';
 import { analisarArquivoUniversal } from './importacaoUniversalAnalise';
 import { construirModeloDependencias } from './importacaoUniversalEntidades';
+import { planoHierarquiaDeMapeamentos, type MapeamentoHierarquia } from './importacaoUniversalHierarquia';
 import { HttpError } from './errors';
 import { hashAprovacaoImportacaoUniversal } from './importacaoUniversalHash';
 import { destinoImportacao, modeloCsvDestino, normalizarDestinoImportacao } from './importacaoUniversalDestinos';
 
 
-export const CAMPOS_CANONICOS_IMPORTACAO = new Set(['sku','sku_pai','nome','razao_social','pessoa','tipo_cliente','contato','insumo','custo_medio','estoque_min','categoria','colecao','cor','tamanho','quantidade','custo','custo_aquisicao','custo_fabricacao','custo_adicional','imposto','margem','preco_venda','preco_atacado','preco_promocional','qtd_min_atacado','codigo_barras','ncm','cest','peso_g','local','local_destino','fornecedor','telefone','email','cnpj_cpf','descricao','composicao','material','modelagem','genero','marca','tipo','condicao','producao','unidade','tags','formato','ativo','codigo_item','codigo_categoria','codigo_industria','variacao_tamanho_id','motivo','tipo_movimento','data','referencia_externa','preco_atacado_vista','preco_atacado_boleto_30','preco_atacado_boleto_30_60','preco_atacado_boleto_30_60_90','preco_atacado_cartao_debito','preco_atacado_cartao_credito_vista','preco_atacado_cartao_credito_30_60','preco_atacado_cartao_credito_30_60_90','preco_varejo_vista','preco_varejo_vista_min_2_un','preco_varejo_cartao_vista','preco_varejo_cartao_parcelado','margem_bruta_atacado_vista','margem_bruta_varejo_vista','margem_bruta_varejo_min_2_un']);
+export const CAMPOS_CANONICOS_IMPORTACAO = new Set(['sku','sku_pai','sku_base','referencia_comercial','familia_id','politica_comercial','nome','razao_social','pessoa','tipo_cliente','contato','insumo','custo_medio','estoque_min','categoria','colecao','cor','tamanho','quantidade','custo','custo_aquisicao','custo_fabricacao','custo_adicional','imposto','margem','preco_venda','preco_atacado','preco_promocional','qtd_min_atacado','codigo_barras','ncm','cest','peso_g','local','local_destino','fornecedor','telefone','email','cnpj_cpf','descricao','composicao','material','modelagem','genero','marca','tipo','condicao','producao','unidade','tags','formato','ativo','codigo_item','codigo_categoria','codigo_industria','variacao_tamanho_id','motivo','tipo_movimento','data','referencia_externa','preco_atacado_vista','preco_atacado_boleto_30','preco_atacado_boleto_30_60','preco_atacado_boleto_30_60_90','preco_atacado_cartao_debito','preco_atacado_cartao_credito_vista','preco_atacado_cartao_credito_30_60','preco_atacado_cartao_credito_30_60_90','preco_varejo_vista','preco_varejo_vista_min_2_un','preco_varejo_cartao_vista','preco_varejo_cartao_parcelado','margem_bruta_atacado_vista','margem_bruta_varejo_vista','margem_bruta_varejo_min_2_un']);
 const TIPOS_CAMPO_IMPORTACAO = new Set(['texto','numero','percentual','data','booleano','codigo','desconhecido']);
 const TIPOS_ENTIDADE_IMPORTACAO = new Set(['produto','sku','variacao','estoque','preco','movimentacao','cliente','fornecedor','insumo','tabela_generica']);
 const TIPOS_BLOQUEADORES_APROVACAO = new Set(['duplicado_origem','conflito_sku','conflito_codigo_barras','ambiguidade','campo_desconhecido','politica_status_invalido','politica_preco_conflitante','limite_carga_excedido','orfao_relacionamento','conflito_dimensional','produto_sem_sku','sku_sem_produto','variacao_sem_produto','estoque_sem_produto','estoque_sem_local','preco_sem_produto','movimentacao_sem_produto','entidade_sem_executor','condicao_pagamento_ausente']);
@@ -63,10 +64,15 @@ export async function salvarMapeamentoImportacaoUniversalHandler(req:Request,res
  const camposPorAba=new Map<string,Set<string>>();
  for(const m of normalized)if(m.campoCanonico){const set=camposPorAba.get(m.aba)||new Set<string>();if(set.has(m.campoCanonico))throw new HttpError(400,'Campo canônico duplicado na aba '+m.aba+': '+m.campoCanonico);set.add(m.campoCanonico);camposPorAba.set(m.aba,set);}
  const entidadesModelo=(interpretacaoOriginal as any).entidades?.entidades?.map((e:any)=>{const confirmado=entidades.find((x:any)=>x.aba===e.aba);return confirmado?{...e,tipo:confirmado.tipo}:e;})||[];
- const dependencias=construirModeloDependencias(entidadesModelo,relacionamentosNormalizados as any);
- const novo={...interpretacaoOriginal,mapeamentoConfirmado:{versao:1,confirmadoPor:user.id,confirmadoEm:new Date().toISOString(),mapeamentos:normalized,entidades,relacionamentos:relacionamentosNormalizados,dependencias}};
+ const tiposPorAba=Object.fromEntries(entidades.map((e:any)=>[String(e.aba),String(e.tipo)]));
+ // Hierarquia produto-pai × variação resolvida no núcleo, a partir do
+ // mapeamento CONFIRMADO e do inventário original (mesma aba/CSV ou várias).
+ // Somente abas de catálogo confirmadas entram no plano.
+ const planoHierarquia=planoHierarquiaDeMapeamentos({abas},normalized as MapeamentoHierarquia[],{tiposPorAba});
+ const dependencias=construirModeloDependencias(entidadesModelo,relacionamentosNormalizados as any,undefined,planoHierarquia.porAba);
+ const novo={...interpretacaoOriginal,mapeamentoConfirmado:{versao:1,confirmadoPor:user.id,confirmadoEm:new Date().toISOString(),mapeamentos:normalized,entidades,relacionamentos:relacionamentosNormalizados,dependencias,hierarquia:planoHierarquia}};
  await queryDb(`UPDATE importacao_universal_sessoes SET interpretacao=$2::jsonb,status='aguardando_mapeamento',versao=versao+1,atualizado_em=now() WHERE id=$1 AND empresa_id=$3 AND usuario_id=$4`,[id,JSON.stringify(novo),user.empresa_id,user.id]);
- res.json({id,status:'aguardando_mapeamento',mapeamentoSalvo:true,versao:1,totalMapeamentos:normalized.length,totalEntidades:entidades.length,totalRelacionamentos:relacionamentosNormalizados.length,relacionamentos:relacionamentosNormalizados,dependencias});
+ res.json({id,status:'aguardando_mapeamento',mapeamentoSalvo:true,versao:1,totalMapeamentos:normalized.length,totalEntidades:entidades.length,totalRelacionamentos:relacionamentosNormalizados.length,relacionamentos:relacionamentosNormalizados,dependencias,hierarquia:planoHierarquia});
 }
 const MAX_BYTES=2.5*1024*1024;
 const ALLOWED_EXT=new Set(['xlsx','xlsm','csv']);
@@ -166,7 +172,14 @@ export async function reconciliarImportacaoUniversalHandler(req:Request,res:Resp
  for(const produto of produtosERP){const produtoId=Number(produto.id);if(Number.isInteger(produtoId)&&produtoId>0)produtoIdsERP.add(produtoId);const sku=normalizarSkuDependenciaERP(produto.sku);if(!sku)continue;const count=(produtosPorSku.get(sku)||0)+1;produtosPorSku.set(sku,count);if(count===1)produtoPaiPorSku.set(sku,produto.produto_pai_id==null?null:Number(produto.produto_pai_id));}
  const skusPorAba=new Map<string,Set<string>>();
  for(const aba of arquivo.abas){const m=confirmado.mapeamentos.find((x:any)=>x.aba===aba.nome&&x.campoCanonico==='sku'&&x.ignorado!==true);if(!m)continue;const skuValues=(aba.linhas||[]).map((r:any)=>normalizarSkuDependenciaERP(r?.valores?.[m.colunaOriginal]));const skus=new Set<string>(skuValues.filter((sku:string)=>sku.length>0));skusPorAba.set(aba.nome,skus);}
- entidadesConfirmadas.dependencias=construirModeloDependencias(entidadesConfirmadas.entidades,entidadesConfirmadas.relacionamentos as any,{produtosPorSku,skusPorAba,produtoPaiPorSku,produtoIdsERP});
+ // O plano usa o snapshot do ERP para distinguir criar/atualizar, reaproveitar
+ // vínculos pai-filho existentes e apontar conflitos reais de família.
+ const planoHierarquia=planoHierarquiaDeMapeamentos(arquivo,confirmado.mapeamentos as MapeamentoHierarquia[],{
+  produtosERP:produtosERP.map(p=>({id:p.id,sku:p.sku,nome:p.nome,produto_pai_id:p.produto_pai_id})),
+  tiposPorAba:Object.fromEntries(entidadesConfirmadas.entidades.map((e:any)=>[e.aba,e.tipo])),
+ });
+ entidadesConfirmadas.hierarquia=planoHierarquia;
+ entidadesConfirmadas.dependencias=construirModeloDependencias(entidadesConfirmadas.entidades,entidadesConfirmadas.relacionamentos as any,{produtosPorSku,skusPorAba,produtoPaiPorSku,produtoIdsERP},planoHierarquia.porAba);
  let result:any=reconciliarImportacaoUniversal(arquivo,semanticaConfirmada,entidadesConfirmadas,produtosERP,saldosERP,activeConditionCodes);
  let previaAdapter:any=null;
  if(normalizarDestinoImportacao(interpretacao.destino)==='politica_comercial'){

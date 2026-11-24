@@ -1,6 +1,7 @@
-﻿import type { ArquivoInventariado } from './importacaoUniversalLeitura';
+import type { ArquivoInventariado } from './importacaoUniversalLeitura';
 import type { AnaliseSemantica, CampoCanonico } from './importacaoUniversalSemantica';
 import type { ReconhecimentoEntidades } from './importacaoUniversalEntidades';
+import { TIPOS_CATALOGO_HIERARQUIA, type PlanoHierarquiaUniversal, type FamiliaHierarquia, type VarianteHierarquia } from './importacaoUniversalHierarquia';
 import { requiredConditionCodesFromMappedRows, missingConditionCodes } from './importacaoUniversalPrecos';
 
 export type SnapshotProdutoERP = {
@@ -35,7 +36,7 @@ export type RegistroReconhecido = {
   mapeado: Partial<Record<CampoCanonico, unknown>>;
 };
 export type DivergenciaRecon = {
-  tipo: 'novo'|'existente_igual'|'atualizacao_proposta'|'duplicado_origem'|'conflito_sku'|'conflito_codigo_barras'|'ambiguidade'|'campo_desconhecido'|'orfao_relacionamento'|'conflito_dimensional'|'produto_sem_sku'|'sku_sem_produto'|'variacao_sem_produto'|'estoque_sem_produto'|'estoque_sem_local'|'preco_sem_produto'|'movimentacao_sem_produto'|'entidade_sem_executor'|'condicao_pagamento_ausente';
+  tipo: 'novo'|'existente_igual'|'atualizacao_proposta'|'duplicado_origem'|'conflito_sku'|'conflito_codigo_barras'|'ambiguidade'|'campo_desconhecido'|'orfao_relacionamento'|'conflito_dimensional'|'produto_sem_sku'|'sku_sem_produto'|'variacao_sem_produto'|'estoque_sem_produto'|'estoque_sem_local'|'preco_sem_produto'|'movimentacao_sem_produto'|'entidade_sem_executor'|'condicao_pagamento_ausente'|'conflito_familia'|'familia_sem_evidencia';
   aba: string;
   linhasOrigem: number[];
   chave?: string;
@@ -55,7 +56,9 @@ export type ResultadoRecon = {
   relacionamentos:RelacionamentoRecon[];
   resumoDimensional:{relacionamentosAnalisados:number;correspondencias:number;semCorrespondencia:number;ambiguidade:number;orfaosOrigem:number;orfaosDestino:number;conflitosDimensionais:number};
   dependencias:any[];
-  previaConsolidada:{registros:{aba:string;linha:number;entidade:string;status:string;divergencias:string[];mapeado:Record<string,unknown>}[];resumo:{total:number;porEntidade:Record<string,number>;porStatus:Record<string,number>}};
+  /** Plano REAL de hierarquia que será persistido (pais + variantes + evidência). */
+  hierarquia:PlanoHierarquiaUniversal|null;
+  previaConsolidada:{registros:{aba:string;linha:number;entidade:string;status:string;divergencias:string[];mapeado:Record<string,unknown>;familia?:string;skuPai?:string;paiAcao?:string;variantesNaFamilia?:number;evidencias?:string[];confianca?:number;acaoPersistencia?:string;conflitosHierarquia?:string[]}[];resumo:{total:number;porEntidade:Record<string,number>;porStatus:Record<string,number>;porAcao:Record<string,number>}};
   perdaDadosPrevista: number;
   importacaoLiberada: false;
 };
@@ -79,7 +82,29 @@ export function reconciliarImportacaoUniversal(
 ):ResultadoRecon {
  const registros:RegistroReconhecido[]=[];
  const divergencias:DivergenciaRecon[]=[];
- const totals:ResultadoRecon['totais']={novo:0,existente_igual:0,atualizacao_proposta:0,duplicado_origem:0,conflito_sku:0,conflito_codigo_barras:0,ambiguidade:0,campo_desconhecido:0,orfao_relacionamento:0,conflito_dimensional:0,produto_sem_sku:0,estoque_sem_produto:0,preco_sem_produto:0,movimentacao_sem_produto:0,entidade_sem_executor:0,sku_sem_produto:0,variacao_sem_produto:0,estoque_sem_local:0,condicao_pagamento_ausente:0};
+ const totals:ResultadoRecon['totais']={novo:0,existente_igual:0,atualizacao_proposta:0,duplicado_origem:0,conflito_sku:0,conflito_codigo_barras:0,ambiguidade:0,campo_desconhecido:0,orfao_relacionamento:0,conflito_dimensional:0,produto_sem_sku:0,estoque_sem_produto:0,preco_sem_produto:0,movimentacao_sem_produto:0,entidade_sem_executor:0,sku_sem_produto:0,variacao_sem_produto:0,estoque_sem_local:0,condicao_pagamento_ausente:0,conflito_familia:0,familia_sem_evidencia:0};
+ // Plano de hierarquia do núcleo: a prévia mostra a hierarquia que será
+ // gravada, não apenas a classificação superficial da linha.
+ const plano=(entidades as any).hierarquia as PlanoHierarquiaUniversal|null|undefined??null;
+ const chaveLinha=(aba:string,linha:number)=>`${aba}::${linha}`;
+ const familiaPorLinha=new Map<string,FamiliaHierarquia>();
+ const variantePorLinha=new Map<string,VarianteHierarquia>();
+ for(const familia of plano?.familias??[]){
+  for(const variante of familia.variantes){
+   familiaPorLinha.set(chaveLinha(variante.aba,variante.linha),familia);
+   variantePorLinha.set(chaveLinha(variante.aba,variante.linha),variante);
+  }
+  for(const linhaPai of familia.linhasPai)familiaPorLinha.set(chaveLinha(linhaPai.aba,linhaPai.linha),familia);
+ }
+ const independentePorLinha=new Set((plano?.independentes??[]).map(i=>chaveLinha(i.aba,i.linha)));
+ // O plano só substitui a exigência de pai/aba para entidades de catálogo.
+ // Estoque, preço—sem produto e movimentação continuam validando o SKU contra
+ // a origem/ERP; nenhuma linha operacional é promovida a produto por hierarquia.
+ const hierarquiaCobre=(aba:string,linha:number,entidade:string)=>TIPOS_CATALOGO_HIERARQUIA.has(entidade)
+  &&(familiaPorLinha.has(chaveLinha(aba,linha))||independentePorLinha.has(chaveLinha(aba,linha)));
+ for(const conflito of plano?.conflitos??[])divergencias.push({
+  tipo:conflito.tipo,aba:conflito.aba,linhasOrigem:conflito.linhasOrigem,chave:conflito.chave,
+  descricao:conflito.descricao,detalhes:{naoBloqueiaImportacao:true,correcao:'Ajuste a coluna de família/SKU pai e reconcilie; somente as linhas desta família são ignoradas na gravação.'},requerAprovacao:true});
  const produtosPorSku=new Map<string,SnapshotProdutoERP[]>();
  const condicoesDisponiveis=condicoesPagamentoERP===undefined?null:new Set(condicoesPagamentoERP.map(c=>String(c).trim().toLowerCase()));
  for(const p of produtosERP){const k=normalKey(p.sku);const arr=produtosPorSku.get(k)||[];arr.push(p);produtosPorSku.set(k,arr);}
@@ -165,10 +190,12 @@ export function reconciliarImportacaoUniversal(
  for(const reg of registros){
   const sku=normalKey(reg.mapeado.sku);
   if(reg.entidade==='produto'&&!sku)divergencias.push({tipo:'produto_sem_sku',aba:reg.aba,linhasOrigem:[reg.linha],descricao:'Registro de produto sem SKU; não pode ser ligado com segurança ao catálogo.',requerAprovacao:true});
-  if(reg.entidade==='sku'&&(!sku||!produtoEncontrado(sku)))divergencias.push({tipo:'sku_sem_produto',aba:reg.aba,linhasOrigem:[reg.linha],chave:sku||undefined,descricao:'SKU de referência não encontra produto-pai na origem nem no ERP.',requerAprovacao:true});
+  if(reg.entidade==='sku'&&(!sku||!produtoEncontrado(sku))&&!hierarquiaCobre(reg.aba,reg.linha,reg.entidade))divergencias.push({tipo:'sku_sem_produto',aba:reg.aba,linhasOrigem:[reg.linha],chave:sku||undefined,descricao:'SKU de referência não encontra produto-pai na origem nem no ERP.',requerAprovacao:true});
   if(reg.entidade==='estoque'&&!normalKey(reg.mapeado.local))divergencias.push({tipo:'estoque_sem_local',aba:reg.aba,linhasOrigem:[reg.linha],chave:sku||undefined,descricao:'Saldo de estoque sem local canônico; não é permitido aplicar ajuste de saldo.',requerAprovacao:true});
-  if(reg.entidade==='variacao'&&!((entidades as any).dependencias||[]).some((d:any)=>d.aba===reg.aba&&d.estado==='vinculada'))divergencias.push({tipo:'variacao_sem_produto',aba:reg.aba,linhasOrigem:[reg.linha],chave:sku||undefined,descricao:'Variação não possui relacionamento confirmado com aba de SKU/produto-pai.',requerAprovacao:true});
-  if(['estoque','preco','movimentacao'].includes(reg.entidade)&&(!sku||!produtoEncontrado(sku))){
+  // Uma variação com família resolvida na própria origem não depende de aba
+  // de pai: o pai é criado/identificado pelo plano de hierarquia.
+  if(reg.entidade==='variacao'&&!hierarquiaCobre(reg.aba,reg.linha,reg.entidade)&&!((entidades as any).dependencias||[]).some((d:any)=>d.aba===reg.aba&&d.estado==='vinculada'))divergencias.push({tipo:'variacao_sem_produto',aba:reg.aba,linhasOrigem:[reg.linha],chave:sku||undefined,descricao:'Variação não possui relacionamento confirmado com aba de SKU/produto-pai.',requerAprovacao:true});
+  if(['estoque','preco','movimentacao'].includes(reg.entidade)&&(!sku||!produtoEncontrado(sku))&&!hierarquiaCobre(reg.aba,reg.linha,reg.entidade)){
    const tipo=reg.entidade==='estoque'?'estoque_sem_produto':reg.entidade==='preco'?'preco_sem_produto':'movimentacao_sem_produto';
    divergencias.push({tipo,aba:reg.aba,linhasOrigem:[reg.linha],chave:sku||undefined,descricao:!sku?'Registro dependente sem SKU/chave de produto.':'Registro dependente não encontra produto correspondente na origem ou no snapshot ERP.',detalhes:{sku},requerAprovacao:true});
   }
@@ -192,14 +219,21 @@ export function reconciliarImportacaoUniversal(
   if(skus.size>1||repetidoNaAba||(!skus.size&&unicas.size>1))divergencias.push({tipo:'conflito_codigo_barras',aba:[...new Set([...unicas.values()].map(o=>o.aba))].join(', '),linhasOrigem:[...unicas.values()].map(o=>o.linha),chave:barcode,descricao:'Código de barras associado a SKUs diferentes ou repetido de forma ambígua; associação bloqueia importação até revisão.',detalhes:{origens:[...unicas.values()],skus:[...skus],repetidoNaAba},requerAprovacao:true});
  }
  for(const d of divergencias) totals[d.tipo]++;
- const porEntidade:Record<string,number>={},porStatus:Record<string,number>={};
+ const porEntidade:Record<string,number>={},porStatus:Record<string,number>={},porAcao:Record<string,number>={};
  const previaRegistros=registros.map(reg=>{
   const issues=divergencias.filter(d=>(d.aba===reg.aba||d.aba.split(',').map(x=>x.trim()).includes(reg.aba))&&d.linhasOrigem.includes(reg.linha));
   const tipos=[...new Set(issues.map(d=>d.tipo))];
   const bloqueadores=['duplicado_origem','conflito_sku','conflito_codigo_barras','ambiguidade','campo_desconhecido','orfao_relacionamento','conflito_dimensional','produto_sem_sku','sku_sem_produto','variacao_sem_produto','estoque_sem_produto','estoque_sem_local','preco_sem_produto','movimentacao_sem_produto','condicao_pagamento_ausente'];
-  const status=tipos.some(t=>bloqueadores.includes(t))?'Revisão/bloqueio':tipos.includes('atualizacao_proposta')||tipos.includes('novo')?'Proposta':tipos.includes('existente_igual')?'Identificado no ERP':'Sem divergência individual';
+  const familia=familiaPorLinha.get(chaveLinha(reg.aba,reg.linha)),variante=variantePorLinha.get(chaveLinha(reg.aba,reg.linha));
+  const acaoPersistencia=variante?(variante.requerCorrecao?'ignorar':variante.acao):familia?familia.pai.acao==='reutilizar'?'atualizar':'criar':independentePorLinha.has(chaveLinha(reg.aba,reg.linha))?'produto independente':undefined;
+  const conflitoFamilia=tipos.includes('conflito_familia')||variante?.requerCorrecao===true;
+  const status=conflitoFamilia?'Conflito de família (linha ignorada)':tipos.some(t=>bloqueadores.includes(t))?'Revisão/bloqueio':tipos.includes('atualizacao_proposta')||tipos.includes('novo')?'Proposta':tipos.includes('existente_igual')?'Identificado no ERP':'Sem divergência individual';
   porEntidade[reg.entidade]=(porEntidade[reg.entidade]||0)+1;porStatus[status]=(porStatus[status]||0)+1;
-  return{aba:reg.aba,linha:reg.linha,entidade:reg.entidade,status,divergencias:tipos,mapeado:reg.mapeado as Record<string,unknown>};
+  if(acaoPersistencia)porAcao[acaoPersistencia]=(porAcao[acaoPersistencia]||0)+1;
+  return{aba:reg.aba,linha:reg.linha,entidade:reg.entidade,status,divergencias:tipos,mapeado:reg.mapeado as Record<string,unknown>,
+   ...(familia?{familia:familia.chave,skuPai:familia.pai.sku,paiAcao:familia.pai.acao,variantesNaFamilia:familia.totalVariantes,evidencias:familia.evidencias,confianca:familia.confianca}:{}),
+   ...(acaoPersistencia?{acaoPersistencia}:{}),
+   ...(variante?.conflitos.length?{conflitosHierarquia:variante.conflitos}:{})};
  });
- return {registros,divergencias,totais:totals,relacionamentos:relacionamentosRecon,resumoDimensional:{relacionamentosAnalisados:relacionamentosRecon.length,correspondencias,semCorrespondencia,ambiguidade:ambiguidadesRelacionamento,orfaosOrigem:orfaosOrigemTotal,orfaosDestino:orfaosDestinoTotal,conflitosDimensionais},dependencias:(entidades as any).dependencias||[],previaConsolidada:{registros:previaRegistros,resumo:{total:previaRegistros.length,porEntidade,porStatus}},perdaDadosPrevista:0,importacaoLiberada:false};
+ return {registros,divergencias,totais:totals,relacionamentos:relacionamentosRecon,resumoDimensional:{relacionamentosAnalisados:relacionamentosRecon.length,correspondencias,semCorrespondencia,ambiguidade:ambiguidadesRelacionamento,orfaosOrigem:orfaosOrigemTotal,orfaosDestino:orfaosDestinoTotal,conflitosDimensionais},dependencias:(entidades as any).dependencias||[],hierarquia:plano,previaConsolidada:{registros:previaRegistros,resumo:{total:previaRegistros.length,porEntidade,porStatus,porAcao}},perdaDadosPrevista:0,importacaoLiberada:false};
 }
